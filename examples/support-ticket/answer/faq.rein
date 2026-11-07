@@ -1,0 +1,9 @@
+description "Answer a how-to question from the help center."
+
+input article_found: bool "Did you find a help article that answers the question?"
+
+if article_found {
+    return "Reply with the help article link. Ask the customer if it solved the problem."
+}
+
+return @escalate

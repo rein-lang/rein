@@ -1,0 +1,9 @@
+description "Process a refund request from a billing ticket."
+
+input refund_over_limit: bool "Is the requested refund above the agent's limit?"
+
+if refund_over_limit {
+    return @escalate
+}
+
+return "Refund the amount the customer asked for. Confirm the refund in the ticket. Tell the customer the refund takes 5 business days."

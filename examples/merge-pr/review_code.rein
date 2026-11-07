@@ -1,0 +1,9 @@
+description "Review the code changes in a pull request."
+
+input security_sensitive: bool "Does the PR change authentication, payments, or permissions code?"
+
+if security_sensitive {
+    return @security/review
+}
+
+return "Read the diff. Leave comments for bugs and style issues. Approve when the review is clean. Then run merge_pr again."

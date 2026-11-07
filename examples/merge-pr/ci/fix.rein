@@ -1,0 +1,9 @@
+description "Fix a failing CI run, then check the pull request again."
+
+input fix_pushed: bool "Did you push a fix for the failing job?"
+
+if fix_pushed {
+    return @merge_pr
+}
+
+return "Read the CI log. Fix the failing test or code. Push the fix. Then run ci/fix again."

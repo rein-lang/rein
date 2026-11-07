@@ -1,0 +1,9 @@
+description "Open a ticket for an alert that needs follow-up but no page."
+
+input ticket_exists: bool "Is there already an open ticket for this alert?"
+
+if ticket_exists {
+    return "Add the alert details as a comment on the open ticket."
+}
+
+return "Create a ticket with the alert name, severity, and first graph link. Assign it to the owning team."

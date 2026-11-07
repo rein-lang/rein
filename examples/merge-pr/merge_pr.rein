@@ -1,0 +1,15 @@
+// merge_pr.rein
+description "Decide whether a pull request can be merged."
+
+input docs_only: bool "Does the PR change only documentation files?"
+input ci: choice("green", "red", "pending") "What is the CI status of the PR?"
+
+if docs_only {
+    return "approved"
+}
+
+switch ci {
+    case "green" { return @review_code }
+    case "red" { return @ci/fix }
+    default { return "wait for CI, then run merge_pr again" }
+}
