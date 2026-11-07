@@ -12,12 +12,14 @@ pub struct Spanned<T> {
 pub struct Function {
     /// Text of the function doc block. Filled from `doc`.
     pub description: Option<Spanned<String>>,
-    /// `import` lines, in file order.
-    pub imports: Vec<Import>,
     pub inputs: Vec<Input>,
     pub body: Vec<Stmt>,
     /// The `/** */` doc block right before `export default function`. `None` when the file has none.
     pub doc: Option<DocBlock>,
+    /// `export default async function`.
+    pub is_async: bool,
+    /// The `async` keyword, when the function has it.
+    pub async_span: Option<Span>,
 }
 
 /// A parsed `/** */` doc block.
@@ -36,19 +38,58 @@ impl Function {
         self.inputs.iter().find(|i| i.name.value == name)
     }
 
-    pub fn import(&self, binding: &str) -> Option<&Import> {
-        self.imports.iter().find(|i| i.binding.value == binding)
+    /// The `const` answer named `name`, anywhere in the body.
+    pub fn response(&self, name: &str) -> Option<&Input> {
+        let mut found = None;
+        walk_stmts(&self.body, &mut |s| {
+            if let Stmt::Request { response, .. } = s {
+                if found.is_none() && response.name.value == name {
+                    found = Some(&**response);
+                }
+            }
+        });
+        found
+    }
+
+    /// A template takes only `string` parameters, so it is never run by itself.
+    pub fn is_template(&self) -> bool {
+        self.inputs.iter().any(|i| i.ty == InputType::Text)
     }
 }
 
-/// `import <binding> from "<source>"`.
+/// What a call or a return names: a std name, or a reference such as `@./ci/fix`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Callee {
+    /// A std name, such as `delegate`. Std names need no import.
+    Std(Spanned<String>),
+    /// A reference, with the path as written, such as `./ci/fix` or `../escalate`.
+    Ref(Spanned<String>),
+}
+
+impl Callee {
+    /// The text the callee is known by in a [`Binding`] map: the std name, or the reference path.
+    pub fn key(&self) -> &str {
+        match self {
+            Callee::Std(s) | Callee::Ref(s) => &s.value,
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Callee::Std(s) | Callee::Ref(s) => s.span,
+        }
+    }
+}
+
+/// What a name or reference refers to.
 #[derive(Debug, Clone)]
-pub struct Import {
-    /// The local name the body uses to return the imported function.
-    pub binding: Spanned<String>,
-    /// The quoted path, as written. Its span includes the quotes.
-    pub source: Spanned<String>,
-    pub span: Span,
+pub enum Binding<'a> {
+    /// A function of the project, by project path. Returning it hands the agent to it.
+    Function(String),
+    /// A template, by project path (`None` for std). Calling it expands to text.
+    Template { path: Option<String>, function: &'a Function },
+    /// `request` from std. It is awaited, not returned or called.
+    Request,
 }
 
 #[derive(Debug, Clone)]
@@ -67,20 +108,23 @@ pub enum InputType {
     Bool,
     /// A union of string literals. `choice` is the name the CLI and JSON use.
     Choice(Vec<Spanned<String>>),
+    /// `string`. Only a template takes it.
+    Text,
 }
 
 impl InputType {
     pub fn options(&self) -> Option<Vec<&str>> {
         match self {
-            InputType::Bool => None,
+            InputType::Bool | InputType::Text => None,
             InputType::Choice(o) => Some(o.iter().map(|s| s.value.as_str()).collect()),
         }
     }
 
-    /// The type as TypeScript writes it: `boolean`, or `"a" | "b"`.
+    /// The type as TypeScript writes it: `boolean`, `string`, or `"a" | "b"`.
     pub fn ts_type(&self) -> String {
         match self {
             InputType::Bool => "boolean".to_string(),
+            InputType::Text => "string".to_string(),
             InputType::Choice(o) => o.iter().map(|s| format!("\"{}\"", s.value)).collect::<Vec<_>>().join(" | "),
         }
     }
@@ -88,17 +132,24 @@ impl InputType {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    /// A guard. The block must return on every path. Code after the `if` handles the other case.
     If {
         cond: Expr,
         then: Vec<Stmt>,
-        /// `else if` is stored as an else block holding one `If`.
-        otherwise: Option<Vec<Stmt>>,
         span: Span,
     },
+    /// Every member of the union has a case. The checker enforces it.
     Switch {
         subject: Spanned<String>,
         cases: Vec<Case>,
-        default: Option<Vec<Stmt>>,
+        span: Span,
+    },
+    /// `/** question */ const name: type = await request(arg);`. The answer is a parameter for the rest of its block.
+    Request {
+        response: Box<Input>,
+        /// The `request` name.
+        callee: Spanned<String>,
+        arg: Value,
         span: Span,
     },
     Return(Spanned<ReturnValue>),
@@ -107,7 +158,7 @@ pub enum Stmt {
 impl Stmt {
     pub fn span(&self) -> Span {
         match self {
-            Stmt::If { span, .. } | Stmt::Switch { span, .. } => *span,
+            Stmt::If { span, .. } | Stmt::Switch { span, .. } | Stmt::Request { span, .. } => *span,
             Stmt::Return(r) => r.span,
         }
     }
@@ -121,12 +172,47 @@ pub struct Case {
 }
 
 /// What a function hands back to the agent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReturnValue {
     /// Final answer or instruction for the agent.
     Text(String),
-    /// The local name of an imported function. The project resolves it to a function.
-    Ref(String),
+    /// A reference to another function, such as `@./ci/fix`. The project resolves it.
+    Ref(Spanned<String>),
+    /// A template literal, such as `return `Pick ${c}`;`.
+    Template(TemplateLit),
+    /// A call of a template, such as `return delegate("a", "b");` or `return @./tpl("a", "b");`.
+    Call(Call),
+}
+
+/// One part of a template literal.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Piece {
+    Text(String),
+    /// `${name}`. The span covers the name only.
+    Name(Spanned<String>),
+}
+
+/// A template literal, with its span.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateLit {
+    pub pieces: Vec<Piece>,
+    pub span: Span,
+}
+
+/// A value that becomes text: a string, a template literal, or a template call (only as an argument of `request`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Str(Spanned<String>),
+    Template(TemplateLit),
+    Call(Call),
+}
+
+/// `callee(args)`, where the callee is a template. The args are strings or template literals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Call {
+    pub callee: Callee,
+    pub args: Vec<Value>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -156,21 +242,13 @@ pub fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     for s in stmts {
         f(s);
         match s {
-            Stmt::If { then, otherwise, .. } => {
-                walk_stmts(then, f);
-                if let Some(o) = otherwise {
-                    walk_stmts(o, f);
-                }
-            }
-            Stmt::Switch { cases, default, .. } => {
+            Stmt::If { then, .. } => walk_stmts(then, f),
+            Stmt::Switch { cases, .. } => {
                 for c in cases {
                     walk_stmts(&c.body, f);
                 }
-                if let Some(d) = default {
-                    walk_stmts(d, f);
-                }
             }
-            Stmt::Return(_) => {}
+            Stmt::Request { .. } | Stmt::Return(_) => {}
         }
     }
 }

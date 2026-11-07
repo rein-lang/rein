@@ -17,7 +17,7 @@ use lsp_types::{
     MarkupKind, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
 };
-use rein_core::ast::{Function, Import, Input};
+use rein_core::ast::{Binding, Function, Input};
 use rein_core::diagnostic::{Diagnostic as ReinDiagnostic, Severity, Span};
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
@@ -339,36 +339,90 @@ fn line_before(text: &str, offset: usize) -> &str {
     &text[line_start..offset]
 }
 
-/// True when the cursor is inside the quotes of an import path, as in `from "./|`.
-fn in_import_path(before: &str) -> bool {
-    let Some(q) = before.rfind(['"', '\'']) else { return false };
-    before[..q].trim_end().ends_with("from")
+/// Characters a reference path can hold after `@`.
+fn is_path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '.'
 }
 
-/// True when the cursor is after `return` and a space, where an imported name goes.
-fn after_return(before: &str) -> bool {
-    let without_word = before.trim_end_matches(is_token_char);
-    let trimmed = without_word.trim_end();
-    match trimmed.strip_suffix("return") {
-        Some(head) => trimmed.len() < without_word.len() && !head.ends_with(is_token_char),
-        None => false,
+/// The reference under or next to `offset`: the offset of its `@`, the offset of its end, and its
+/// path as written (such as `./ci/fix`). None when the cursor is not on a `@./` or `@../` reference.
+fn ref_at(text: &str, offset: usize) -> Option<(usize, usize, String)> {
+    let offset = offset.min(text.len());
+    let start = text[..offset]
+        .rfind(|c: char| !is_path_char(c))
+        .map_or(0, |i| i + text[i..].chars().next().map_or(1, char::len_utf8));
+    let end = text[offset..].find(|c: char| !is_path_char(c)).map_or(text.len(), |i| offset + i);
+    if start == 0 || !text[..start].ends_with('@') {
+        return None;
     }
+    let path = &text[start..end];
+    if !(path.starts_with("./") || path.starts_with("../")) {
+        return None;
+    }
+    Some((start - 1, end, path.to_string()))
 }
 
-/// The import whose quoted path holds `off`.
-fn import_at(f: &Function, off: usize) -> Option<&Import> {
-    f.imports.iter().find(|i| i.source.span.contains(off))
+/// Completion of a reference path: the project functions, relative to this file, that match what is typed.
+/// Each item replaces the whole reference token, from its `@` to the end of its path.
+fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Option<Vec<CompletionItem>> {
+    let before = line_before(text, off);
+    let at = before.rfind('@')?;
+    let typed = &before[at..];
+    if !typed[1..].chars().all(is_path_char) {
+        return None;
+    }
+    let at_abs = off - before.len() + at;
+    let end = text[off..].find(|c: char| !is_path_char(c)).map_or(text.len(), |i| off + i);
+    let range = Range::new(position(text, at_abs), position(text, end));
+    let items = project
+        .files
+        .keys()
+        .filter(|n| n.as_str() != from)
+        .map(|n| format!("@{}", relative_import(from, n)))
+        .filter(|label| label.starts_with(typed))
+        .map(|label| CompletionItem {
+            label: label.clone(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: label })),
+            ..Default::default()
+        })
+        .collect();
+    Some(items)
+}
+
+/// Each std name, for completion. Its detail is its description.
+fn std_completions() -> Vec<CompletionItem> {
+    rein_core::stdlib::names()
+        .into_iter()
+        .map(|name| CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some(rein_core::stdlib::doc(name)).filter(|d| !d.is_empty()),
+            ..Default::default()
+        })
+        .collect()
 }
 
 fn hover(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
     let (project, name) = locate(docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
-    let token = token_at(&sf.text, offset(&sf.text, p.position))?;
-    let value = match project.import_targets(&name).get(token.text) {
-        Some(target) => ref_markdown(target, &project.get(target)?.function),
-        None => {
-            let input = sf.function.input(token.text)?;
+    let off = offset(&sf.text, p.position);
+    let value = if let Some((_, _, path)) = ref_at(&sf.text, off) {
+        match project.bindings(&name).get(&path)? {
+            Binding::Function(target) => ref_markdown(target, &project.get(target)?.function),
+            Binding::Template { function, .. } => ref_markdown(&path, function),
+            Binding::Request => return None,
+        }
+    } else {
+        let token = token_at(&sf.text, off)?;
+        if let Some(input) = sf.function.input(token.text) {
             format!("`{}`\n\n{}", input_sig(input), input.description.value)
+        } else {
+            match rein_core::stdlib::item(token.text).ok()? {
+                Binding::Request => format!("**request**\n\n{}", rein_core::stdlib::request_doc()),
+                Binding::Template { function, .. } => ref_markdown(token.text, function),
+                Binding::Function(_) => return None,
+            }
         }
     };
     markdown_hover(value)
@@ -377,21 +431,13 @@ fn hover(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
 fn definition(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
     let (project, name) = locate(docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
-    let off = offset(&sf.text, p.position);
-    let location = if let Some(imp) = import_at(&sf.function, off) {
-        let target = project.resolve(&name, &imp.source.value).ok()?;
-        target_location(docs, &project, &target)?
-    } else {
-        let token = token_at(&sf.text, off)?;
-        match project.import_targets(&name).get(token.text) {
-            Some(target) => target_location(docs, &project, target)?,
-            None => {
-                let input = sf.function.input(token.text)?;
-                Location::new(p.text_document.uri.clone(), range(&sf.text, input.name.span))
-            }
-        }
+    let (_, _, path) = ref_at(&sf.text, offset(&sf.text, p.position))?;
+    let target = match project.bindings(&name).get(&path)? {
+        Binding::Function(target) => target.clone(),
+        Binding::Template { path: Some(target), .. } => target.clone(),
+        _ => return None,
     };
-    serde_json::to_value(location).ok()
+    serde_json::to_value(target_location(docs, &project, &target)?).ok()
 }
 
 /// The start of the file of function `target`.
@@ -404,11 +450,8 @@ fn completion(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
     let (project, name) = locate(docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
     let off = offset(&sf.text, p.position);
-    let before = line_before(&sf.text, off);
-    let items: Vec<CompletionItem> = if in_import_path(before) {
-        import_path_completions(&sf.text, off, &project, &name)
-    } else if after_return(before) {
-        return_items(&project, &name)
+    let items: Vec<CompletionItem> = if let Some(items) = ref_completions(&sf.text, off, &project, &name) {
+        items
     } else {
         let inputs = sf.function.inputs.iter().map(|i| CompletionItem {
             label: i.name.value.clone(),
@@ -421,58 +464,9 @@ fn completion(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
             kind: Some(CompletionItemKind::KEYWORD),
             ..Default::default()
         });
-        inputs.chain(keywords).collect()
+        inputs.chain(std_completions()).chain(keywords).collect()
     };
     serde_json::to_value(CompletionResponse::Array(items)).ok()
-}
-
-/// Import paths for the string the cursor is in. Each item replaces the whole string content, from the
-/// opening quote to the closing quote or the cursor. Items must start with the text typed so far.
-fn import_path_completions(text: &str, off: usize, project: &Project, from: &str) -> Vec<CompletionItem> {
-    let before = line_before(text, off);
-    let quote = off - before.len() + before.rfind(['"', '\'']).unwrap_or(0);
-    let typed = &text[quote + 1..off];
-    let line_rest = &text[off..];
-    let line_rest = &line_rest[..line_rest.find('\n').unwrap_or(line_rest.len())];
-    let end = line_rest.find(['"', '\'']).map_or(off, |i| off + i);
-    let range = Range::new(position(text, quote + 1), position(text, end));
-    import_path_items(project, from)
-        .into_iter()
-        .filter(|item| item.label.starts_with(typed))
-        .map(|mut item| {
-            item.text_edit = Some(CompletionTextEdit::Edit(TextEdit { range, new_text: item.label.clone() }));
-            item
-        })
-        .collect()
-}
-
-/// Every other file of the project, as an import path from `from`.
-fn import_path_items(project: &Project, from: &str) -> Vec<CompletionItem> {
-    project
-        .files
-        .keys()
-        .filter(|n| n.as_str() != from)
-        .map(|n| CompletionItem {
-            label: relative_import(from, n),
-            kind: Some(CompletionItemKind::FILE),
-            detail: project.get(n).map(|sf| description(&sf.function)),
-            ..Default::default()
-        })
-        .collect()
-}
-
-/// The imported names of `name`.
-fn return_items(project: &Project, name: &str) -> Vec<CompletionItem> {
-    project
-        .import_targets(name)
-        .iter()
-        .map(|(binding, target)| CompletionItem {
-            label: binding.clone(),
-            kind: Some(CompletionItemKind::FUNCTION),
-            detail: project.get(target).map(|sf| description(&sf.function)),
-            ..Default::default()
-        })
-        .collect()
 }
 
 /// The import path from function `from` to function `to`, without `.rein`. Such as `./x` or `../x`.
@@ -548,14 +542,12 @@ mod tests {
     }
 
     #[test]
-    fn import_path_and_return_contexts() {
-        assert!(in_import_path("import a from \"./"));
-        assert!(in_import_path("import a from '../"));
-        assert!(!in_import_path("import a from \"./x\";"));
-        assert!(after_return("  return "));
-        assert!(after_return("return mer"));
-        assert!(!after_return("return"));
-        assert!(!after_return("myreturn "));
+    fn reference_under_the_cursor() {
+        let text = "  return @./ci/fix;\n";
+        let inside = text.find("fix").unwrap() + 1;
+        assert_eq!(ref_at(text, inside), Some((9, 18, "./ci/fix".to_string())));
+        assert_eq!(ref_at("return name;", 8), None);
+        assert_eq!(ref_at("return @../up", 12), Some((7, 13, "../up".to_string())));
     }
 
     #[test]

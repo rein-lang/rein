@@ -124,13 +124,13 @@ fn graph_draws_main_as_entry() {
 fn check_reports_errors_in_broken_project() {
     let root = temp_dir("broken");
     fs::write(root.join("rein.toml"), "").unwrap();
-    fs::write(root.join("main.rein"), "import bad from \"./bad\";\n/** Entry. */\nexport default function main() {\n  return bad;\n}\n").unwrap();
-    fs::write(root.join("bad.rein"), "import gone from \"./gone\";\n/** x */\nexport default function bad() {\n  return gone;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./bad;\n}\n").unwrap();
+    fs::write(root.join("bad.rein"), "/** x */\nexport default function bad() {\n  return @./gone;\n}\n").unwrap();
 
     let out = rein(&["check", root.to_str().unwrap()]);
     assert_eq!(code(&out), 1);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("error: cannot find module './gone'"), "{stdout}");
+    assert!(stdout.contains("error: cannot find function `@./gone`"), "{stdout}");
 
     let out = rein(&["check", root.join("bad.rein").to_str().unwrap()]);
     assert_eq!(code(&out), 1);
@@ -157,7 +157,7 @@ fn run_refuses_function_with_errors() {
     let root = temp_dir("refuse");
     fs::write(root.join("rein.toml"), "").unwrap();
     fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
-    fs::write(root.join("bad.rein"), "import gone from \"./gone\";\n/** x */\nexport default function bad() {\n  return gone;\n}\n").unwrap();
+    fs::write(root.join("bad.rein"), "/** x */\nexport default function bad() {\n  return @./gone;\n}\n").unwrap();
 
     let out = rein(&["run", "bad", "--root", root.to_str().unwrap(), "--json"]);
     assert_eq!(code(&out), 1);
@@ -222,13 +222,13 @@ fn check_directory_inside_project_reports_only_its_files() {
     fs::write(root.join("rein.toml"), "").unwrap();
     fs::create_dir_all(root.join("ci")).unwrap();
     fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
-    fs::write(root.join("ci/fix.rein"), "import gone from \"./gone\";\n/** F. */\nexport default function fix() {\n  return gone;\n}\n").unwrap();
-    fs::write(root.join("other.rein"), "import nope from \"./nope\";\n/** O. */\nexport default function other() {\n  return nope;\n}\n").unwrap();
+    fs::write(root.join("ci/fix.rein"), "/** F. */\nexport default function fix() {\n  return @./gone;\n}\n").unwrap();
+    fs::write(root.join("other.rein"), "/** O. */\nexport default function other() {\n  return @./nope;\n}\n").unwrap();
 
     let out = rein(&["check", root.join("ci").to_str().unwrap()]);
     assert_eq!(code(&out), 1);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("ci/fix.rein") && stdout.contains("cannot find module './gone'"), "{stdout}");
+    assert!(stdout.contains("ci/fix.rein") && stdout.contains("cannot find function `@./gone`"), "{stdout}");
     assert!(!stdout.contains("other.rein"), "{stdout}");
 
     fs::remove_dir_all(&root).unwrap();
@@ -275,7 +275,7 @@ fn graph_ids_are_unique_and_labels_are_escaped() {
     fs::create_dir_all(root.join("ci")).unwrap();
     fs::write(
         root.join("main.rein"),
-        "import a from \"./ci/fix\";\nimport b from \"./ci__fix\";\nimport c from \"./my task\";\n/** Entry. */\nexport default function main() {\n  return a;\n}\n",
+        "/** Entry. */\nexport default function main() {\n  return @./ci/fix;\n}\n",
     )
     .unwrap();
     fs::write(root.join("ci/fix.rein"), "/** F. */\nexport default function fix() {\n  return \"f\";\n}\n").unwrap();
@@ -335,4 +335,46 @@ fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("rein-cli-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+#[test]
+fn running_a_template_is_an_error() {
+    let out = rein(&["run", "templates/tell_customer", "--root", "examples/support-ticket"]);
+    assert_eq!(code(&out), 1);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("templates are called from functions, not run"));
+}
+
+#[test]
+fn describe_shows_template_params_as_strings() {
+    let out = rein(&["describe", "templates/tell_customer", "--root", "examples/support-ticket"]);
+    assert_eq!(code(&out), 0);
+    let v = json(&out);
+    assert_eq!(v["inputs"][0]["type"], "string");
+    assert_eq!(v["inputs"][1]["name"], "nextStep");
+}
+
+#[test]
+fn review_code_delegates_by_risk() {
+    let out = rein(&["run", "review_code", "--root", "examples/merge-pr", "--set", "securitySensitive=yes", "--json"]);
+    assert_eq!(code(&out), 0);
+    let v = json(&out);
+    assert_eq!(v["kind"], "text");
+    assert!(v["value"].as_str().unwrap().contains("Model: use opus model"), "{v}");
+
+    let out = rein(&["run", "review_code", "--root", "examples/merge-pr", "--set", "securitySensitive=no", "--json"]);
+    assert!(json(&out)["value"].as_str().unwrap().contains("Model: use haiku model"));
+}
+
+#[test]
+fn faq_asks_the_agent_for_the_answer_then_continues() {
+    let out = rein(&["run", "answer/faq", "--root", "examples/support-ticket", "--set", "articleFound=yes", "--json"]);
+    assert_eq!(code(&out), 3);
+    let v = json(&out);
+    assert_eq!(v["kind"], "request");
+    assert_eq!(v["response"]["name"], "solved");
+    assert_eq!(v["response"]["type"], "boolean");
+
+    let out = rein(&["run", "answer/faq", "--root", "examples/support-ticket", "--set", "articleFound=yes", "--set", "solved=no"]);
+    assert_eq!(code(&out), 0);
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("next: escalate"));
 }

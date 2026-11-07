@@ -1,0 +1,9 @@
+/**
+ * Ask the user a question and wait for the answer.
+ */
+export default function askUser(
+  /** The question to ask the user, in the user's language. */
+  question: string,
+) {
+  return `Ask the user: ${question}`;
+}

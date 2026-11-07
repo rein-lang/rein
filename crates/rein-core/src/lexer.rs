@@ -1,5 +1,6 @@
 //! Hand-written lexer: source text to tokens with byte spans.
 
+use crate::ast::{Piece, Spanned};
 use crate::diagnostic::{Diagnostic, Span};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -9,6 +10,10 @@ pub enum Tok {
     Str(String),
     /// `/** ... */`, stored as the raw text between the markers.
     Doc(String),
+    /// A template literal in backticks.
+    Template(Vec<Piece>),
+    /// A reference such as `@./ci/fix`, with the path as written.
+    Ref(String),
     /// A word Rein reserves so it can give a helpful error, such as `for` or `const`.
     Reserved(String),
     Import,
@@ -57,6 +62,8 @@ impl Tok {
             Tok::Reserved(s) => format!("reserved word `{s}`"),
             Tok::Eof => "end of file".to_string(),
             Tok::Doc(_) => "doc comment".to_string(),
+            Tok::Template(_) => "template literal".to_string(),
+            Tok::Ref(p) => format!("reference `@{p}`"),
             other => format!("`{}`", other.text()),
         }
     }
@@ -88,7 +95,7 @@ impl Tok {
             Tok::OrOr => "||",
             Tok::EqEqEq => "===",
             Tok::NotEqEq => "!==",
-            Tok::Ident(_) | Tok::Str(_) | Tok::Reserved(_) | Tok::Doc(_) | Tok::Eof => "",
+            Tok::Ident(_) | Tok::Str(_) | Tok::Reserved(_) | Tok::Doc(_) | Tok::Template(_) | Tok::Ref(_) | Tok::Eof => "",
         }
     }
 }
@@ -109,6 +116,10 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Span)>, Diagnostic> {
                 lex_word(src, pos)?
             } else if src[pos..].starts_with("/**") {
                 lex_doc(src, pos)?
+            } else if c == '`' {
+                lex_template(src, pos)?
+            } else if c == '@' {
+                lex_ref(src, pos)?
             } else {
                 lex_punct(src, pos)?
             };
@@ -200,6 +211,96 @@ fn lex_string(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
             }
             _ => {
                 value.push(c);
+                i += c.len_utf8();
+            }
+        }
+    }
+}
+
+/// `@./path` or `@../path`: a reference to another function of the project, relative to this file.
+/// The path has no extension. Returns the path as written.
+fn lex_ref(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
+    let rest = &src[pos + 1..];
+    if !(rest.starts_with("./") || rest.starts_with("../")) {
+        let word = rest.find(|c: char| !is_ident_char(c)).unwrap_or(rest.len());
+        if word > 0 {
+            return Err(Diagnostic::error(
+                Span::new(pos, pos + 1 + word),
+                "references are relative: write `@./name`",
+            ));
+        }
+        return Err(Diagnostic::error(Span::new(pos, pos + 1), "a reference starts with `@./` or `@../`"));
+    }
+    let len = rest.find(|c: char| !(is_ident_char(c) || c == '/' || c == '.')).unwrap_or(rest.len());
+    let path = &rest[..len];
+    let span = Span::new(pos, pos + 1 + len);
+    let segments: Vec<&str> = path.split('/').collect();
+    let dotted = segments.iter().any(|s| s.contains('.') && *s != "." && *s != "..");
+    if dotted {
+        return Err(Diagnostic::error(span, "references have no extension; write `@./name`"));
+    }
+    let names = &segments[1..];
+    let ok = !names.is_empty()
+        && names.iter().all(|s| *s == ".." || (!s.is_empty() && s.chars().all(is_ident_char)))
+        && !matches!(names.last(), Some(&"..") | None);
+    if !ok {
+        return Err(Diagnostic::error(span, "a reference is `@./path` or `@../path`, with path names made of letters, digits and `_`"));
+    }
+    Ok((Tok::Ref(path.to_string()), pos + 1 + len))
+}
+
+/// A template literal in backticks. Parts are text and `${name}`. Returns the end offset.
+fn lex_template(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
+    let mut pieces = Vec::new();
+    let mut text = String::new();
+    let mut i = pos + 1;
+    loop {
+        let Some(c) = src[i..].chars().next() else {
+            return Err(Diagnostic::error(Span::new(pos, src.len()), "unclosed template literal; add `` ` ``"));
+        };
+        match c {
+            '`' => {
+                if !text.is_empty() {
+                    pieces.push(Piece::Text(text));
+                }
+                return Ok((Tok::Template(pieces), i + 1));
+            }
+            '$' if src[i + 1..].starts_with('{') => {
+                if !text.is_empty() {
+                    pieces.push(Piece::Text(std::mem::take(&mut text)));
+                }
+                let name_start = i + 2;
+                let rest = &src[name_start..];
+                let len = rest.find(|c: char| !is_ident_char(c)).unwrap_or(rest.len());
+                let name_end = name_start + len;
+                let valid = rest[..len].chars().next().is_some_and(is_ident_start) && src[name_end..].starts_with('}');
+                if !valid {
+                    let end = src[name_end..].find('}').map_or(name_end, |k| name_end + k + 1);
+                    return Err(Diagnostic::error(
+                        Span::new(i, end),
+                        "only a parameter name can go in `${}`; write `${name}`",
+                    ));
+                }
+                let value = rest[..len].to_string();
+                pieces.push(Piece::Name(Spanned { value, span: Span::new(name_start, name_end) }));
+                i = name_end + 1;
+            }
+            '\\' => {
+                let escaped = match src[i + 1..].chars().next() {
+                    Some(q @ ('`' | '\\' | '$')) => q,
+                    Some('n') => '\n',
+                    _ => {
+                        return Err(Diagnostic::error(
+                            Span::new(i, i + 2),
+                            "unknown escape; use `\\``, `\\\\`, `\\$` or `\\n`",
+                        ))
+                    }
+                };
+                text.push(escaped);
+                i += 2;
+            }
+            _ => {
+                text.push(c);
                 i += c.len_utf8();
             }
         }
@@ -354,8 +455,41 @@ mod tests {
     }
 
     #[test]
-    fn at_sign_is_not_rein() {
+    fn at_sign_needs_a_relative_path() {
         let err = lex("return @x").unwrap_err();
-        assert_eq!(err.message, "unexpected character `@`");
+        assert_eq!(err.message, "references are relative: write `@./name`");
+    }
+
+    #[test]
+    fn template_literal_splits_text_and_names() {
+        let toks = lex("`a ${b} c`").unwrap();
+        let Tok::Template(pieces) = &toks[0].0 else { panic!("{:?}", toks[0].0) };
+        assert_eq!(pieces.len(), 3);
+        assert_eq!(pieces[0], Piece::Text("a ".into()));
+        assert!(matches!(&pieces[1], Piece::Name(n) if n.value == "b" && n.span == Span::new(5, 6)));
+        assert_eq!(pieces[2], Piece::Text(" c".into()));
+    }
+
+    #[test]
+    fn template_literal_escapes_and_raw_newlines() {
+        let toks = lex("`a\\n\\`b\\\\ ${c}\nd`").unwrap();
+        let Tok::Template(pieces) = &toks[0].0 else { panic!("{:?}", toks[0].0) };
+        assert_eq!(pieces[0], Piece::Text("a\n`b\\ ".into()));
+        assert!(matches!(&pieces[1], Piece::Name(n) if n.value == "c"));
+        assert_eq!(pieces[2], Piece::Text("\nd".into()));
+    }
+
+    #[test]
+    fn template_literal_only_takes_a_name() {
+        let err = lex("`${a.b}`").unwrap_err();
+        assert_eq!(err.message, "only a parameter name can go in `${}`; write `${name}`");
+        let err = lex("`${}`").unwrap_err();
+        assert_eq!(err.message, "only a parameter name can go in `${}`; write `${name}`");
+    }
+
+    #[test]
+    fn unclosed_template_literal_is_an_error() {
+        let err = lex("`abc").unwrap_err();
+        assert!(err.message.contains("unclosed template literal"), "{}", err.message);
     }
 }

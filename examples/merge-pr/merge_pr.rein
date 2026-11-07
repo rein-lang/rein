@@ -1,6 +1,4 @@
 // merge_pr.rein
-import reviewCode from "./review_code";
-import fixCi from "./ci/fix";
 
 /**
  * Decide whether a pull request can be merged.
@@ -14,13 +12,12 @@ export default function mergePr(
   if (docsOnly) {
     return "approved";
   }
-
   switch (ci) {
     case "green":
-      return reviewCode;
+      return @./review_code;
     case "red":
-      return fixCi;
-    default:
+      return @./ci/fix;
+    case "pending":
       return "wait for CI, then run merge_pr again";
   }
 }

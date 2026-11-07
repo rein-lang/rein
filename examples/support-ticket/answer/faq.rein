@@ -1,15 +1,19 @@
-import escalate from "../escalate";
-
 /**
  * Answer a how-to question from the help center.
  */
-export default function answerFaq(
+export default async function answerFaq(
   /** Did you find a help article that answers the question? */
   articleFound: boolean,
 ) {
-  if (articleFound) {
-    return "Reply with the help article link. Ask the customer if it solved the problem.";
+  if (!articleFound) {
+    return @../escalate;
   }
-
-  return escalate;
+  /** Did the customer confirm the article solved the problem? */
+  const solved: boolean = await request(
+    "Reply with the help article link and ask the customer if it solved the problem.",
+  );
+  if (solved) {
+    return "Close the ticket as solved.";
+  }
+  return @../escalate;
 }

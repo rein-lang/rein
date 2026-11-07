@@ -10,7 +10,7 @@ The flow asks three questions: how severe the alert is, whether customers feel i
 | --- | --- | --- |
 | `main.rein` | `main` | Entry point. Routes the alert. |
 | `page_human.rein` | `page_human` | Pages the on-call engineer. |
-| `runbook/follow.rein` | `runbook/follow` | Runs the known runbook. Pages a human if the fix fails. |
+| `runbook/follow.rein` | `runbook/follow` | Asks the agent to run the known runbook and report whether the alert cleared. Pages a human if it did not. |
 | `ticket/open.rein` | `ticket/open` | Opens or updates a ticket for non-urgent alerts. |
 
 ## Run it

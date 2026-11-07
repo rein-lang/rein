@@ -2,9 +2,9 @@
 
 Status: proof of concept. Private.
 
-Rein is a language for agent flows. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It asks the agent questions, and it returns the next step as text or as an imported function. The agent does the step, then asks Rein for the next one.
+Rein is a language for agent flows. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It returns the next step as text, as a reference to another function, or as a template call. When it needs a fact, it asks the agent. When it needs a step done, it sends the agent a request and waits for the answer.
 
-Rein is a strict subset of TypeScript. Every Rein file is valid TypeScript syntax, so editors and readers already know how to read it.
+Rein mimics TypeScript syntax and types, except `@` references. There are no imports, no `else`, and no `default`. Every function returns on every path.
 
 ## Sample
 
@@ -12,8 +12,6 @@ Rein is a strict subset of TypeScript. Every Rein file is valid TypeScript synta
 
 ```ts
 // merge_pr.rein
-import reviewCode from "./review_code";
-import fixCi from "./ci/fix";
 
 /**
  * Decide whether a pull request can be merged.
@@ -27,13 +25,12 @@ export default function mergePr(
   if (docsOnly) {
     return "approved";
   }
-
   switch (ci) {
     case "green":
-      return reviewCode;
+      return @./review_code;
     case "red":
-      return fixCi;
-    default:
+      return @./ci/fix;
+    case "pending":
       return "wait for CI, then run merge_pr again";
   }
 }
@@ -76,11 +73,31 @@ next: review_code
   Review the code changes in a pull request.
   securitySensitive: boolean - Does the PR change authentication, payments, or permissions code?
 
-$ rein run review_code --root examples/merge-pr --set securitySensitive=no
-Read the diff. Leave comments for bugs and style issues. Approve when the review is clean. Then run merge_pr again.
+$ rein run review_code --root examples/merge-pr --set securitySensitive=yes
+Delegate this task to a subagent.
+Model: use opus model
+Task: code review the pr with a security focus
 ```
 
-`rein run` with no function runs `main`. Every project has a `main.rein` at its root. It is the agent's entry point. The agent asks the user only for the parameters the path needs. It follows each returned import by running that function next.
+`rein run` with no function runs `main`. Every project has a `main.rein` at its root. It is the agent's entry point. The agent asks the user only for the parameters the path needs. It follows each returned reference by running that function next.
+
+### An async request
+
+`examples/support-ticket/answer/faq.rein` asks the agent to do a step, then branches on the answer. The run stops and asks for the answer (exit code 3). The agent does the step, reports the answer, and runs again:
+
+```text
+$ cd examples/support-ticket
+$ rein run answer/faq --set articleFound=yes
+request: Reply with the help article link and ask the customer if it solved the problem.
+then answer: solved: boolean - Did the customer confirm the article solved the problem?
+hint: rerun with --set solved=<value>
+# exit 3
+
+$ rein run answer/faq --set articleFound=yes --set solved=no
+next: escalate
+  Hand the ticket to a human support engineer.
+# exit 0
+```
 
 ## Quickstart
 
@@ -91,21 +108,21 @@ cargo run -p rein -- check examples/merge-pr
 
 Examples: [merge-pr](examples/merge-pr), [incident-triage](examples/incident-triage), [support-ticket](examples/support-ticket).
 
-Check that every example is valid TypeScript syntax:
+Run the editor tests:
 
 ```sh
 cd editors/vscode
 npm install
-npm run check-ts-syntax
+npm test
 ```
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| `crates/rein-core` | Lexer, parser, checker, evaluator. |
+| `crates/rein-core` | Lexer, parser, checker, evaluator, and the std library (`std/`). |
 | `crates/rein` | CLI and language server. |
-| `editors/vscode` | VS Code extension. A thin JS client for the language server, a TypeScript grammar, and the syntax check. |
+| `editors/vscode` | VS Code extension. A thin JS client for the language server, a Rein grammar, snippets, and tests. |
 | `examples` | Example projects. |
 | `docs` | Language reference and decisions. |
 

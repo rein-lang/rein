@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rein_core::ast::{Function, Input};
+use rein_core::ast::{Function, Input, InputType};
 use rein_core::diagnostic::{line_col, Severity};
 use rein_core::eval::{self, Outcome};
 use rein_core::project::{Project, ENTRY};
@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 const OK: u8 = 0;
 const FAILED: u8 = 1;
 const NEED_INPUT: u8 = 2;
+const REQUEST: u8 = 3;
 
 /// One printed diagnostic line, kept with its sort keys.
 struct Row {
@@ -78,9 +79,10 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
         Ok(i) => i,
         Err(msg) => return fail(json, &msg),
     };
-    let targets = project.import_targets(function);
-    match eval::run(&sf.function, &inputs, &targets) {
+    let bindings = project.bindings(function);
+    match eval::run(&sf.function, &inputs, &bindings) {
         Err(msg) => fail(json, &msg),
+        Ok(Outcome::Request { instruction, response }) => request(&sf.function, &instruction, &response, json),
         Ok(Outcome::Text(value)) => {
             if json {
                 print_json(json!({"kind": "text", "value": value}));
@@ -250,6 +252,21 @@ fn need_input(f: &Function, name: &str, json: bool) -> u8 {
     NEED_INPUT
 }
 
+/// The agent must do `instruction`, then answer `name`.
+fn request(f: &Function, instruction: &str, name: &str, json: bool) -> u8 {
+    let Some(input) = f.response(name) else {
+        return fail(json, &format!("unknown answer `{name}`"));
+    };
+    if json {
+        print_json(json!({"kind": "request", "instruction": instruction, "response": input_json(input)}));
+    } else {
+        println!("request: {instruction}");
+        println!("then answer: {}", input_line(input));
+        println!("hint: rerun with --set {}=<value>", input.name.value);
+    }
+    REQUEST
+}
+
 fn fail(json: bool, message: &str) -> u8 {
     if json {
         print_json(json!({"kind": "error", "message": message}));
@@ -268,7 +285,11 @@ fn inputs_json(f: &Function) -> Vec<Value> {
 }
 
 fn input_json(input: &Input) -> Value {
-    let kind = if input.ty.options().is_some() { "union" } else { "boolean" };
+    let kind = match input.ty {
+        InputType::Bool => "boolean",
+        InputType::Choice(_) => "union",
+        InputType::Text => "string",
+    };
     let mut v = json!({
         "name": input.name.value,
         "type": kind,

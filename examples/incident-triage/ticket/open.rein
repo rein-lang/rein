@@ -8,6 +8,5 @@ export default function openTicket(
   if (ticketExists) {
     return "Add the alert details as a comment on the open ticket.";
   }
-
   return "Create a ticket with the alert name, severity, and first graph link. Assign it to the owning team.";
 }

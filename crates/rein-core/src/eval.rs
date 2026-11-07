@@ -1,8 +1,9 @@
 //! Runs a function against the inputs the agent has.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::ast::{Case, Expr, Function, Input, InputType, ReturnValue, Spanned, Stmt};
+use crate::ast::{Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
 
 /// Result of a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,12 +12,15 @@ pub enum Outcome {
     /// The project path of the function to run next, such as `ci/fix`.
     Ref(String),
     NeedInput(String),
+    /// The agent must answer `response`, after doing `instruction`.
+    Request { instruction: String, response: String },
 }
 
 /// Why evaluation stopped before a return.
 enum Stop {
     Need(String),
     Error(String),
+    Request { instruction: String, response: String },
 }
 
 type Eval<T> = Result<T, Stop>;
@@ -24,46 +28,70 @@ type Eval<T> = Result<T, Stop>;
 struct Env<'a> {
     f: &'a Function,
     inputs: &'a HashMap<String, String>,
-    /// Import binding to project path, from `Project::import_targets`.
-    targets: &'a BTreeMap<String, String>,
+    /// Answers bound on the path so far, in order. Each block drops its own when it ends.
+    answers: RefCell<Vec<&'a Input>>,
+    /// What each import name refers to, from `Project::bindings`.
+    bindings: &'a BTreeMap<String, Binding<'a>>,
 }
 
 pub fn run(
     f: &Function,
     inputs: &HashMap<String, String>,
-    targets: &BTreeMap<String, String>,
+    bindings: &BTreeMap<String, Binding<'_>>,
 ) -> Result<Outcome, String> {
-    let mut unknown: Vec<&String> = inputs.keys().filter(|k| f.input(k).is_none()).collect();
+    if f.is_template() {
+        return Err("templates are called from functions, not run".to_string());
+    }
+    let mut unknown: Vec<&String> = inputs.keys().filter(|k| f.input(k).is_none() && f.response(k).is_none()).collect();
     unknown.sort();
     if let Some(name) = unknown.first() {
         return Err(format!("unknown input `{name}`"));
     }
-    let env = Env { f, inputs, targets };
+    let env = Env { f, inputs, bindings, answers: RefCell::new(Vec::new()) };
     match exec(&env, &f.body) {
         Ok(Some(out)) => Ok(out),
         Ok(None) => Err("no return reached; every path must return".to_string()),
         Err(Stop::Need(name)) => Ok(Outcome::NeedInput(name)),
         Err(Stop::Error(msg)) => Err(msg),
+        Err(Stop::Request { instruction, response }) => Ok(Outcome::Request { instruction, response }),
     }
 }
 
-fn exec(env: &Env, stmts: &[Stmt]) -> Eval<Option<Outcome>> {
+/// Runs one block. The answers it binds are dropped when it ends.
+fn exec<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
+    let mark = env.answers.borrow().len();
+    let out = exec_stmts(env, stmts);
+    env.answers.borrow_mut().truncate(mark);
+    out
+}
+
+fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
     for s in stmts {
         let out = match s {
+            Stmt::Request { response, arg, .. } => {
+                let instruction = expand_value(env, arg)?;
+                let name = response.name.value.as_str();
+                let Some(raw) = env.inputs.get(name) else {
+                    return Err(Stop::Request { instruction, response: name.to_string() });
+                };
+                check_answer(response, raw)?;
+                env.answers.borrow_mut().push(response);
+                None
+            }
             Stmt::Return(r) => Some(match &r.value {
                 ReturnValue::Text(t) => Outcome::Text(t.clone()),
-                ReturnValue::Ref(binding) => Outcome::Ref(target(env, binding)?),
+                ReturnValue::Ref(reference) => Outcome::Ref(target(env, &reference.value)?),
+                ReturnValue::Template(lit) => Outcome::Text(expand_template(env, lit)?),
+                ReturnValue::Call(call) => Outcome::Text(expand_call(env, call)?),
             }),
-            Stmt::If { cond, then, otherwise, .. } => {
+            Stmt::If { cond, then, .. } => {
                 if eval(env, cond)? {
                     exec(env, then)?
-                } else if let Some(o) = otherwise {
-                    exec(env, o)?
                 } else {
                     None
                 }
             }
-            Stmt::Switch { subject, cases, default, .. } => {
+            Stmt::Switch { subject, cases, .. } => {
                 let input = declared(env, &subject.value)?;
                 let InputType::Choice(members) = &input.ty else {
                     return Err(bool_in_switch(&subject.value));
@@ -72,10 +100,7 @@ fn exec(env: &Env, stmts: &[Stmt]) -> Eval<Option<Outcome>> {
                 check_member(&subject.value, members, raw)?;
                 match find_case(cases, raw) {
                     Some(c) => exec(env, &c.body)?,
-                    None => match default {
-                        Some(d) => exec(env, d)?,
-                        None => None,
-                    },
+                    None => return Err(Stop::Error(format!("no case for `{raw}` in `{}`", subject.value))),
                 }
             }
         };
@@ -91,11 +116,65 @@ fn find_case<'a>(cases: &'a [Case], raw: &str) -> Option<&'a Case> {
     cases.iter().find(|c| c.values.iter().any(|v| v.value == raw))
 }
 
-fn target(env: &Env, binding: &str) -> Eval<String> {
-    env.targets
-        .get(binding)
-        .cloned()
-        .ok_or_else(|| Stop::Error(format!("`{binding}` is not an imported function")))
+/// Text of a template literal in a function. Each `${name}` is a union parameter, read now.
+fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
+    let mut out = String::new();
+    for piece in &lit.pieces {
+        match piece {
+            Piece::Text(t) => out.push_str(t),
+            Piece::Name(n) => {
+                let input = declared(env, &n.value)?;
+                let InputType::Choice(members) = &input.ty else {
+                    return Err(Stop::Error(format!("boolean parameter `{}` cannot be interpolated", n.value)));
+                };
+                let raw = provided(env, &n.value)?;
+                check_member(&n.value, members, raw)?;
+                out.push_str(raw);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Text of a template call: the template's own literal, with its parameters replaced by the arguments.
+fn expand_call(env: &Env, call: &Call) -> Eval<String> {
+    let name = call.callee.key();
+    let Some(Binding::Template { function, .. }) = env.bindings.get(name) else {
+        return Err(Stop::Error(format!("`{name}` is not an imported template")));
+    };
+    let args = call.args.iter().map(|a| expand_value(env, a)).collect::<Eval<Vec<String>>>()?;
+    let lit = match function.body.as_slice() {
+        [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => lit,
+        _ => return Err(Stop::Error(format!("`{name}` is not a template"))),
+    };
+    let mut out = String::new();
+    for piece in &lit.pieces {
+        match piece {
+            Piece::Text(t) => out.push_str(t),
+            Piece::Name(n) => {
+                let index = function.inputs.iter().position(|i| i.name.value == n.value);
+                let arg = index.and_then(|i| args.get(i));
+                out.push_str(arg.ok_or_else(|| Stop::Error(format!("unknown parameter `{}`", n.value)))?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Text of a string, a template literal, or a template call.
+fn expand_value(env: &Env, v: &Value) -> Eval<String> {
+    match v {
+        Value::Str(s) => Ok(s.value.clone()),
+        Value::Template(lit) => expand_template(env, lit),
+        Value::Call(call) => expand_call(env, call),
+    }
+}
+
+fn target(env: &Env, reference: &str) -> Eval<String> {
+    match env.bindings.get(reference) {
+        Some(Binding::Function(path)) => Ok(path.clone()),
+        _ => Err(Stop::Error(format!("`@{reference}` is not a function"))),
+    }
 }
 
 fn eval(env: &Env, e: &Expr) -> Eval<bool> {
@@ -103,6 +182,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
         Expr::Var(v) => {
             let input = declared(env, &v.value)?;
             match input.ty {
+                InputType::Text => Err(Stop::Error("todo".into())),
                 InputType::Bool => parse_bool(&v.value, provided(env, &v.value)?),
                 InputType::Choice(_) => Err(Stop::Error(format!(
                     "union parameter `{0}` needs a comparison, like `{0} === \"...\"`",
@@ -127,7 +207,20 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
 }
 
 fn declared<'a>(env: &Env<'a>, name: &str) -> Eval<&'a Input> {
-    env.f.input(name).ok_or_else(|| Stop::Error(format!("unknown parameter `{name}`")))
+    let answer = env.answers.borrow().iter().rev().find(|i| i.name.value == name).copied();
+    answer
+        .or_else(|| env.f.input(name))
+        .ok_or_else(|| Stop::Error(format!("unknown parameter `{name}`")))
+}
+
+/// Checks a value the agent gave for a `const` answer, as it checks a parameter.
+fn check_answer(input: &Input, raw: &str) -> Eval<()> {
+    let name = input.name.value.as_str();
+    match &input.ty {
+        InputType::Bool => parse_bool(name, raw).map(|_| ()),
+        InputType::Choice(members) => check_member(name, members, raw),
+        InputType::Text => Ok(()),
+    }
 }
 
 /// The raw value the agent gave. A missing value stops the run with `Need`.
@@ -167,6 +260,7 @@ fn bool_in_switch(name: &str) -> Stop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Binding;
     use crate::parser::parse;
 
     fn func(src: &str) -> Function {
@@ -179,12 +273,16 @@ mod tests {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
     }
 
-    fn no_targets() -> BTreeMap<String, String> {
+    fn no_bindings() -> BTreeMap<String, Binding<'static>> {
         BTreeMap::new()
     }
 
     fn run_plain(f: &Function, pairs: &[(&str, &str)]) -> Result<Outcome, String> {
-        run(f, &inputs(pairs), &no_targets())
+        run(f, &inputs(pairs), &no_bindings())
+    }
+
+    fn std_binding(name: &str) -> (String, Binding<'static>) {
+        (name.to_string(), crate::stdlib::item(name).unwrap())
     }
 
     const TWO_BOOLS: &str = "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** B */ b: boolean,\n) {\n";
@@ -197,9 +295,9 @@ mod tests {
 
     #[test]
     fn ref_return_resolves_the_import_to_its_project_path() {
-        let f = func("import fixCi from \"./ci/fix\";\n/** d */\nexport default function f() { return fixCi }");
-        let targets = BTreeMap::from([("fixCi".to_string(), "ci/fix".to_string())]);
-        assert_eq!(run(&f, &inputs(&[]), &targets), Ok(Outcome::Ref("ci/fix".into())));
+        let f = func("/** d */\nexport default function f() { return @./ci/fix }");
+        let bindings = BTreeMap::from([("./ci/fix".to_string(), Binding::Function("ci/fix".into()))]);
+        assert_eq!(run(&f, &inputs(&[]), &bindings), Ok(Outcome::Ref("ci/fix".into())));
     }
 
     #[test]
@@ -217,7 +315,7 @@ mod tests {
 
     #[test]
     fn invalid_bool_value_is_error() {
-        let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return \"2\" }");
+        let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return \"2\"  }");
         let err = run_plain(&f, &[("a", "maybe")]).unwrap_err();
         assert!(err.contains("expected true, false, yes or no"), "{err}");
     }
@@ -225,7 +323,7 @@ mod tests {
     #[test]
     fn invalid_union_value_is_error() {
         let f = func(
-            "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c === \"x\") { return \"1\" } return \"2\" }",
+            "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c === \"x\") { return \"1\" } return \"2\"  }",
         );
         let err = run_plain(&f, &[("c", "purple")]).unwrap_err();
         assert!(err.contains("expected one of: `x`, `y`"), "{err}");
@@ -238,10 +336,10 @@ mod tests {
     }
 
     #[test]
-    fn switch_falls_through_to_default() {
+    fn switch_runs_the_matching_case() {
         let f = func(
             "/** d */\nexport default function f(\n  /** C */ c: \"green\" | \"red\" | \"pending\",\n) {\n\
-             switch (c) {\n  case \"green\":\n    return \"go\";\n  case \"red\":\n    return \"fix\";\n  default:\n    return \"wait\";\n}\n}",
+             switch (c) {\n  case \"green\":\n    return \"go\";\n  case \"red\":\n    return \"fix\";\n  case \"pending\":\n    return \"wait\";\n}\n}",
         );
         assert_eq!(run_plain(&f, &[("c", "green")]), Ok(Outcome::Text("go".into())));
         assert_eq!(run_plain(&f, &[("c", "red")]), Ok(Outcome::Text("fix".into())));
@@ -252,7 +350,7 @@ mod tests {
     #[test]
     fn grouped_labels_run_one_body() {
         let f = func(
-            "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"b\" | \"c\",\n) {\n switch (c) {\n  case \"a\":\n  case \"b\":\n    return \"ab\";\n  default:\n    return \"other\";\n}\n}",
+            "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"b\" | \"c\",\n) {\n switch (c) {\n  case \"a\":\n  case \"b\":\n    return \"ab\";\n  case \"c\":\n    return \"other\";\n}\n}",
         );
         assert_eq!(run_plain(&f, &[("c", "a")]), Ok(Outcome::Text("ab".into())));
         assert_eq!(run_plain(&f, &[("c", "b")]), Ok(Outcome::Text("ab".into())));
@@ -262,7 +360,7 @@ mod tests {
     #[test]
     fn not_equal_comparison() {
         let f = func(
-            "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c !== \"x\") { return \"not x\" } return \"x\" }",
+            "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c !== \"x\") { return \"not x\" } return \"x\"  }",
         );
         assert_eq!(run_plain(&f, &[("c", "y")]), Ok(Outcome::Text("not x".into())));
         assert_eq!(run_plain(&f, &[("c", "x")]), Ok(Outcome::Text("x".into())));
@@ -270,9 +368,150 @@ mod tests {
 
     #[test]
     fn yes_no_and_case_insensitive_bools() {
-        let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"t\" } return \"f\" }");
+        let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"t\" } return \"f\"  }");
         assert_eq!(run_plain(&f, &[("a", "YES")]), Ok(Outcome::Text("t".into())));
         assert_eq!(run_plain(&f, &[("a", "No")]), Ok(Outcome::Text("f".into())));
         assert_eq!(run_plain(&f, &[("a", "True")]), Ok(Outcome::Text("t".into())));
+    }
+
+    #[test]
+    fn std_template_call_expands_to_text() {
+        let f = func(r#"/** d */
+export default function f(
+  /** C */ c: "x" | "y",
+) {
+  if (c === "x") {
+    return delegate("use opus model", `code review ${c}`);
+  } return delegate("use haiku model", "code review the pr"); 
+}"#);
+        let bindings = BTreeMap::from([std_binding("delegate")]);
+        assert_eq!(
+            run(&f, &inputs(&[("c", "x")]), &bindings),
+            Ok(Outcome::Text("Delegate this task to a subagent.\nModel: use opus model\nTask: code review x".into()))
+        );
+        assert_eq!(
+            run(&f, &inputs(&[("c", "y")]), &bindings),
+            Ok(Outcome::Text("Delegate this task to a subagent.\nModel: use haiku model\nTask: code review the pr".into()))
+        );
+    }
+
+    #[test]
+    fn user_template_call_expands_its_own_params() {
+        let tpl = func(r#"/** Pick. */
+export default function tpl(
+  /** First. */ a: string,
+  /** Second. */ b: string,
+) {
+  return `${a} then ${b}`;
+}"#);
+        let f = func(r#"/** d */
+export default function f() {
+  return @./tpl("one", "two");
+}"#);
+        let bindings = BTreeMap::from([(
+            "./tpl".to_string(),
+            Binding::Template { path: Some("tpl".into()), function: Box::leak(Box::new(tpl)) },
+        )]);
+        assert_eq!(run(&f, &inputs(&[]), &bindings), Ok(Outcome::Text("one then two".into())));
+    }
+
+    #[test]
+    fn template_literal_return_expands_the_union_value() {
+        let f = func("/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) {\n  return `Pick ${c}`;\n}");
+        assert_eq!(run_plain(&f, &[("c", "y")]), Ok(Outcome::Text("Pick y".into())));
+        assert_eq!(run_plain(&f, &[]), Ok(Outcome::NeedInput("c".into())));
+    }
+
+    #[test]
+    fn running_a_template_is_an_error() {
+        let f = func("/** d */\nexport default function t(\n  /** A */ a: string,\n) { return `${a}` }");
+        assert_eq!(run_plain(&f, &[]), Err("templates are called from functions, not run".into()));
+    }
+
+
+    #[test]
+    fn request_without_an_answer_stops_for_it() {
+        let f = func(r#"/** d */
+export default async function f() {
+  /** Did it work? */
+  const ok: boolean = await request("Do the thing.");
+  if (ok) { return "y" }
+  return "n"
+}"#);
+        assert_eq!(
+            run_plain(&f, &[]),
+            Ok(Outcome::Request { instruction: "Do the thing.".into(), response: "ok".into() })
+        );
+        assert_eq!(run_plain(&f, &[("ok", "yes")]), Ok(Outcome::Text("y".into())));
+        assert_eq!(run_plain(&f, &[("ok", "no")]), Ok(Outcome::Text("n".into())));
+    }
+
+    #[test]
+    fn request_instruction_can_be_a_std_template_call() {
+        let f = func(r#"/** d */
+export default async function f() {
+  /** Did it work? */
+  const ok: boolean = await request(delegate("use opus model", "code review the pr"));
+  return "y"
+}"#);
+        let bindings = BTreeMap::from([std_binding("delegate")]);
+        assert_eq!(
+            run(&f, &inputs(&[]), &bindings),
+            Ok(Outcome::Request {
+                instruction: "Delegate this task to a subagent.\nModel: use opus model\nTask: code review the pr".into(),
+                response: "ok".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn request_instruction_that_interpolates_a_union_needs_it_first() {
+        let f = func(r#"/** d */
+export default async function f(
+  /** C */ c: "x" | "y",
+) {
+  /** Did it work? */
+  const ok: boolean = await request(`fix ${c}`);
+  return "y"
+}"#);
+        assert_eq!(run_plain(&f, &[]), Ok(Outcome::NeedInput("c".into())));
+        assert_eq!(
+            run_plain(&f, &[("c", "x")]),
+            Ok(Outcome::Request { instruction: "fix x".into(), response: "ok".into() })
+        );
+    }
+
+    #[test]
+    fn request_answer_is_validated_when_used() {
+        let f = func(r#"/** d */
+export default async function f() {
+  /** Did it work? */
+  const ok: boolean = await request("Do it.");
+  return "y"
+}"#);
+        let err = run_plain(&f, &[("ok", "maybe")]).unwrap_err();
+        assert!(err.contains("invalid value `maybe` for `ok`"), "{err}");
+    }
+
+    #[test]
+    fn answer_is_a_parameter_for_the_rest_of_its_block() {
+        let f = func(r#"/** d */
+export default async function f(
+  /** C */ c: "x" | "y",
+) {
+  if (c === "x") {
+    /** Did it work? */
+    const ok: boolean = await request("fix it");
+    if (ok) { return "fixed" }
+    return "not fixed"
+  }
+  return "other"
+}"#);
+        assert_eq!(run_plain(&f, &[("c", "y")]), Ok(Outcome::Text("other".into())));
+        assert_eq!(
+            run_plain(&f, &[("c", "x")]),
+            Ok(Outcome::Request { instruction: "fix it".into(), response: "ok".into() })
+        );
+        assert_eq!(run_plain(&f, &[("c", "x"), ("ok", "no")]), Ok(Outcome::Text("not fixed".into())));
     }
 }

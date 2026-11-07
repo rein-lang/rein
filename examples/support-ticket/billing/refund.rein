@@ -1,5 +1,3 @@
-import escalate from "../escalate";
-
 /**
  * Process a refund request from a billing ticket.
  */
@@ -8,8 +6,7 @@ export default function refund(
   refundOverLimit: boolean,
 ) {
   if (refundOverLimit) {
-    return escalate;
+    return @../escalate;
   }
-
-  return "Refund the amount the customer asked for. Confirm the refund in the ticket. Tell the customer the refund takes 5 business days.";
+  return @../templates/tell_customer("Refund the amount the customer asked for and confirm it in the ticket.", "Then tell the customer the refund takes 5 business days.");
 }

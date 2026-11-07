@@ -1,0 +1,11 @@
+/**
+ * Hand a task to a subagent, with the model to use.
+ */
+export default function delegate(
+  /** Which model should the subagent run on? For example: use opus model. */
+  model: string,
+  /** What should the subagent do? */
+  task: string,
+) {
+  return `Delegate this task to a subagent.\nModel: ${model}\nTask: ${task}`;
+}

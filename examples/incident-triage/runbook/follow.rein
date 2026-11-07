@@ -1,15 +1,11 @@
-import pageHuman from "../page_human";
-
 /**
  * Follow the runbook for an alert that has one.
  */
-export default function followRunbook(
+export default async function followRunbook() {
   /** Did the runbook steps clear the alert? */
-  fixed: boolean,
-) {
+  const fixed: boolean = await request("Run the runbook steps for this alert. Then check the alert status and report whether it cleared.");
   if (fixed) {
     return "Close the alert. Write a one-line note with the steps you ran.";
   }
-
-  return pageHuman;
+  return @../page_human;
 }

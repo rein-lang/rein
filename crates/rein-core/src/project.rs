@@ -5,8 +5,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{walk_stmts, Function, ReturnValue, Stmt};
-use crate::check::check_function;
+use crate::ast::{walk_stmts, Binding, Callee, Function, ReturnValue, Stmt, Value};
+use crate::check::{check_function, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::parser::parse;
 
@@ -103,10 +103,10 @@ impl Project {
     /// The path starts with `./` or `../`, has no extension, and is relative to the importing file's directory.
     pub fn resolve(&self, from: &str, source: &str) -> Result<String, String> {
         if !(source.starts_with("./") || source.starts_with("../")) {
-            return Err("import path must start with `./` or `../`".into());
+            return Err(format!("references are relative: write `@./{source}`"));
         }
         if source.rsplit('/').next().is_some_and(|last| last.contains('.') && last != "..") {
-            return Err("import path must have no extension".into());
+            return Err("references have no extension".into());
         }
         // The importing file's directory, as name segments. `ci/fix` starts in `ci`.
         let mut parts: Vec<&str> = from.split('/').collect();
@@ -116,7 +116,7 @@ impl Project {
                 "" | "." => {}
                 ".." => {
                     if parts.pop().is_none() {
-                        return Err(format!("import '{source}' leaves the project root"));
+                        return Err(format!("`@{source}` leaves the project root"));
                     }
                 }
                 s => parts.push(s),
@@ -126,18 +126,32 @@ impl Project {
         if self.files.contains_key(&name) {
             Ok(name)
         } else {
-            Err(format!("cannot find module '{source}'"))
+            Err(format!("cannot find function `@{source}`"))
         }
     }
 
-    /// Binding name to project path, for every import of `name` that resolves.
-    pub fn import_targets(&self, name: &str) -> BTreeMap<String, String> {
+    /// What each callee and reference of `name` refers to, keyed by [`Callee::key`]. Unresolved ones are left out.
+    pub fn bindings(&self, name: &str) -> BTreeMap<String, Binding<'_>> {
         let Some(sf) = self.files.get(name) else { return BTreeMap::new() };
-        sf.function
-            .imports
-            .iter()
-            .filter_map(|imp| Some((imp.binding.value.clone(), self.resolve(name, &imp.source.value).ok()?)))
+        keys(&sf.function)
+            .into_iter()
+            .filter_map(|key| Some((key.clone(), self.binding_for(name, &key).ok()?)))
             .collect()
+    }
+
+    /// What a callee or reference written in function `from` refers to, or why it does not resolve.
+    /// A std name (no `./` or `../`) is a std item. Anything else is a path relative to `from`.
+    pub fn binding_for(&self, from: &str, key: &str) -> Result<Binding<'_>, String> {
+        if !(key.starts_with("./") || key.starts_with("../")) {
+            return crate::stdlib::item(key);
+        }
+        let target = self.resolve(from, key)?;
+        let function = &self.files.get(&target).ok_or_else(|| format!("cannot find function `@{key}`"))?.function;
+        Ok(if function.is_template() {
+            Binding::Template { path: Some(target), function }
+        } else {
+            Binding::Function(target)
+        })
     }
 
     /// Diagnostics per function, sorted by span: parse, single-file checks, cycles, and reachability.
@@ -152,10 +166,10 @@ impl Project {
                     return (name.clone(), sf.parse_diagnostics.clone());
                 }
                 let mut diags = Vec::new();
-                let resolve = |src: &str| self.resolve(name, src);
+                let resolve = |path: &str| self.binding_for(name, path).map(|b| Kind::from(&b));
                 diags.extend(check_function(&sf.function, name, &resolve));
-                let targets = self.import_targets(name);
-                diags.extend(self.cycle_warnings(name, &sf.function, &targets, &adj));
+                let bindings = self.bindings(name);
+                diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &adj));
                 if reachable.as_ref().is_some_and(|r| !r.contains(name)) {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
                     diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from main")));
@@ -171,8 +185,8 @@ impl Project {
         self.files
             .iter()
             .flat_map(|(name, sf)| {
-                let targets = self.import_targets(name);
-                ref_sites(&sf.function, &targets).into_iter().map(move |(to, _)| (name.clone(), to))
+                let bindings = self.bindings(name);
+                ref_sites(&sf.function, &bindings).into_iter().map(move |(to, _)| (name.clone(), to))
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -200,8 +214,8 @@ impl Project {
         self.files
             .iter()
             .map(|(name, sf)| {
-                let targets = self.import_targets(name);
-                let edges = ref_sites(&sf.function, &targets).into_iter().map(|(t, _)| t).collect();
+                let bindings = self.bindings(name);
+                let edges = ref_sites(&sf.function, &bindings).into_iter().map(|(t, _)| t).collect();
                 (name.clone(), edges)
             })
             .collect()
@@ -212,10 +226,10 @@ impl Project {
         &self,
         name: &str,
         f: &Function,
-        targets: &BTreeMap<String, String>,
+        bindings: &BTreeMap<String, Binding<'_>>,
         adj: &BTreeMap<String, BTreeSet<String>>,
     ) -> Vec<Diagnostic> {
-        ref_sites(f, targets)
+        ref_sites(f, bindings)
             .into_iter()
             .filter_map(|(t, span)| {
                 let back = path_between(adj, &t, name)?;
@@ -274,16 +288,49 @@ fn name_under(root: &Path, path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// Returns of imported functions in `f`, as (target project path, span of the return).
-fn ref_sites(f: &Function, targets: &BTreeMap<String, String>) -> Vec<(String, Span)> {
+/// Every callee and reference key used in `f`, sorted and without repeats.
+fn keys(f: &Function) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    walk_stmts(&f.body, &mut |s| match s {
+        Stmt::Return(r) => match &r.value {
+            ReturnValue::Ref(reference) => {
+                out.insert(reference.value.clone());
+            }
+            ReturnValue::Call(call) => {
+                out.insert(call.callee.key().to_string());
+            }
+            ReturnValue::Text(_) | ReturnValue::Template(_) => {}
+        },
+        Stmt::Request { callee, arg, .. } => {
+            out.insert(callee.value.clone());
+            if let Value::Call(call) = arg {
+                out.insert(call.callee.key().to_string());
+            }
+        }
+        _ => {}
+    });
+    out
+}
+
+/// Edges from `f` to project functions: each return of a reference, and each call of a reference.
+/// Returns (target project path, span of the statement). Std names are not edges.
+fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<(String, Span)> {
     let mut out = Vec::new();
     walk_stmts(&f.body, &mut |s| {
-        if let Stmt::Return(r) = s {
-            if let ReturnValue::Ref(binding) = &r.value {
-                if let Some(target) = targets.get(binding) {
-                    out.push((target.clone(), s.span()));
-                }
-            }
+        let mut push = |key: &str| match bindings.get(key) {
+            Some(Binding::Function(path)) => out.push((path.clone(), s.span())),
+            Some(Binding::Template { path: Some(path), .. }) => out.push((path.clone(), s.span())),
+            _ => {}
+        };
+        let callee_is_ref = |c: &crate::ast::Call| matches!(c.callee, Callee::Ref(_));
+        match s {
+            Stmt::Return(r) => match &r.value {
+                ReturnValue::Ref(reference) => push(&reference.value),
+                ReturnValue::Call(call) if callee_is_ref(call) => push(call.callee.key()),
+                _ => {}
+            },
+            Stmt::Request { arg: Value::Call(call), .. } if callee_is_ref(call) => push(call.callee.key()),
+            _ => {}
         }
     });
     out
@@ -337,16 +384,16 @@ mod tests {
         write("rein.toml", "");
         write(
             "main.rein",
-            "import mergePr from \"./merge_pr\";\n/** Entry. */\nexport default function main() {\n  return mergePr;\n}\n",
+            "/** Entry. */\nexport default function main() {\n  return @./merge_pr;\n}\n",
         );
         write(
             "merge_pr.rein",
-            "import fixCi from \"./ci/fix\";\nimport nope from \"./nope\";\n/** Merge a pull request. */\nexport default function mergePr(\n  /** CI status? */\n  ci: \"green\" | \"red\",\n) {\n\
-             switch (ci) {\n    case \"green\": return \"merge\";\n    case \"red\": return fixCi;\n    default: return nope;\n}\n}\n",
+            "/** Merge a pull request. */\nexport default function mergePr(\n  /** CI status? */\n  ci: \"green\" | \"red\" | \"pending\",\n) {\n\
+             switch (ci) {\n    case \"green\": return \"merge\";\n    case \"red\": return @./ci/fix;\n    case \"pending\": return @./nope;\n}\n}\n",
         );
         write(
             "ci/fix.rein",
-            "import mergePr from \"../merge_pr\";\n/** Fix red CI. */\nexport default function fixCi() {\n  return mergePr;\n}\n",
+            "/** Fix red CI. */\nexport default function fixCi() {\n  return @../merge_pr;\n}\n",
         );
         write("bad-name.rein", "/** x */\nexport default function bad() {\n  return \"y\";\n}\n");
         fs::create_dir_all(root.join("nested/deeper")).unwrap();
@@ -362,7 +409,7 @@ mod tests {
 
         let diags = project.check();
         let merge = &diags["merge_pr"];
-        assert!(has(merge, Severity::Error, "cannot find module './nope'"), "{merge:?}");
+        assert!(has(merge, Severity::Error, "cannot find function `@./nope`"), "{merge:?}");
         assert!(has(merge, Severity::Warning, "reference cycle: merge_pr -> ci/fix -> merge_pr"), "{merge:?}");
         let fix = &diags["ci/fix"];
         assert!(has(fix, Severity::Warning, "reference cycle: ci/fix -> merge_pr -> ci/fix"), "{fix:?}");
@@ -381,7 +428,7 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("main.rein"), "import f from \"./f\";\n/** m */\nexport default function main() { return f }\n".to_string()),
+                (root.join("main.rein"), "/** m */\nexport default function main() { return @./f }\n".to_string()),
                 (root.join("f.rein"), src.to_string()),
             ],
         );
@@ -407,9 +454,9 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("main.rein"), "import f from \"./f\";\n/** m */\nexport default function main() { return f }\n".to_string()),
-                (root.join("f.rein"), "import g from \"./g\";\n/** d */\nexport default function f() { return g }\nreturn )".to_string()),
-                (root.join("g.rein"), "import f from \"./f\";\n/** d */\nexport default function g() { return f }\n".to_string()),
+                (root.join("main.rein"), "/** m */\nexport default function main() { return @./f }\n".to_string()),
+                (root.join("f.rein"), "/** d */\nexport default function f() { return @./g }\nreturn )".to_string()),
+                (root.join("g.rein"), "/** d */\nexport default function g() { return @./f }\n".to_string()),
             ],
         );
         let diags = project.check();
@@ -455,11 +502,11 @@ mod tests {
     #[test]
     fn cycle_warns_on_every_return_on_the_cycle() {
         let project = project_of(&[
-            ("main", "import a from \"./a\";\n/** m */\nexport default function main() { return a }\n"),
-            ("a", "import b from \"./b\";\n/** d */\nexport default function a() { return b }\n"),
-            ("b", "import c from \"./c\";\n/** d */\nexport default function b() { return c }\n"),
-            ("c", "import a from \"./a\";\n/** d */\nexport default function c() { return a }\n"),
-            ("self", "import me from \"./self\";\n/** d */\nexport default function me() { return me }\n"),
+            ("main", "/** m */\nexport default function main() { return @./a }\n"),
+            ("a", "/** d */\nexport default function a() { return @./b }\n"),
+            ("b", "/** d */\nexport default function b() { return @./c }\n"),
+            ("c", "/** d */\nexport default function c() { return @./a }\n"),
+            ("self", "/** d */\nexport default function me() { return @./self }\n"),
         ]);
         let diags = project.check();
         for name in ["a", "b", "c"] {
@@ -489,8 +536,8 @@ mod tests {
     #[test]
     fn unreachable_function_is_a_warning() {
         let project = project_of(&[
-            ("main", "import used from \"./used\";\n/** m */\nexport default function main() { return used }\n"),
-            ("used", "import leaf from \"./deep/leaf\";\n/** u */\nexport default function used() { return leaf }\n"),
+            ("main", "/** m */\nexport default function main() { return @./used }\n"),
+            ("used", "/** u */\nexport default function used() { return @./deep/leaf }\n"),
             ("deep/leaf", "/** l */\nexport default function leaf() { return \"ok\" }\n"),
             ("orphan", "/** o */\nexport default function orphan() { return \"alone\" }\n"),
         ]);
@@ -533,28 +580,22 @@ mod tests {
     #[test]
     fn import_path_errors() {
         let project = project_of(&[("ci/fix", ""), ("top", "")]);
-        assert_eq!(project.resolve("ci/fix", "./missing").unwrap_err(), "cannot find module './missing'");
-        assert_eq!(project.resolve("ci/fix", "top").unwrap_err(), "import path must start with `./` or `../`");
-        assert_eq!(project.resolve("ci/fix", "./top.rein").unwrap_err(), "import path must have no extension");
-        assert_eq!(project.resolve("ci/fix", "./top.js").unwrap_err(), "import path must have no extension");
+        assert_eq!(project.resolve("ci/fix", "./missing").unwrap_err(), "cannot find function `@./missing`");
+        assert_eq!(project.resolve("ci/fix", "top").unwrap_err(), "references are relative: write `@./top`");
+        assert_eq!(project.resolve("ci/fix", "./top.rein").unwrap_err(), "references have no extension");
+        assert_eq!(project.resolve("ci/fix", "./top.js").unwrap_err(), "references have no extension");
         // From ci/fix the directory is `ci`; two steps up leaves the root.
-        assert_eq!(project.resolve("ci/fix", "../../top").unwrap_err(), "import '../../top' leaves the project root");
-        assert_eq!(project.resolve("top", "../top").unwrap_err(), "import '../top' leaves the project root");
+        assert_eq!(project.resolve("ci/fix", "../../top").unwrap_err(), "`@../../top` leaves the project root");
+        assert_eq!(project.resolve("top", "../top").unwrap_err(), "`@../top` leaves the project root");
     }
 
     #[test]
     fn import_outside_root_is_reported_by_the_checker() {
         let project = project_of(&[
-            ("ci/fix", "import x from \"../../outside\";\n/** d */\nexport default function fix() { return x }\n"),
+            ("ci/fix", "/** d */\nexport default function fix() { return @../../outside }\n"),
         ]);
         let diags = project.check();
         assert!(has(&diags["ci/fix"], Severity::Error, "leaves the project root"), "{:?}", diags["ci/fix"]);
-    }
-
-    #[test]
-    fn unused_import_is_a_warning_from_the_checker() {
-        let project = project_of(&[("a", "import m from \"./main\";\n/** d */\nexport default function a() { return \"x\" }\n")]);
-        assert!(has(&project.check()["a"], Severity::Warning, "unused import `m`"));
     }
 
     #[test]
@@ -585,5 +626,16 @@ mod tests {
         assert_eq!(Project::find_root(&root.join("nested/deeper")), root);
         assert_eq!(Project::find_root(&root.join("ci/fix.rein")), root);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn template_called_from_main_is_reachable_and_drawn() {
+        let project = project_of(&[
+            ("main", "/** m */\nexport default function main(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return @./tpl(\"a\", \"b\") } return @./tpl(\"c\", \"d\") \n}\n"),
+            ("tpl", "/** t */\nexport default function tpl(\n  /** A */ a: string,\n  /** B */ b: string,\n) { return `${a} ${b}` }\n"),
+        ]);
+        let diags = project.check();
+        assert!(!has(&diags["tpl"], Severity::Warning, "not reachable"), "{:?}", diags["tpl"]);
+        assert!(project.references().contains(&("main".to_string(), "tpl".to_string())));
     }
 }

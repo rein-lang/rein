@@ -1,7 +1,3 @@
-import escalate from "./escalate";
-import billingRefund from "./billing/refund";
-import answerFaq from "./answer/faq";
-
 /**
  * Decide how the support agent handles a customer ticket.
  */
@@ -12,15 +8,14 @@ export default function main(
   vip: boolean,
 ) {
   if (vip) {
-    return escalate;
+    return @./escalate;
   }
-
   switch (category) {
     case "billing":
-      return billingRefund;
+      return @./billing/refund;
     case "account":
-      return escalate;
-    default:
-      return answerFaq;
+      return @./escalate;
+    case "how_to":
+      return @./answer/faq;
   }
 }

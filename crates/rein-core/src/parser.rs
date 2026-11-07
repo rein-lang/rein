@@ -1,6 +1,6 @@
 //! Recursive descent parser: tokens to a `Function` syntax tree.
 
-use crate::ast::{Case, DocBlock, Expr, Function, Import, Input, InputType, ReturnValue, Spanned, Stmt};
+use crate::ast::{Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, ReturnValue, Spanned, Stmt, TemplateLit, Value};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::doc::parse_doc;
 use crate::lexer::{lex, Tok};
@@ -27,6 +27,12 @@ struct Parser {
 }
 
 const DOC_PLACES: &str = "the doc comment must go right before `export default function` or a parameter";
+const NO_VARIABLES: &str = "Rein has no variables, except `/** question */ const x: type = await request(...)`";
+const NO_ELSE: &str = "Rein has no `else`: end the `if` block with a return, and handle the other case after it";
+
+fn no_default(span: Span) -> Diagnostic {
+    Diagnostic::error(span, "Rein has no `default`; add a `case` for every member")
+}
 
 impl Parser {
     fn peek(&self) -> &Tok {
@@ -96,21 +102,24 @@ impl Parser {
         Some(doc)
     }
 
-    /// `import IDENT from STRING ;?`, then the file's function.
+    /// The file's one function, with its doc block.
     fn file(&mut self, f: &mut Function) -> Result<(), Diagnostic> {
-        while *self.peek() == Tok::Import {
-            let import = self.import()?;
-            f.imports.push(import);
+        if *self.peek() == Tok::Import {
+            return Err(Diagnostic::error(
+                self.span(),
+                "Rein has no imports; reference functions with `@./path` and use std functions directly",
+            ));
         }
         if let Some(doc) = self.doc_block() {
-            if *self.peek() == Tok::Import {
-                return Err(Diagnostic::error(self.span(), DOC_PLACES));
-            }
             f.description = Some(doc.description.clone());
             f.doc = Some(doc);
         }
         self.expect(Tok::Export, "`export default function`")?;
         self.expect(Tok::Default, "`default`")?;
+        if matches!(self.peek(), Tok::Ident(w) if w == "async") {
+            f.async_span = Some(self.bump());
+            f.is_async = true;
+        }
         self.expect(Tok::Function, "`function`")?;
         self.ident("function name")?;
         self.expect(Tok::LParen, "`(`")?;
@@ -140,17 +149,6 @@ impl Parser {
         Ok(())
     }
 
-    fn import(&mut self) -> Result<Import, Diagnostic> {
-        let start = self.bump();
-        let binding = self.ident("import name")?;
-        self.expect(Tok::From, "`from`")?;
-        let source = self.string("import path in quotes")?;
-        if *self.peek() == Tok::Semi {
-            self.bump();
-        }
-        Ok(Import { span: start.to(self.last_span()), binding, source })
-    }
-
     /// `IDENT : type`. `doc` is the parameter's own doc block, when it has one.
     fn param(&mut self, doc: Option<DocBlock>) -> Result<Input, Diagnostic> {
         let name = self.ident("parameter name")?;
@@ -171,6 +169,10 @@ impl Parser {
             self.bump();
             return Ok(InputType::Bool);
         }
+        if matches!(self.peek(), Tok::Ident(w) if w == "string") {
+            self.bump();
+            return Ok(InputType::Text);
+        }
         if *self.peek() == Tok::Pipe {
             self.bump();
         }
@@ -187,6 +189,16 @@ impl Parser {
             Tok::If => self.if_stmt(),
             Tok::Switch => self.switch_stmt(),
             Tok::Return => self.return_stmt(),
+            Tok::Default => Err(no_default(self.span())),
+            Tok::Else => Err(Diagnostic::error(self.span(), NO_ELSE)),
+            Tok::Doc(_) => {
+                let doc = self.doc_block().ok_or_else(|| self.unexpected("statement"))?;
+                if !matches!(self.peek(), Tok::Reserved(w) if w == "const") {
+                    return Err(Diagnostic::error(doc.span, DOC_PLACES));
+                }
+                self.request_stmt(Some(doc))
+            }
+            Tok::Reserved(word) if word == "const" => self.request_stmt(None),
             Tok::Reserved(word) => {
                 let message = match word.as_str() {
                     "for" | "while" | "do" => "Rein has no loops yet",
@@ -204,17 +216,10 @@ impl Parser {
         let cond = self.expr()?;
         self.expect(Tok::RParen, "`)`")?;
         let then = self.block()?;
-        let otherwise = if *self.peek() == Tok::Else {
-            self.bump();
-            if *self.peek() == Tok::If {
-                Some(vec![self.if_stmt()?])
-            } else {
-                Some(self.block()?)
-            }
-        } else {
-            None
-        };
-        Ok(Stmt::If { cond, then, otherwise, span: start.to(self.last_span()) })
+        if *self.peek() == Tok::Else {
+            return Err(Diagnostic::error(self.span(), NO_ELSE));
+        }
+        Ok(Stmt::If { cond, then, span: start.to(self.last_span()) })
     }
 
     fn switch_stmt(&mut self) -> Result<Stmt, Diagnostic> {
@@ -224,37 +229,20 @@ impl Parser {
         self.expect(Tok::RParen, "`)`")?;
         self.expect(Tok::LBrace, "`{`")?;
         let mut cases = Vec::new();
-        let mut default = None;
         // Labels with no body yet. They join the next body, so `case "a": case "b": return x;` is one group.
         let mut pending: Vec<Spanned<String>> = Vec::new();
         loop {
             match self.peek() {
                 Tok::Case => {
-                    if default.is_some() {
-                        return Err(self.unexpected("`}`; `default` must be the last clause of a switch"));
-                    }
                     self.bump();
                     pending.push(self.string("case value in quotes")?);
                     self.expect(Tok::Colon, "`:`")?;
                 }
-                Tok::Default => {
-                    let span = self.bump();
-                    if default.is_some() {
-                        return Err(Diagnostic::error(span, "duplicate `default`"));
-                    }
-                    if !pending.is_empty() {
-                        return Err(Diagnostic::error(
-                            span,
-                            "`default` cannot share a body with a `case`; give it its own return",
-                        ));
-                    }
-                    self.expect(Tok::Colon, "`:`")?;
-                    default = Some(self.clause_body()?);
-                }
+                Tok::Default => return Err(no_default(self.span())),
                 Tok::RBrace => break,
                 _ => {
                     if pending.is_empty() {
-                        return Err(self.unexpected("`case` or `default`"));
+                        return Err(self.unexpected("`case`"));
                     }
                     let body = self.clause_body()?;
                     cases.push(Case { values: std::mem::take(&mut pending), body });
@@ -266,7 +254,7 @@ impl Parser {
             cases.push(Case { values: pending, body: Vec::new() });
         }
         self.expect(Tok::RBrace, "`}`")?;
-        Ok(Stmt::Switch { subject, cases, default, span: start.to(self.last_span()) })
+        Ok(Stmt::Switch { subject, cases, span: start.to(self.last_span()) })
     }
 
     /// A clause body: a block, or statements up to the next label or `}`.
@@ -275,7 +263,7 @@ impl Parser {
             return self.block();
         }
         let mut stmts = Vec::new();
-        while !matches!(self.peek(), Tok::Case | Tok::Default | Tok::RBrace) {
+        while !matches!(self.peek(), Tok::Case | Tok::RBrace) {
             stmts.push(self.stmt()?);
         }
         Ok(stmts)
@@ -284,15 +272,133 @@ impl Parser {
     /// `return "text";` or `return importedName;`. The semicolon is optional.
     fn return_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         let start = self.bump();
+        if *self.peek() == Tok::Semi || *self.peek() == Tok::RBrace {
+            return Err(Diagnostic::error(start, "`return` needs a value: a string, a template, or `@./function`"));
+        }
         let (value, span) = match self.peek().clone() {
             Tok::Str(s) => (ReturnValue::Text(s), self.bump()),
-            Tok::Ident(name) => (ReturnValue::Ref(name), self.bump()),
-            _ => return Err(self.unexpected("a string or an imported function name")),
+            Tok::Template(_) => {
+                let lit = self.template_lit()?;
+                let span = lit.span;
+                (ReturnValue::Template(lit), span)
+            }
+            Tok::Ref(path) => {
+                if *self.next_tok() == Tok::LParen {
+                    let call = self.call()?;
+                    let span = call.span;
+                    (ReturnValue::Call(call), span)
+                } else {
+                    let span = self.bump();
+                    (ReturnValue::Ref(Spanned { value: path, span }), span)
+                }
+            }
+            Tok::Ident(_) if *self.next_tok() == Tok::LParen => {
+                let call = self.call()?;
+                let span = call.span;
+                (ReturnValue::Call(call), span)
+            }
+            _ => return Err(self.unexpected("a string, a template literal, or a reference like `@./path`")),
         };
         if *self.peek() == Tok::Semi {
             self.bump();
         }
         Ok(Stmt::Return(Spanned { value, span: start.to(span) }))
+    }
+
+    /// `/** question */ const name: type = await request(arg);`. The semicolon is optional.
+    fn request_stmt(&mut self, doc: Option<DocBlock>) -> Result<Stmt, Diagnostic> {
+        let start = self.bump();
+        let Some(doc) = doc else {
+            return Err(Diagnostic::error(start, NO_VARIABLES));
+        };
+        let name = self.ident("answer name")?;
+        self.expect(Tok::Colon, "`:`")?;
+        let ty = self.param_type()?;
+        if *self.peek() != Tok::Assign {
+            return Err(Diagnostic::error(start, NO_VARIABLES));
+        }
+        self.bump();
+        if !matches!(self.peek(), Tok::Ident(w) if w == "await") {
+            return Err(Diagnostic::error(start, NO_VARIABLES));
+        }
+        self.bump();
+        let callee = self.ident("`request`")?;
+        if callee.value != "request" {
+            return Err(Diagnostic::error(callee.span, "only `request` can be awaited"));
+        }
+        self.expect(Tok::LParen, "`(`")?;
+        let arg = self.value()?;
+        if *self.peek() == Tok::Comma {
+            self.bump();
+        }
+        let close = self.expect(Tok::RParen, "`)`")?;
+        if *self.peek() == Tok::Semi {
+            self.bump();
+        }
+        let span = start.to(close);
+        let description = doc.description.clone();
+        let response = Input { span: name.span.to(close), name, ty, description, doc: Some(doc) };
+        Ok(Stmt::Request { response: Box::new(response), callee, arg, span })
+    }
+
+    /// A string, a template literal, or a template call. A call is only allowed here, as the argument of `request`.
+    fn value(&mut self) -> Result<Value, Diagnostic> {
+        match self.peek() {
+            Tok::Ref(_) | Tok::Ident(_) if *self.next_tok() == Tok::LParen => Ok(Value::Call(self.call()?)),
+            _ => self.text_arg(),
+        }
+    }
+
+    /// The token after the current one. The last token is `Eof`, so this never runs past the end.
+    fn next_tok(&self) -> &Tok {
+        &self.toks[(self.pos + 1).min(self.toks.len() - 1)].0
+    }
+
+    /// A template literal token, as a value.
+    fn template_lit(&mut self) -> Result<TemplateLit, Diagnostic> {
+        let Tok::Template(pieces) = self.peek().clone() else {
+            return Err(self.unexpected("a template literal"));
+        };
+        let span = self.bump();
+        Ok(TemplateLit { pieces, span })
+    }
+
+    /// `callee(arg, ...)`. The callee is a std name, or a reference. Each arg is a string or a template literal.
+    fn call(&mut self) -> Result<Call, Diagnostic> {
+        let callee = match self.peek().clone() {
+            Tok::Ref(path) => {
+                let span = self.bump();
+                Callee::Ref(Spanned { value: path, span })
+            }
+            Tok::Ident(name) => {
+                let span = self.bump();
+                Callee::Std(Spanned { value: name, span })
+            }
+            _ => return Err(self.unexpected("a reference like `@./path`, or a std name")),
+        };
+        self.expect(Tok::LParen, "`(`")?;
+        let mut args = Vec::new();
+        while *self.peek() != Tok::RParen {
+            args.push(self.text_arg()?);
+            if *self.peek() != Tok::Comma {
+                break;
+            }
+            self.bump();
+        }
+        let close = self.expect(Tok::RParen, "`)`")?;
+        Ok(Call { span: callee.span().to(close), callee, args })
+    }
+
+    /// A string or a template literal, as an argument.
+    fn text_arg(&mut self) -> Result<Value, Diagnostic> {
+        match self.peek().clone() {
+            Tok::Str(value) => {
+                let span = self.bump();
+                Ok(Value::Str(Spanned { value, span }))
+            }
+            Tok::Template(_) => Ok(Value::Template(self.template_lit()?)),
+            _ => Err(self.unexpected("a string or a template literal")),
+        }
     }
 
     fn block(&mut self) -> Result<Vec<Stmt>, Diagnostic> {
@@ -375,8 +481,6 @@ pub(crate) mod tests {
 
     pub(crate) const SAMPLE: &str = r#"
 // merge_pr.rein
-import reviewCode from "./review_code";
-import fixCi from "./ci/fix";
 
 /**
  * Decide whether a pull request can be merged.
@@ -392,13 +496,12 @@ export default function mergePr(
   if (docsOnly) {
     return "approved";
   }
-
   switch (ci) {
     case "green":
-      return reviewCode;
+      return @./review_code;
     case "red":
-      return fixCi;
-    default:
+      return @./ci/fix;
+    case "pending":
       return "wait for CI, then run mergePr again";
   }
 }
@@ -419,9 +522,6 @@ export default function mergePr(
     #[test]
     fn parses_full_sample() {
         let f = ok(SAMPLE);
-        assert_eq!(f.imports.len(), 2);
-        assert_eq!(f.imports[0].binding.value, "reviewCode");
-        assert_eq!(f.imports[0].source.value, "./review_code");
         assert_eq!(f.description.unwrap().value, "Decide whether a pull request can be merged.");
         assert_eq!(f.inputs.len(), 2);
         assert_eq!(f.inputs[0].ty, InputType::Bool);
@@ -429,16 +529,15 @@ export default function mergePr(
         assert_eq!(f.inputs[1].description.value, "What is the CI status of the PR?");
         assert_eq!(f.inputs[1].ty.options().unwrap(), ["green", "red", "pending"]);
         assert_eq!(f.body.len(), 2);
-        assert!(matches!(&f.body[0], Stmt::If { otherwise: None, .. }));
-        let Stmt::Switch { cases, default, .. } = &f.body[1] else { panic!("expected switch") };
-        assert_eq!(cases.len(), 2);
-        assert!(matches!(&cases[1].body[0], Stmt::Return(r) if r.value == ReturnValue::Ref("fixCi".into())));
-        assert!(default.is_some());
+        assert!(matches!(&f.body[0], Stmt::If { .. }));
+        let Stmt::Switch { cases, .. } = &f.body[1] else { panic!("expected switch") };
+        assert_eq!(cases.len(), 3);
+        assert!(matches!(&cases[1].body[0], Stmt::Return(r) if matches!(&r.value, ReturnValue::Ref(s) if s.value == "./ci/fix")));
     }
 
     #[test]
     fn parameter_doc_block_can_be_multi_line() {
-        let f = ok("import a from \"./a\"\n/** d */\nexport default function f(\n  /**\n   * Is it VIP?\n   * Check the CRM.\n   */\n  vip: boolean,\n) { return a }");
+        let f = ok("/** d */\nexport default function f(\n  /**\n   * Is it VIP?\n   * Check the CRM.\n   */\n  vip: boolean,\n) { return @./a }");
         assert_eq!(f.inputs[0].description.value, "Is it VIP?\nCheck the CRM.");
     }
 
@@ -466,64 +565,68 @@ export default function mergePr(
     #[test]
     fn single_quotes_leading_pipe_and_missing_semicolons() {
         let f = ok(
-            "import a from '../a'\n/** d */\nexport default function f(\n  /** x */\n  c: | 'x' | 'y',\n  /** y */\n  b: boolean,\n) {\n  if (c === 'x') { return a }\n  return 'z'\n}",
+            "/** d */\nexport default function f(\n  /** x */\n  c: | 'x' | 'y',\n  /** y */\n  b: boolean,\n) {\n  if (c === 'x') { return @../a } return 'z' \n}",
         );
-        assert_eq!(f.imports[0].source.value, "../a");
         assert_eq!(f.inputs[0].ty.options().unwrap(), ["x", "y"]);
         assert_eq!(f.inputs.len(), 2);
     }
 
     #[test]
-    fn parses_else_if_and_logic() {
+    fn parses_guard_chain_and_logic() {
         let src = "/** d */\nexport default function f(\n  /** a */ a: boolean,\n  /** b */ b: boolean,\n  /** c */ c: \"x\" | \"y\",\n) {\n\
              if (!(a && b) || c === \"x\") { return \"one\" }\n\
-             else if (a) { return \"two\" }\n\
-             else { return \"three\" }\n}";
+             if (a) { return \"two\" }\n\
+             return \"three\"\n}";
         let f = ok(src);
         assert_eq!(f.inputs.len(), 3);
-        let Stmt::If { cond, otherwise: Some(else_branch), .. } = &f.body[0] else {
-            panic!("expected if")
-        };
+        let Stmt::If { cond, .. } = &f.body[0] else { panic!("expected if") };
         assert!(matches!(cond, Expr::Or(..)));
-        assert!(matches!(&else_branch[0], Stmt::If { otherwise: Some(_), .. }));
+        assert!(matches!(&f.body[1], Stmt::If { .. }));
+    }
+
+    #[test]
+    fn else_is_not_in_rein() {
+        let msg = one_error("/** d */\nexport default function f(\n  /** a */ a: boolean,\n) {\n  if (a) { return \"1\" }\n  else { return \"2\" }\n}");
+        assert_eq!(msg, "Rein has no `else`: end the `if` block with a return, and handle the other case after it");
+    }
+
+    #[test]
+    fn return_needs_a_value() {
+        let msg = one_error("/** d */\nexport default function f() {\n  return;\n}");
+        assert_eq!(msg, "`return` needs a value: a string, a template, or `@./function`");
     }
 
     #[test]
     fn return_without_value_is_one_error_with_partial_tree() {
         let (f, diags) = parse("/** x */\nexport default function f() {\n  return\n}");
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].message.contains("expected a string or an imported function name"), "{}", diags[0].message);
+        assert!(diags[0].message.contains("`return` needs a value"), "{}", diags[0].message);
         assert!(f.description.is_some());
     }
 
     #[test]
-    fn default_must_be_last_clause() {
-        let msg = one_error(
-            "/** d */\nexport default function f(c: \"x\" | \"y\") {\n switch (c) { default: return \"a\"; case \"x\": return \"b\" }\n}",
-        );
-        assert_eq!(msg, "expected `}`; `default` must be the last clause of a switch, found `case`");
+    fn imports_are_not_in_rein() {
+        let msg = one_error("import a from \"./a\";\n/** d */\nexport default function f() { return @./a }");
+        assert_eq!(msg, "Rein has no imports; reference functions with `@./path` and use std functions directly");
     }
 
     #[test]
-    fn duplicate_default_is_an_error() {
-        let msg = one_error(
-            "/** d */\nexport default function f(c: \"x\" | \"y\") {\n switch (c) { default: return \"a\"; default: return \"b\" }\n}",
-        );
-        assert_eq!(msg, "duplicate `default`");
+    fn bare_name_is_not_a_return_value() {
+        let msg = one_error("/** d */\nexport default function f() { return nope; }");
+        assert!(msg.contains("expected a string, a template literal, or a reference"), "{msg}");
     }
 
     #[test]
-    fn default_cannot_share_a_body_with_a_case() {
+    fn switch_default_is_not_in_rein() {
         let msg = one_error(
-            "/** d */\nexport default function f(c: \"x\" | \"y\") {\n switch (c) { case \"x\": default: return \"a\" }\n}",
+            "/** d */\nexport default function f(c: \"x\" | \"y\") {\n switch (c) { case \"x\": return \"a\"; default: return \"b\" }\n}",
         );
-        assert_eq!(msg, "`default` cannot share a body with a `case`; give it its own return");
+        assert_eq!(msg, "Rein has no `default`; add a `case` for every member");
     }
 
     #[test]
     fn function_doc_must_be_right_before_export() {
         for src in [
-            "/** d */\nimport a from \"./a\"\nexport default function f() { return \"x\" }",
             "/** d */\nexport default function f() { return \"x\" }\n/** y */",
             "export default function f(/** a */ a: boolean) { return \"x\" }\n/** y */",
         ] {
@@ -550,7 +653,7 @@ export default function mergePr(
         assert_eq!(one_error(&format!("{head} for (;;) {{ }}\n}}")), "Rein has no loops yet");
         assert_eq!(one_error(&format!("{head} while (a) {{ }}\n}}")), "Rein has no loops yet");
         assert_eq!(one_error(&format!("{head} do {{ }}\n}}")), "Rein has no loops yet");
-        assert_eq!(one_error(&format!("{head} const x = \"a\"\n}}")), "Rein has no variables");
+        assert!(one_error(&format!("{head} const x = \"a\"\n}}")).starts_with("Rein has no variables"));
         assert_eq!(one_error(&format!("{head} let x = \"a\"\n}}")), "Rein has no variables");
         assert_eq!(one_error(&format!("{head} var x = \"a\"\n}}")), "Rein has no variables");
     }
@@ -574,5 +677,91 @@ export default function mergePr(
         assert_eq!(diags.len(), 1);
         assert!(f.description.is_none());
         assert!(f.doc.is_none());
+    }
+
+    #[test]
+    fn template_return_parses() {
+        let f = ok(r#"/** d */
+export default function f(
+  /** C */ c: "x" | "y",
+) {
+  return `Pick ${c}`;
+}"#);
+        let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
+        let ReturnValue::Template(lit) = &r.value else { panic!("expected template, got {:?}", r.value) };
+        assert_eq!(lit.pieces.len(), 2);
+    }
+
+    #[test]
+    fn call_return_parses_with_literal_and_template_args() {
+        let f = ok(r#"/** d */
+export default function f(
+  /** C */ c: "x" | "y",
+) {
+  return @./tpl("a", `b ${c}`);
+}"#);
+        let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
+        let ReturnValue::Call(call) = &r.value else { panic!("expected call, got {:?}", r.value) };
+        assert_eq!(call.callee.key(), "./tpl");
+        assert_eq!(call.args.len(), 2);
+        assert!(matches!(&call.args[0], Value::Str(s) if s.value == "a"));
+        assert!(matches!(&call.args[1], Value::Template(_)));
+    }
+
+    #[test]
+    fn call_arguments_cannot_be_calls() {
+        let msg = one_error(r#"/** d */
+export default function f() {
+  return @./tpl(other("x"));
+}"#);
+        assert!(msg.contains("expected a string or a template literal"), "{msg}");
+    }
+
+    #[test]
+    fn string_parameter_type_is_text() {
+        let f = ok("/** d */\nexport default function f(\n  /** A */ a: string,\n) { return `${a}` }");
+        assert_eq!(f.inputs[0].ty, InputType::Text);
+    }
+
+    #[test]
+    fn request_const_parses_with_its_doc_and_type() {
+        let f = ok(r#"/** d */
+export default async function f() {
+  /** Did it work? */
+  const ok: boolean = await request("Do it.");
+  if (!ok) { return "n" }
+  return "y"
+}"#);
+        let Stmt::Request { response, arg, callee, .. } = &f.body[0] else { panic!("expected request") };
+        assert_eq!(response.name.value, "ok");
+        assert_eq!(response.ty, InputType::Bool);
+        assert_eq!(response.description.value, "Did it work?");
+        assert_eq!(callee.value, "request");
+        assert!(matches!(arg, Value::Str(s) if s.value == "Do it."));
+        assert!(f.is_async);
+    }
+
+    #[test]
+    fn request_argument_can_be_a_std_template_call() {
+        let f = ok(r#"/** d */
+export default async function f() {
+  /** Did it work? */
+  const ok: boolean = await request(delegate("m", "t"));
+  return "y"
+}"#);
+        let Stmt::Request { arg, .. } = &f.body[0] else { panic!("expected request") };
+        assert!(matches!(arg, Value::Call(c) if c.callee.key() == "delegate" && c.args.len() == 2));
+    }
+
+    #[test]
+    fn request_answer_needs_a_doc_comment() {
+        let msg = one_error("/** d */\nexport default async function f() {\n  const ok: boolean = await request(\"x\");\n  return \"y\"\n}");
+        assert!(msg.contains("Rein has no variables"), "{msg}");
+    }
+
+    #[test]
+    fn only_request_can_be_awaited() {
+        let msg = one_error("/** d */\nexport default async function f() {\n  /** Q */\n  const x: boolean = await fetch(\"a\");\n  return \"y\"\n}");
+        assert!(msg.contains("only `request` can be awaited"), "{msg}");
     }
 }
