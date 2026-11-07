@@ -8,7 +8,7 @@ Rein mimics TypeScript syntax and types, except `@` references. There are no imp
 
 ## Sample
 
-`examples/merge-pr/merge_pr.rein`:
+`examples/.rein/merge-pr/merge_pr.rein`:
 
 ```ts
 // merge_pr.rein
@@ -49,10 +49,10 @@ flowchart TD
 
 ## How an agent uses it
 
-The agent steps the flow with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
+The agent steps the flow with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/.rein/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
 
 ```text
-$ cd examples/support-ticket
+$ cd examples/.rein/support-ticket
 $ rein step --json
 {"kind":"question","version":1,"key":"main.vip","function":"main","name":"vip","type":"boolean","options":null,"description":"Is the customer on the VIP plan?","answers":{},"trace":["main"]}
 # exit 2
@@ -79,11 +79,22 @@ A call follows each reference in the same call. The `trace` lists the functions 
 ## Quickstart
 
 ```sh
-cargo build
-cargo run -p rein -- check examples/merge-pr
+cargo install --path crates/rein        # puts `rein` on PATH
+rein install claude-code --project      # the agent hook: writes .claude/settings.json
+cd examples
+rein flows                              # the flows visible from here
+rein step --flow support-ticket --json  # step one flow by name
 ```
 
-Examples: [merge-pr](examples/merge-pr), [incident-triage](examples/incident-triage), [support-ticket](examples/support-ticket).
+A flow is a folder with a `main.rein`, under a scoped `.rein/` folder: `repo/.rein/<flow>/` (project), `~/.rein/<flow>/` (user), or `/etc/rein/<flow>/` (system). The closest scope wins a name clash. See [spec.md section 1a](docs/spec.md#1a-flows-and-scopes).
+
+Check an example:
+
+```sh
+cargo run -p rein -- check examples/.rein/merge-pr
+```
+
+Examples: [merge-pr](examples/.rein/merge-pr), [incident-triage](examples/.rein/incident-triage), [support-ticket](examples/.rein/support-ticket).
 
 Run the editor tests:
 

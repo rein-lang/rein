@@ -13,6 +13,9 @@ use crate::parser::parse;
 /// The function every project starts from. It is `main.rein` at the project root.
 pub const ENTRY: &str = "main";
 
+/// The file that marks a flow root. Same name as [`flows::MAIN_FILE`].
+const MAIN_FILE: &str = crate::flows::MAIN_FILE;
+
 pub struct SourceFile {
     pub path: PathBuf,
     pub text: String,
@@ -28,7 +31,7 @@ pub struct Project {
 
 impl Project {
     /// Nearest ancestor of `start` (or its parent, if `start` is a file) that
-    /// has a `rein.toml`. Falls back to the start directory.
+    /// holds a `main.rein`. A flow folder in `.rein/<flow>/` is such a directory. Falls back to the start directory.
     /// The walk uses the absolute path, not the symlink target, so a linked file belongs to the
     /// project that holds the link.
     pub fn find_root(start: &Path) -> PathBuf {
@@ -39,7 +42,7 @@ impl Project {
             start
         };
         base.ancestors()
-            .find(|d| d.join("rein.toml").is_file())
+            .find(|d| d.join(MAIN_FILE).is_file())
             .map_or_else(|| base.clone(), Path::to_path_buf)
     }
 
@@ -86,7 +89,7 @@ impl Project {
         self.files.get(name)
     }
 
-    /// Diagnostics that belong to the project, not to one function. They point into `rein.toml`.
+    /// Diagnostics that belong to the project, not to one function. They point at `main.rein`.
     pub fn project_diagnostics(&self) -> Vec<Diagnostic> {
         if self.files.contains_key(ENTRY) {
             return Vec::new();
@@ -94,9 +97,9 @@ impl Project {
         vec![Diagnostic::error(Span::default(), "project has no main.rein; it is the agent's entry point")]
     }
 
-    /// The project marker file, `rein.toml` in the root.
+    /// The entry file, `main.rein` in the root. Project errors point here.
     pub fn marker_path(&self) -> PathBuf {
-        self.root.join("rein.toml")
+        self.root.join(MAIN_FILE)
     }
 
     /// Resolves an import path written in function `from` to the project path of a function.
@@ -261,8 +264,8 @@ fn collect(
         // `metadata` follows symlinks. A broken link fails here and is skipped.
         let Ok(meta) = fs::metadata(&path) else { continue };
         if meta.is_dir() {
-            // A subdirectory with its own marker is another project. Skip it.
-            if file_name.starts_with('.') || file_name == "target" || file_name == "node_modules" || path.join("rein.toml").is_file() {
+            // A subdirectory with its own main.rein is another flow. Skip it.
+            if file_name.starts_with('.') || file_name == "target" || file_name == "node_modules" || path.join(MAIN_FILE).is_file() {
                 continue;
             }
             let _ = collect(&path, out, seen);
@@ -381,7 +384,6 @@ mod tests {
             fs::create_dir_all(p.parent().unwrap()).unwrap();
             fs::write(p, text).unwrap();
         };
-        write("rein.toml", "");
         write(
             "main.rein",
             "/** Entry. */\nexport default function main() {\n  return @./merge_pr;\n}\n",
@@ -528,7 +530,7 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert_eq!(errs[0].severity, Severity::Error);
         assert_eq!(errs[0].message, "project has no main.rein; it is the agent's entry point");
-        assert_eq!(project.marker_path(), root.join("rein.toml"));
+        assert_eq!(project.marker_path(), root.join("main.rein"));
         // Without main, nothing is reported as unreachable.
         assert!(!has(&project.check()["f"], Severity::Warning, "not reachable"));
     }
@@ -599,9 +601,9 @@ mod tests {
     }
 
     #[test]
-    fn subdirectory_with_marker_is_another_project() {
+    fn subdirectory_with_main_is_another_flow() {
         let root = temp_project("nested");
-        fs::write(root.join("nested/rein.toml"), "").unwrap();
+        fs::write(root.join("nested/main.rein"), "/** n */\nexport default function n() { return \"n\" }\n").unwrap();
         fs::write(root.join("nested/x.rein"), "/** x */\nexport default function x() { return \"x\" }\n").unwrap();
         let project = Project::load(&root).unwrap();
         assert!(project.get("nested/x").is_none(), "{:?}", project.files.keys().collect::<Vec<_>>());
@@ -621,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn find_root_walks_up_to_marker() {
+    fn find_root_walks_up_to_main() {
         let root = fs::canonicalize(temp_project("root")).unwrap();
         assert_eq!(Project::find_root(&root.join("nested/deeper")), root);
         assert_eq!(Project::find_root(&root.join("ci/fix.rein")), root);

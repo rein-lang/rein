@@ -179,7 +179,7 @@ fn refresh(connection: &Connection, docs: &Docs, published: &mut BTreeSet<Url>, 
                 .unwrap_or_default();
             lists.insert(file_uri, list);
         }
-        // The client does not open rein.toml, so project errors go on an open file of the project.
+        // The client does not open main.rein, so project errors go on an open file of the project.
         // Without one, they go on the file that changed.
         let extra: Vec<Diagnostic> = project.project_diagnostics().iter().map(|d| to_lsp("", d)).collect();
         if !extra.is_empty() {

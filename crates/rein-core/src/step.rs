@@ -34,6 +34,10 @@ pub struct StepRequest {
     pub entry: String,
     #[serde(default)]
     pub answers: Answers,
+    /// Flow name to step, resolved by the caller through `flows::resolve`. Absent when the caller
+    /// passes a root instead. The stepping itself ignores it: it runs on the project it is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<String>,
 }
 
 fn default_version() -> u32 {
@@ -277,7 +281,7 @@ fn error_diagnostics(project: &Project) -> Vec<StepDiagnostic> {
         }
     }
     for d in project.project_diagnostics() {
-        let file = "rein.toml".to_string();
+        let file = "main.rein".to_string();
         out.push(StepDiagnostic {
             file,
             line: 1,
@@ -354,7 +358,6 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("rein-step-{}-{nanos}-{n}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("rein.toml"), "").unwrap();
         for (rel, text) in files {
             let path = root.join(rel);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -377,6 +380,7 @@ mod tests {
             version: PROTOCOL_VERSION,
             entry: entry.into(),
             answers: answers(pairs),
+            flow: None,
         }
     }
 
@@ -744,7 +748,8 @@ mod tests {
             StepRequest {
                 version: 1,
                 entry: "main".into(),
-                answers: answers(&[])
+                answers: answers(&[]),
+                flow: None,
             }
         );
     }

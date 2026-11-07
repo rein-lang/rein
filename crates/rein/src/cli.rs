@@ -9,6 +9,8 @@ use rein_core::ast::{Function, Input, InputType};
 use rein_core::diagnostic::{line_col, Severity};
 use rein_core::eval::{self, Outcome};
 use rein_core::project::{Project, ENTRY};
+
+use crate::scopes;
 use rein_core::step::{invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 
@@ -99,14 +101,24 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
 }
 
 /// Steps the whole flow once. The request comes from flags, or from stdin as JSON. This is only an adapter:
-/// `rein_core::step::step` decides everything.
-pub fn step(entry: Option<String>, root: Option<PathBuf>, answers: &[String], from_stdin: bool, json: bool) -> u8 {
+/// `rein_core::step::step` decides everything. A flow name, from `--flow` or the stdin `flow` field, is
+/// resolved through the scoped `.rein/` folders.
+pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, answers: &[String], from_stdin: bool, json: bool) -> u8 {
     let response = match build_request(entry, answers, from_stdin) {
         Err(message) => invalid_request(message),
-        Ok(request) => match load(root) {
-            Ok(project) => step_flow(&project, &request),
-            Err(message) => invalid_request(message),
-        },
+        Ok(request) => {
+            let flow = flow.or_else(|| request.flow.clone());
+            let loaded = match (root, flow) {
+                (Some(_), Some(_)) => Err("--flow and --root are mutually exclusive".to_string()),
+                (Some(root), None) => load(Some(root)),
+                (None, Some(name)) => scopes::flow_root(&name).and_then(|root| load(Some(root))),
+                (None, None) => load(None),
+            };
+            match loaded {
+                Ok(project) => step_flow(&project, &request),
+                Err(message) => invalid_request(message),
+            }
+        }
     };
     print_step(&response, json || from_stdin);
     match response {
@@ -137,7 +149,50 @@ fn build_request(entry: Option<String>, answers: &[String], from_stdin: bool) ->
         version: PROTOCOL_VERSION,
         entry: entry.unwrap_or_else(|| ENTRY.to_string()),
         answers: map,
+        flow: None,
     })
+}
+
+/// `rein flows`: every flow visible from here. Shadowed flows are listed and marked.
+pub fn flows(as_json: bool) -> u8 {
+    let found = scopes::discover_here();
+    if as_json {
+        let list: Vec<Value> = found.iter().map(flow_json).collect();
+        print_json(Value::Array(list));
+        return OK;
+    }
+    for f in &found {
+        let shadow = f.shadowed_by.map_or(String::new(), |by| format!(" (shadowed by {})", by.label()));
+        println!("{}\t{}\t{}\t{}{shadow}", f.name, f.scope.label(), f.root.display(), f.description);
+    }
+    OK
+}
+
+fn flow_json(f: &rein_core::flows::Flow) -> Value {
+    json!({
+        "name": f.name,
+        "scope": f.scope.label(),
+        "path": f.root.display().to_string(),
+        "description": f.description,
+        "shadowed": f.shadowed_by.is_some(),
+        "shadowed_by": f.shadowed_by.map(|s| s.label()),
+    })
+}
+
+/// `rein agent-context`: the block for an agent's context. Prints nothing when no flow is visible.
+pub fn agent_context(as_json: bool) -> u8 {
+    let found = scopes::discover_here();
+    let text = rein_core::flows::agent_context(&found);
+    if text.is_empty() {
+        return OK;
+    }
+    if as_json {
+        let visible: Vec<Value> = found.iter().filter(|f| f.shadowed_by.is_none()).map(flow_json).collect();
+        print_json(json!({"flows": visible, "text": text}));
+    } else {
+        println!("{text}");
+    }
+    OK
 }
 
 fn print_step(response: &StepResponse, as_json: bool) {

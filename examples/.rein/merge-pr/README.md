@@ -15,8 +15,8 @@ An agent flow that decides whether a pull request can merge.
 ## Run it
 
 ```sh
-cargo run -p rein -- check examples/merge-pr
-cargo run -p rein -- run --root examples/merge-pr
+cargo run -p rein -- check examples/.rein/merge-pr
+cargo run -p rein -- run --root examples/.rein/merge-pr
 ```
 
 ## Intentional cycle

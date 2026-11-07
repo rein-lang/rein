@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/support-ticket")
+        .join("../../examples/.rein/support-ticket")
         .canonicalize()
         .unwrap()
 }

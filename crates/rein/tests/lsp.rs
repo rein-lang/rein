@@ -142,7 +142,6 @@ fn temp_project(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("rein.toml"), "").unwrap();
     fs::write(
         root.join("target.rein"),
         "/** Target function does X. */\nexport default function target() {\n  return \"done\";\n}\n",
@@ -322,7 +321,7 @@ fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
     let root = temp_project("marker");
     let sub = root.join("sub");
     fs::create_dir_all(&sub).unwrap();
-    fs::write(sub.join("rein.toml"), "").unwrap();
+    fs::write(sub.join("main.rein"), "/** Sub. */\nexport default function sub() {\n  return @./x;\n}\n").unwrap();
     fs::write(root.join("outside.rein"), "/** Outside. */\nexport default function outside() {\n  return \"o\";\n}\n").unwrap();
     let x_text = "/** X. */\nexport default function x() {\n  return @../outside;\n}\n";
     fs::write(sub.join("x.rein"), x_text).unwrap();
@@ -335,10 +334,10 @@ fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
     server.wait_diagnostics(&x, |d| has_message(d, "leaves the project root"));
 
     // Without the marker, sub belongs to the project of the root, and the import resolves.
-    fs::remove_file(sub.join("rein.toml")).unwrap();
+    fs::remove_file(sub.join("main.rein")).unwrap();
     server.notify(
         "workspace/didChangeWatchedFiles",
-        json!({"changes": [{"uri": uri_of(&root, "sub/rein.toml"), "type": 3}]}),
+        json!({"changes": [{"uri": uri_of(&root, "sub/main.rein"), "type": 3}]}),
     );
     let rechecked = server.wait_diagnostics(&x, |d| !has_message(d, "leaves the project root"));
     assert!(!has_message(&rechecked, "leaves the project root"));
@@ -352,7 +351,7 @@ fn a_nested_project_is_not_checked_as_part_of_the_outer_one() {
     let root = temp_project("nested");
     let sub = root.join("sub");
     fs::create_dir_all(&sub).unwrap();
-    fs::write(sub.join("rein.toml"), "").unwrap();
+    fs::write(sub.join("main.rein"), "/** Sub. */\nexport default function sub() {\n  return @./x;\n}\n").unwrap();
     let x_text = "/** X. */\nexport default function x() {\n  return @./nope;\n}\n";
     fs::write(sub.join("x.rein"), x_text).unwrap();
     let mut server = Server::start();
