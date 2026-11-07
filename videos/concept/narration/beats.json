@@ -1,0 +1,56 @@
+[
+  {
+    "id": 1,
+    "name": "hook",
+    "speech": "Agent frameworks make you build the machine: graphs, nodes, edges, state, retries.",
+    "caption": "Frameworks make you build the machine"
+  },
+  {
+    "id": 2,
+    "name": "turn",
+    "speech": "Rein flips it. You don't wire the agent. You tell it what to do.",
+    "caption": "Rein flips it. You say what to do."
+  },
+  {
+    "id": 3,
+    "name": "function-is-file",
+    "speech": "Every decision is a small function, and every function is its own file. Each one starts with a description of what it decides.",
+    "caption": "One decision, one function, one file"
+  },
+  {
+    "id": 4,
+    "name": "inputs-are-questions",
+    "speech": "A function's inputs are questions. The agent answers them from what it sees: yes or no, or one of a few options.",
+    "caption": "Inputs are questions the agent answers"
+  },
+  {
+    "id": 5,
+    "name": "two-moves",
+    "speech": "Inside, there are only two moves: if, and switch. No loops, by design, for now.",
+    "caption": "Only two moves: if, and switch"
+  },
+  {
+    "id": 6,
+    "name": "every-path-ends",
+    "speech": "Every path ends in one of two things: a plain instruction for the agent, or a pointer to the next function.",
+    "caption": "Every path ends in one of two things"
+  },
+  {
+    "id": 7,
+    "name": "flow",
+    "speech": "The agent starts at the project's main function. It answers only the questions on its path, and follows pointers until it gets its instruction.",
+    "caption": "Start at main. Answer. Follow the pointers."
+  },
+  {
+    "id": 8,
+    "name": "safety",
+    "speech": "A checker makes sure every path returns, and every pointer is real. The editor shows it as you type.",
+    "caption": "Checked as you type"
+  },
+  {
+    "id": 9,
+    "name": "close",
+    "speech": "Rein. Instructions, not infrastructure. Alpha, coming soon.",
+    "caption": "Instructions, not infrastructure."
+  }
+]
