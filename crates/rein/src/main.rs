@@ -55,6 +55,9 @@ enum Command {
     },
     /// Run the language server on stdio.
     Lsp,
+    /// Print the command reference as Markdown.
+    #[command(hide = true)]
+    DocsCli,
 }
 
 fn main() -> ExitCode {
@@ -64,6 +67,11 @@ fn main() -> ExitCode {
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { root } => cli::graph(root),
         Command::Lsp => lsp::serve(),
+        Command::DocsCli => {
+            let options = clap_markdown::MarkdownOptions::new().show_footer(false);
+            print!("{}", clap_markdown::help_markdown_custom::<Cli>(&options));
+            0
+        }
     };
     ExitCode::from(code)
 }

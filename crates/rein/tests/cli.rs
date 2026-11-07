@@ -378,3 +378,24 @@ fn faq_asks_the_agent_for_the_answer_then_continues() {
     assert_eq!(code(&out), 0);
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("next: escalate"));
 }
+
+#[test]
+fn docs_cli_names_every_subcommand_and_stays_hidden() {
+    let help = String::from_utf8_lossy(&rein(&["--help"]).stdout).into_owned();
+    assert!(!help.contains("docs-cli"), "docs-cli must stay out of --help");
+    let names: Vec<&str> = help
+        .lines()
+        .skip_while(|l| *l != "Commands:")
+        .skip(1)
+        .take_while(|l| l.starts_with("  "))
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|n| *n != "help")
+        .collect();
+    assert!(!names.is_empty(), "no subcommands found in --help");
+    let docs = rein(&["docs-cli"]);
+    assert_eq!(code(&docs), 0);
+    let md = String::from_utf8_lossy(&docs.stdout);
+    for name in names {
+        assert!(md.contains(&format!("rein {name}")), "docs-cli misses `{name}`");
+    }
+}
