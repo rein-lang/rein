@@ -1,10 +1,10 @@
-//! The doc block: the TSDoc-style `/** */` comment at the top of a function file.
+//! The doc block: the `/** */` comment before `export default function`, and the one before each parameter.
 //!
 //! Each line loses its leading whitespace and one `*`, then one space. The text before the
-//! first `@` line is the description. `@param <name> [-] <text>` gives an input its question,
-//! and the text runs on through the lines after it, up to the next `@` line.
+//! first `@` line is the description. Tags are recorded by name only; the checker decides
+//! what each tag means.
 
-use crate::ast::{DocBlock, ParamTag, Spanned};
+use crate::ast::{DocBlock, Spanned};
 use crate::diagnostic::Span;
 
 /// One line of the block. `text` is what is left after the decoration. `start` is its offset in the file.
@@ -13,81 +13,29 @@ struct Line<'a> {
     start: usize,
 }
 
-/// A `@param` tag whose text may still continue on later lines.
-struct Pending {
-    name: Spanned<String>,
-    pieces: Vec<Spanned<String>>,
-}
-
-impl Pending {
-    fn finish(self) -> ParamTag {
-        let value = self.pieces.iter().map(|p| p.value.as_str()).collect::<Vec<_>>().join(" ");
-        let span = match (self.pieces.first(), self.pieces.last()) {
-            (Some(first), Some(last)) => first.span.to(last.span),
-            _ => Span::new(self.name.span.end, self.name.span.end),
-        };
-        ParamTag { name: self.name, text: Spanned { value, span } }
-    }
-}
-
 /// Parses the text between `/**` and `*/`. `base` is the file offset of `inner`'s first byte.
 pub fn parse_doc(inner: &str, base: usize) -> DocBlock {
     let mut doc = DocBlock::default();
     let mut desc_lines = Vec::new();
-    let mut pending: Option<Pending> = None;
     let mut in_tags = false;
     for line in lines(inner, base) {
         let t = line.text.trim_start();
         let Some(tag) = t.strip_prefix('@') else {
             if !in_tags {
                 desc_lines.push(line);
-            } else if let (Some(p), Some(piece)) = (pending.as_mut(), spanned(line.text, line.start)) {
-                p.pieces.push(piece);
             }
             continue;
         };
         in_tags = true;
-        if let Some(p) = pending.take() {
-            doc.params.push(p.finish());
-        }
         let at = offset(&line, t);
         let name_len = tag.find(char::is_whitespace).unwrap_or(tag.len());
-        let (tag_name, after_tag) = tag.split_at(name_len);
-        if tag_name != "param" {
-            doc.unknown_tags.push(Spanned {
-                value: tag_name.to_string(),
-                span: Span::new(at, at + 1 + name_len),
-            });
-            continue;
-        }
-        pending = Some(param_tag(&line, after_tag));
-    }
-    if let Some(p) = pending {
-        doc.params.push(p.finish());
+        doc.tags.push(Spanned {
+            value: tag[..name_len].to_string(),
+            span: Span::new(at, at + 1 + name_len),
+        });
     }
     doc.description = description(&desc_lines, base);
     doc
-}
-
-/// Reads the name and the first piece of text after `@param`. `after_tag` is a suffix of the line.
-fn param_tag(line: &Line, after_tag: &str) -> Pending {
-    let rest = after_tag.trim_start();
-    let name_len = rest.find(char::is_whitespace).unwrap_or(rest.len());
-    let (name, after_name) = rest.split_at(name_len);
-    let name_start = offset(line, rest);
-    let after_name = after_name.trim_start();
-    // The `-` before the text is optional. It counts only as a separate word.
-    let text = match after_name.strip_prefix('-') {
-        Some(r) if r.is_empty() || r.starts_with(char::is_whitespace) => r.trim_start(),
-        _ => after_name,
-    };
-    Pending {
-        name: Spanned {
-            value: name.to_string(),
-            span: Span::new(name_start, name_start + name_len),
-        },
-        pieces: spanned(text, offset(line, text)).into_iter().collect(),
-    }
 }
 
 /// The description: lines joined with `\n`, trimmed, with runs of blank lines cut to one.
@@ -152,7 +100,7 @@ mod tests {
     fn description_keeps_line_breaks_and_collapses_blank_runs() {
         let d = doc("\n * First line.\n * Second line.\n *\n *\n *\n * New paragraph.\n ");
         assert_eq!(d.description.value, "First line.\nSecond line.\n\nNew paragraph.");
-        assert!(d.params.is_empty());
+        assert!(d.tags.is_empty());
     }
 
     #[test]
@@ -162,46 +110,40 @@ mod tests {
     }
 
     #[test]
-    fn param_with_and_without_dash() {
-        let d = doc("\n * Desc.\n *\n * @param docs_only Does the PR change docs?\n * @param ci - What is CI?\n ");
-        assert_eq!(d.params.len(), 2);
-        assert_eq!(d.params[0].name.value, "docs_only");
-        assert_eq!(d.params[0].text.value, "Does the PR change docs?");
-        assert_eq!(d.params[1].name.value, "ci");
-        assert_eq!(d.params[1].text.value, "What is CI?");
+    fn multi_line_parameter_doc_is_one_description() {
+        let d = doc("\n * Is the customer a VIP?\n * Check the account tier in the CRM.\n ");
+        assert_eq!(d.description.value, "Is the customer a VIP?\nCheck the account tier in the CRM.");
     }
 
     #[test]
-    fn continuation_lines_join_the_previous_tag() {
-        let d = doc("\n * @param ci - What is CI?\n *   Continuation here.\n *\n *   And more.\n * @param other Next.\n ");
-        assert_eq!(d.params[0].text.value, "What is CI? Continuation here. And more.");
-        assert_eq!(d.params[1].text.value, "Next.");
-    }
-
-    #[test]
-    fn unknown_tags_stay_out_of_the_description() {
+    fn tags_are_recorded_by_name_and_stay_out_of_the_description() {
         let d = doc("\n * Desc.\n * @returns Something.\n *   more of returns.\n * @example foo\n ");
         assert_eq!(d.description.value, "Desc.");
-        let names: Vec<&str> = d.unknown_tags.iter().map(|t| t.value.as_str()).collect();
+        let names: Vec<&str> = d.tags.iter().map(|t| t.value.as_str()).collect();
         assert_eq!(names, ["returns", "example"]);
     }
 
     #[test]
-    fn param_without_name_or_text_is_kept_empty() {
-        let d = doc("\n * @param\n * @param x\n ");
-        assert_eq!(d.params[0].name.value, "");
-        assert_eq!(d.params[1].name.value, "x");
-        assert_eq!(d.params[1].text.value, "");
+    fn param_tag_is_recorded_so_the_checker_can_reject_it() {
+        let d = doc("\n * Desc.\n * @param ci What is CI?\n ");
+        assert_eq!(d.tags[0].value, "param");
+        assert_eq!(d.description.value, "Desc.");
+    }
+
+    #[test]
+    fn tag_span_covers_the_at_sign_and_name() {
+        let inner = "\n * @param ci Question?\n ";
+        let d = parse_doc(inner, 10);
+        let tag = &d.tags[0];
+        assert_eq!(&inner[tag.span.start - 10..tag.span.end - 10], "@param");
     }
 
     #[test]
     fn spans_point_into_the_block() {
-        // Block text starts at offset 10. Line 1 is " * @param ci Question?".
-        let inner = "\n * @param ci Question?\n ";
+        // Block text starts at offset 10. The description line is " * Question?".
+        let inner = "\n * Question?\n ";
         let d = parse_doc(inner, 10);
-        let name = &d.params[0].name;
-        assert_eq!(&inner[name.span.start - 10..name.span.end - 10], "ci");
-        let text = &d.params[0].text;
-        assert_eq!(&inner[text.span.start - 10..text.span.end - 10], "Question?");
+        let text = &d.description.span;
+        assert_eq!(&inner[text.start - 10..text.end - 10], "Question?");
     }
 }

@@ -1,19 +1,26 @@
 // merge_pr.rein
+import reviewCode from "./review_code";
+import fixCi from "./ci/fix";
+
 /**
  * Decide whether a pull request can be merged.
- *
- * @param docs_only Does the PR change only documentation files?
- * @param ci What is the CI status of the PR?
  */
-input docs_only: bool
-input ci: choice("green", "red", "pending")
+export default function mergePr(
+  /** Does the PR change only documentation files? */
+  docsOnly: boolean,
+  /** What is the CI status of the PR? */
+  ci: "green" | "red" | "pending",
+) {
+  if (docsOnly) {
+    return "approved";
+  }
 
-if docs_only {
-    return "approved"
-}
-
-switch ci {
-    case "green" { return @review_code }
-    case "red" { return @ci/fix }
-    default { return "wait for CI, then run merge_pr again" }
+  switch (ci) {
+    case "green":
+      return reviewCode;
+    case "red":
+      return fixCi;
+    default:
+      return "wait for CI, then run merge_pr again";
+  }
 }

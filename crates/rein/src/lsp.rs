@@ -17,7 +17,7 @@ use lsp_types::{
     MarkupKind, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
-use rein_core::ast::{Function, Input};
+use rein_core::ast::{Function, Import, Input};
 use rein_core::diagnostic::{Diagnostic as ReinDiagnostic, Severity, Span};
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
@@ -55,7 +55,7 @@ fn capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec!["@".to_string()]),
+            trigger_characters: Some(vec![" ".into(), "\"".into(), "'".into(), "/".into(), ".".into()]),
             ..Default::default()
         }),
         ..Default::default()
@@ -282,10 +282,10 @@ fn offset(text: &str, pos: Position) -> usize {
 }
 
 fn is_token_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '/' | '@')
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
-/// Start of the token run that ends at or covers `offset`.
+/// Start of the name that ends at or covers `offset`.
 fn word_start(text: &str, offset: usize) -> usize {
     text[..offset]
         .char_indices()
@@ -294,7 +294,7 @@ fn word_start(text: &str, offset: usize) -> usize {
         .map_or(0, |(i, c)| i + c.len_utf8())
 }
 
-/// End of the token run that starts at or covers `offset`.
+/// End of the name that starts at or covers `offset`.
 fn word_end(text: &str, offset: usize) -> usize {
     text[offset..]
         .char_indices()
@@ -302,29 +302,53 @@ fn word_end(text: &str, offset: usize) -> usize {
         .map_or(text.len(), |(i, _)| offset + i)
 }
 
-/// A token under the cursor: `@ref`, or a plain name such as an input.
+/// A name under the cursor.
 struct Token<'a> {
     text: &'a str,
 }
 
-/// The token at `offset`. Returns None inside a string literal.
+/// The name at `offset`. Returns None inside a string literal.
 fn token_at(text: &str, offset: usize) -> Option<Token<'_>> {
     let start = word_start(text, offset);
     let end = word_end(text, offset);
     let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
-    let inside_string = text[line_start..start].matches('"').count() % 2 == 1;
-    (start < end && !inside_string).then(|| Token { text: &text[start..end] })
+    let quotes = text[line_start..start].chars().filter(|&c| c == '"' || c == '\'').count();
+    (start < end && quotes % 2 == 0).then(|| Token { text: &text[start..end] })
+}
+
+/// The text of the current line before `offset`.
+fn line_before(text: &str, offset: usize) -> &str {
+    let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+    &text[line_start..offset]
+}
+
+/// True when the cursor is inside the quotes of an import path, as in `from "./|`.
+fn in_import_path(before: &str) -> bool {
+    let Some(q) = before.rfind(['"', '\'']) else { return false };
+    before[..q].trim_end().ends_with("from")
+}
+
+/// True when the cursor is after `return` and a space, where an imported name goes.
+fn after_return(before: &str) -> bool {
+    let without_word = before.trim_end_matches(is_token_char);
+    let trimmed = without_word.trim_end();
+    match trimmed.strip_suffix("return") {
+        Some(head) => trimmed.len() < without_word.len() && !head.ends_with(is_token_char),
+        None => false,
+    }
+}
+
+/// The import whose quoted path holds `off`.
+fn import_at(f: &Function, off: usize) -> Option<&Import> {
+    f.imports.iter().find(|i| i.source.span.contains(off))
 }
 
 fn hover(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
     let (project, name) = locate(docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
     let token = token_at(&sf.text, offset(&sf.text, p.position))?;
-    let value = match token.text.strip_prefix('@') {
-        Some(target) => match project.get(target) {
-            Some(t) => ref_markdown(target, &t.function),
-            None => format!("**{target}**\n\nunknown function"),
-        },
+    let value = match project.import_targets(&name).get(token.text) {
+        Some(target) => ref_markdown(target, &project.get(target)?.function),
         None => {
             let input = sf.function.input(token.text)?;
             format!("`{}`\n\n{}", input_sig(input), input.description.value)
@@ -336,35 +360,37 @@ fn hover(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
 fn definition(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
     let (project, name) = locate(docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
-    let token = token_at(&sf.text, offset(&sf.text, p.position))?;
-    let location = match token.text.strip_prefix('@') {
-        Some(target) => {
-            let t = project.get(target)?;
-            Location::new(uri_for(docs, &t.path)?, Range::default())
-        }
-        None => {
-            let input = sf.function.input(token.text)?;
-            Location::new(p.text_document.uri.clone(), range(&sf.text, input.name.span))
+    let off = offset(&sf.text, p.position);
+    let location = if let Some(imp) = import_at(&sf.function, off) {
+        let target = project.resolve(&name, &imp.source.value).ok()?;
+        target_location(docs, &project, &target)?
+    } else {
+        let token = token_at(&sf.text, off)?;
+        match project.import_targets(&name).get(token.text) {
+            Some(target) => target_location(docs, &project, target)?,
+            None => {
+                let input = sf.function.input(token.text)?;
+                Location::new(p.text_document.uri.clone(), range(&sf.text, input.name.span))
+            }
         }
     };
     serde_json::to_value(location).ok()
 }
 
+/// The start of the file of function `target`.
+fn target_location(docs: &Docs, project: &Project, target: &str) -> Option<Location> {
+    let t = project.get(target)?;
+    Some(Location::new(uri_for(docs, &t.path)?, Range::default()))
+}
+
 fn completion(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
     let (project, name) = locate(docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
-    let off = offset(&sf.text, p.position);
-    let items: Vec<CompletionItem> = if sf.text[word_start(&sf.text, off)..off].starts_with('@') {
-        project
-            .files
-            .iter()
-            .map(|(n, f)| CompletionItem {
-                label: n.clone(),
-                kind: Some(CompletionItemKind::FUNCTION),
-                detail: Some(description(&f.function)),
-                ..Default::default()
-            })
-            .collect()
+    let before = line_before(&sf.text, offset(&sf.text, p.position));
+    let items: Vec<CompletionItem> = if in_import_path(before) {
+        import_path_items(&project, &name)
+    } else if after_return(before) {
+        return_items(&project, &name)
     } else {
         let inputs = sf.function.inputs.iter().map(|i| CompletionItem {
             label: i.name.value.clone(),
@@ -380,6 +406,46 @@ fn completion(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
         inputs.chain(keywords).collect()
     };
     serde_json::to_value(CompletionResponse::Array(items)).ok()
+}
+
+/// Every other file of the project, as an import path from `from`.
+fn import_path_items(project: &Project, from: &str) -> Vec<CompletionItem> {
+    project
+        .files
+        .keys()
+        .filter(|n| n.as_str() != from)
+        .map(|n| CompletionItem {
+            label: relative_import(from, n),
+            kind: Some(CompletionItemKind::FILE),
+            detail: project.get(n).map(|sf| description(&sf.function)),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// The imported names of `name`.
+fn return_items(project: &Project, name: &str) -> Vec<CompletionItem> {
+    project
+        .import_targets(name)
+        .iter()
+        .map(|(binding, target)| CompletionItem {
+            label: binding.clone(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: project.get(target).map(|sf| description(&sf.function)),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// The import path from function `from` to function `to`, without `.rein`. Such as `./x` or `../x`.
+fn relative_import(from: &str, to: &str) -> String {
+    let from_dir: Vec<&str> = from.split('/').collect();
+    let from_dir = &from_dir[..from_dir.len() - 1];
+    let to_parts: Vec<&str> = to.split('/').collect();
+    let common = from_dir.iter().zip(&to_parts[..to_parts.len() - 1]).take_while(|(a, b)| a == b).count();
+    let ups = from_dir.len() - common;
+    let prefix = if ups == 0 { "./".to_string() } else { "../".repeat(ups) };
+    format!("{prefix}{}", to_parts[common..].join("/"))
 }
 
 fn markdown_hover(value: String) -> Option<Value> {
@@ -398,14 +464,11 @@ fn ref_markdown(name: &str, f: &Function) -> String {
     out
 }
 
-/// `name: bool` or `name: choice("a", "b")`.
+/// `name: boolean` or `name: "a" | "b"`, as TypeScript writes it.
 fn input_sig(input: &Input) -> String {
     let ty = match input.ty.options() {
-        None => "bool".to_string(),
-        Some(options) => {
-            let quoted: Vec<String> = options.iter().map(|o| format!("\"{o}\"")).collect();
-            format!("choice({})", quoted.join(", "))
-        }
+        None => "boolean".to_string(),
+        Some(options) => options.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(" | "),
     };
     format!("{}: {ty}", input.name.value)
 }
@@ -432,18 +495,40 @@ mod tests {
     }
 
     #[test]
-    fn token_at_finds_ref_and_input_names() {
-        let text = "input docs_only: bool \"q\"\nreturn @ci/fix\n";
-        let at_ci = text.find("ci").unwrap() + 1;
-        assert_eq!(token_at(text, at_ci).unwrap().text, "@ci/fix");
-        let at_input = text.find("docs_only").unwrap() + 2;
-        assert_eq!(token_at(text, at_input).unwrap().text, "docs_only");
+    fn token_at_finds_import_and_parameter_names() {
+        let text = "return mergePr;\n  if (docsOnly) {\n";
+        let at_import = text.find("Pr").unwrap() + 1;
+        assert_eq!(token_at(text, at_import).unwrap().text, "mergePr");
+        let at_param = text.find("docsOnly").unwrap() + 2;
+        assert_eq!(token_at(text, at_param).unwrap().text, "docsOnly");
     }
 
     #[test]
     fn token_inside_string_is_none() {
-        let text = "return \"see @ci/fix\"\n";
-        let at_ci = text.find("ci").unwrap() + 1;
-        assert!(token_at(text, at_ci).is_none());
+        let text = "import a from \"./ci/fix\";\n";
+        let at = text.find("ci").unwrap() + 1;
+        assert!(token_at(text, at).is_none());
+        let text = "import a from './ci/fix';\n";
+        let at = text.find("ci").unwrap() + 1;
+        assert!(token_at(text, at).is_none());
+    }
+
+    #[test]
+    fn import_path_and_return_contexts() {
+        assert!(in_import_path("import a from \"./"));
+        assert!(in_import_path("import a from '../"));
+        assert!(!in_import_path("import a from \"./x\";"));
+        assert!(after_return("  return "));
+        assert!(after_return("return mer"));
+        assert!(!after_return("return"));
+        assert!(!after_return("myreturn "));
+    }
+
+    #[test]
+    fn relative_import_paths() {
+        assert_eq!(relative_import("ci/fix", "merge_pr"), "../merge_pr");
+        assert_eq!(relative_import("ci/fix", "ci/deeper"), "./deeper");
+        assert_eq!(relative_import("ci/sub/leaf", "top"), "../../top");
+        assert_eq!(relative_import("main", "ci/fix"), "./ci/fix");
     }
 }

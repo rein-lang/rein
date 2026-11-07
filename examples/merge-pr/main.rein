@@ -1,11 +1,17 @@
+import mergePr from "./merge_pr";
+import securityReview from "./security/review";
+
 /**
  * Decide the next step for a pull request task.
- *
- * @param task Which task does the agent do?
  */
-input task: choice("merge", "security review")
-
-switch task {
-    case "merge" { return @merge_pr }
-    default { return @security/review }
+export default function main(
+  /** Which task does the agent do? */
+  task: "merge" | "security review",
+) {
+  switch (task) {
+    case "merge":
+      return mergePr;
+    default:
+      return securityReview;
+  }
 }

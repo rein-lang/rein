@@ -1,12 +1,15 @@
+import pageHuman from "../page_human";
+
 /**
  * Follow the runbook for an alert that has one.
- *
- * @param fixed Did the runbook steps clear the alert?
  */
-input fixed: bool
+export default function followRunbook(
+  /** Did the runbook steps clear the alert? */
+  fixed: boolean,
+) {
+  if (fixed) {
+    return "Close the alert. Write a one-line note with the steps you ran.";
+  }
 
-if fixed {
-    return "Close the alert. Write a one-line note with the steps you ran."
+  return pageHuman;
 }
-
-return @page_human

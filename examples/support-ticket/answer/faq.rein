@@ -1,12 +1,15 @@
+import escalate from "../escalate";
+
 /**
  * Answer a how-to question from the help center.
- *
- * @param article_found Did you find a help article that answers the question?
  */
-input article_found: bool
+export default function answerFaq(
+  /** Did you find a help article that answers the question? */
+  articleFound: boolean,
+) {
+  if (articleFound) {
+    return "Reply with the help article link. Ask the customer if it solved the problem.";
+  }
 
-if article_found {
-    return "Reply with the help article link. Ask the customer if it solved the problem."
+  return escalate;
 }
-
-return @escalate

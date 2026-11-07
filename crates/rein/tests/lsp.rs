@@ -143,8 +143,16 @@ fn temp_project(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("rein.toml"), "").unwrap();
-    fs::write(root.join("target.rein"), "/** Target function does X. */\nreturn \"done\"\n").unwrap();
-    fs::write(root.join("main.rein"), "/** Entry. */\nreturn @target\n").unwrap();
+    fs::write(
+        root.join("target.rein"),
+        "/** Target function does X. */\nexport default function target() {\n  return \"done\";\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("main.rein"),
+        "import target from \"./target\";\n/** Entry. */\nexport default function main() {\n  return target;\n}\n",
+    )
+    .unwrap();
     root
 }
 
@@ -162,27 +170,30 @@ fn has_message(diags: &[Value], part: &str) -> bool {
     diags.iter().any(|d| d["message"].as_str().is_some_and(|m| m.contains(part)))
 }
 
+/// Text of the file that `start` imports `target` into. Line 4 returns the import.
+const START: &str = "import target from \"./target\";\n\n/** Start. */\nexport default function start() {\n  return target;\n}\n";
+
 #[test]
 fn diagnostics_hover_and_shutdown() {
     let root = temp_project("smoke");
     let mut server = Server::start();
     initialize(&mut server);
 
-    // Unknown @ref: the error arrives as a diagnostic.
+    // An import that does not resolve: the error arrives as a diagnostic.
     let caller = uri_of(&root, "caller.rein");
-    server.open(&caller, "/** Caller. */\nreturn @nope\n");
-    let diags = server.wait_diagnostics(&caller, |d| has_message(d, "`@nope`"));
+    server.open(&caller, "import nope from \"./nope\";\n/** Caller. */\nexport default function caller() {\n  return nope;\n}\n");
+    let diags = server.wait_diagnostics(&caller, |d| has_message(d, "cannot find module './nope'"));
     let error = diags.iter().find(|d| d["severity"] == 1).expect("error diagnostic");
-    assert!(error["message"].as_str().unwrap().contains("`@nope`"));
+    assert!(error["message"].as_str().unwrap().contains("cannot find module"));
     assert_eq!(error["source"], "rein");
 
-    // Hover on a valid @ref shows the target's description.
+    // Hover on a returned import shows the target's description.
     let start = uri_of(&root, "start.rein");
-    server.open(&start, "/** Start. */\nreturn @target\n");
+    server.open(&start, START);
     let hover = server.request(
         2,
         "textDocument/hover",
-        json!({"textDocument": {"uri": start}, "position": {"line": 1, "character": 9}}),
+        json!({"textDocument": {"uri": start}, "position": {"line": 4, "character": 10}}),
     );
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
     assert!(text.contains("Target function does X."), "{text}");
@@ -202,34 +213,85 @@ fn fixing_one_file_clears_errors_in_another() {
     initialize(&mut server);
 
     let start = uri_of(&root, "start.rein");
-    server.open(&start, "/** Start. */\nreturn @fresh\n");
-    server.wait_diagnostics(&start, |d| has_message(d, "`@fresh`"));
+    server.open(&start, &START.replace("./target", "./fresh").replace("target", "fresh"));
+    server.wait_diagnostics(&start, |d| has_message(d, "cannot find module './fresh'"));
 
     // Creating `fresh` in an open buffer must clear the error in `start`.
-    server.open(&uri_of(&root, "fresh.rein"), "/** Fresh. */\nreturn \"ok\"\n");
-    let cleared = server.wait_diagnostics(&start, |d| !has_message(d, "`@fresh`"));
-    assert!(!has_message(&cleared, "`@fresh`"));
+    server.open(&uri_of(&root, "fresh.rein"), "/** Fresh. */\nexport default function fresh() {\n  return \"ok\";\n}\n");
+    let cleared = server.wait_diagnostics(&start, |d| !has_message(d, "cannot find module"));
+    assert!(!has_message(&cleared, "cannot find module"));
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
-
 }
+
 #[test]
-fn hover_on_param_name_shows_the_input_type() {
+fn hover_on_parameter_shows_its_type_and_doc() {
     let root = temp_project("param");
     let mut server = Server::start();
     initialize(&mut server);
 
     let start = uri_of(&root, "start.rein");
-    server.open(&start, "/** Start.\n * @param docs_only Does it change docs?\n */\ninput docs_only: bool\nif docs_only { return \"x\" }\nreturn \"y\"\n");
+    server.open(
+        &start,
+        "/** Start. */\nexport default function start(\n  /** Does it change docs? */\n  docsOnly: boolean,\n  /** Which CI status? */\n  ci: \"green\" | \"red\",\n) {\n  if (docsOnly) {\n    return \"x\";\n  }\n  return \"y\";\n}\n",
+    );
     let hover = server.request(
         2,
         "textDocument/hover",
-        json!({"textDocument": {"uri": start}, "position": {"line": 1, "character": 12}}),
+        json!({"textDocument": {"uri": start}, "position": {"line": 3, "character": 4}}),
     );
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
-    assert!(text.contains("docs_only: bool"), "{text}");
+    assert!(text.contains("docsOnly: boolean"), "{text}");
     assert!(text.contains("Does it change docs?"), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn definition_and_completion_follow_imports() {
+    let root = temp_project("nav");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, START);
+
+    // Definition on the returned name goes to the target file.
+    let def = server.request(
+        2,
+        "textDocument/definition",
+        json!({"textDocument": {"uri": start}, "position": {"line": 4, "character": 10}}),
+    );
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/target.rein"), "{def}");
+
+    // Definition on the import path goes to the same file.
+    let def = server.request(
+        3,
+        "textDocument/definition",
+        json!({"textDocument": {"uri": start}, "position": {"line": 0, "character": 22}}),
+    );
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/target.rein"), "{def}");
+
+    // After `return ` the completion offers the imported names.
+    let items = server.request(
+        4,
+        "textDocument/completion",
+        json!({"textDocument": {"uri": start}, "position": {"line": 4, "character": 9}}),
+    );
+    let labels: Vec<&str> = items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, ["target"]);
+
+    // Inside an import path the completion offers the project files, relative to this file.
+    let items = server.request(
+        5,
+        "textDocument/completion",
+        json!({"textDocument": {"uri": start}, "position": {"line": 0, "character": 21}}),
+    );
+    let labels: Vec<&str> = items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"./target"), "{labels:?}");
+    assert!(labels.contains(&"./main"), "{labels:?}");
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
@@ -243,7 +305,7 @@ fn missing_main_is_reported_on_an_open_file() {
     initialize(&mut server);
 
     let target = uri_of(&root, "target.rein");
-    server.open(&target, "/** Target function does X. */\nreturn \"done\"\n");
+    server.open(&target, "/** Target function does X. */\nexport default function target() {\n  return \"done\";\n}\n");
     let diags = server.wait_diagnostics(&target, |d| has_message(d, "project has no main.rein"));
     assert!(has_message(&diags, "project has no main.rein"));
 

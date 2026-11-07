@@ -97,12 +97,52 @@ impl Project {
         self.root.join("rein.toml")
     }
 
+    /// Resolves an import path written in function `from` to the project path of a function.
+    /// The path starts with `./` or `../`, has no extension, and is relative to the importing file's directory.
+    pub fn resolve(&self, from: &str, source: &str) -> Result<String, String> {
+        if !(source.starts_with("./") || source.starts_with("../")) {
+            return Err("import path must start with `./` or `../`".into());
+        }
+        if source.rsplit('/').next().is_some_and(|last| last.contains('.') && last != "..") {
+            return Err("import path must have no extension".into());
+        }
+        // The importing file's directory, as name segments. `ci/fix` starts in `ci`.
+        let mut parts: Vec<&str> = from.split('/').collect();
+        parts.pop();
+        for seg in source.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    if parts.pop().is_none() {
+                        return Err(format!("import '{source}' leaves the project root"));
+                    }
+                }
+                s => parts.push(s),
+            }
+        }
+        let name = parts.join("/");
+        if self.files.contains_key(&name) {
+            Ok(name)
+        } else {
+            Err(format!("cannot find module '{source}'"))
+        }
+    }
+
+    /// Binding name to project path, for every import of `name` that resolves.
+    pub fn import_targets(&self, name: &str) -> BTreeMap<String, String> {
+        let Some(sf) = self.files.get(name) else { return BTreeMap::new() };
+        sf.function
+            .imports
+            .iter()
+            .filter_map(|imp| Some((imp.binding.value.clone(), self.resolve(name, &imp.source.value).ok()?)))
+            .collect()
+    }
+
     /// Diagnostics per function, sorted by span: parse, single-file checks, cycles, and reachability.
     /// A file with a syntax error reports only that error. Its tree is partial.
     pub fn check(&self) -> BTreeMap<String, Vec<Diagnostic>> {
         let adj = self.adjacency();
         let reachable = self.reachable_from_entry(&adj);
-        let known = |n: &str| self.files.contains_key(n);
         self.files
             .iter()
             .map(|(name, sf)| {
@@ -110,8 +150,10 @@ impl Project {
                     return (name.clone(), sf.parse_diagnostics.clone());
                 }
                 let mut diags = Vec::new();
-                diags.extend(check_function(&sf.function, name, &known));
-                diags.extend(self.cycle_warnings(name, &sf.function, &adj));
+                let resolve = |src: &str| self.resolve(name, src);
+                diags.extend(check_function(&sf.function, name, &resolve));
+                let targets = self.import_targets(name);
+                diags.extend(self.cycle_warnings(name, &sf.function, &targets, &adj));
                 if reachable.as_ref().is_some_and(|r| !r.contains(name)) {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
                     diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from main")));
@@ -122,12 +164,13 @@ impl Project {
             .collect()
     }
 
-    /// Distinct `(from, to)` pairs for every `@ref` return. Includes unknown targets.
+    /// Distinct `(from, to)` pairs for every return of an imported function that resolves.
     pub fn references(&self) -> Vec<(String, String)> {
         self.files
             .iter()
             .flat_map(|(name, sf)| {
-                ref_sites(&sf.function).into_iter().map(move |(to, _)| (name.clone(), to))
+                let targets = self.import_targets(name);
+                ref_sites(&sf.function, &targets).into_iter().map(move |(to, _)| (name.clone(), to))
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -150,31 +193,28 @@ impl Project {
         Some(seen)
     }
 
-    /// Edges between known functions only.
+    /// Edges between functions: each resolved import that is returned.
     fn adjacency(&self) -> BTreeMap<String, BTreeSet<String>> {
         self.files
             .iter()
             .map(|(name, sf)| {
-                let targets: BTreeSet<String> = ref_sites(&sf.function)
-                    .into_iter()
-                    .map(|(t, _)| t)
-                    .filter(|t| self.files.contains_key(t))
-                    .collect();
-                (name.clone(), targets)
+                let targets = self.import_targets(name);
+                let edges = ref_sites(&sf.function, &targets).into_iter().map(|(t, _)| t).collect();
+                (name.clone(), edges)
             })
             .collect()
     }
 
-    /// One warning per `@ref` in `f` whose target can reach back to `name`.
+    /// One warning per return in `f` whose target can reach back to `name`.
     fn cycle_warnings(
         &self,
         name: &str,
         f: &Function,
+        targets: &BTreeMap<String, String>,
         adj: &BTreeMap<String, BTreeSet<String>>,
     ) -> Vec<Diagnostic> {
-        ref_sites(f)
+        ref_sites(f, targets)
             .into_iter()
-            .filter(|(t, _)| self.files.contains_key(t))
             .filter_map(|(t, span)| {
                 let back = path_between(adj, &t, name)?;
                 let chain: Vec<&str> =
@@ -231,13 +271,15 @@ fn name_under(root: &Path, path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// `@ref` returns in a function, as (target, span of the return).
-fn ref_sites(f: &Function) -> Vec<(String, Span)> {
+/// Returns of imported functions in `f`, as (target project path, span of the return).
+fn ref_sites(f: &Function, targets: &BTreeMap<String, String>) -> Vec<(String, Span)> {
     let mut out = Vec::new();
     walk_stmts(&f.body, &mut |s| {
         if let Stmt::Return(r) = s {
-            if let ReturnValue::Ref(target) = &r.value {
-                out.push((target.clone(), s.span()));
+            if let ReturnValue::Ref(binding) = &r.value {
+                if let Some(target) = targets.get(binding) {
+                    out.push((target.clone(), s.span()));
+                }
             }
         }
     });
@@ -290,20 +332,26 @@ mod tests {
             fs::write(p, text).unwrap();
         };
         write("rein.toml", "");
-        write("main.rein", "/** Entry. */\nreturn @merge_pr\n");
+        write(
+            "main.rein",
+            "import mergePr from \"./merge_pr\";\n/** Entry. */\nexport default function main() {\n  return mergePr;\n}\n",
+        );
         write(
             "merge_pr.rein",
-            "/** Merge a pull request.\n * @param ci CI status?\n */\ninput ci: choice(\"green\", \"red\")\n\
-             switch ci {\n    case \"green\" { return \"merge\" }\n    case \"red\" { return @ci/fix }\n    default { return @nope }\n}\n",
+            "import fixCi from \"./ci/fix\";\nimport nope from \"./nope\";\n/** Merge a pull request. */\nexport default function mergePr(\n  /** CI status? */\n  ci: \"green\" | \"red\",\n) {\n\
+             switch (ci) {\n    case \"green\": return \"merge\";\n    case \"red\": return fixCi;\n    default: return nope;\n}\n}\n",
         );
-        write("ci/fix.rein", "/** Fix red CI. */\nreturn @merge_pr\n");
-        write("bad-name.rein", "/** x */\nreturn \"y\"\n");
+        write(
+            "ci/fix.rein",
+            "import mergePr from \"../merge_pr\";\n/** Fix red CI. */\nexport default function fixCi() {\n  return mergePr;\n}\n",
+        );
+        write("bad-name.rein", "/** x */\nexport default function bad() {\n  return \"y\";\n}\n");
         fs::create_dir_all(root.join("nested/deeper")).unwrap();
         root
     }
 
     #[test]
-    fn loads_checks_and_reports_cycles_and_unknown_refs() {
+    fn loads_checks_and_reports_cycles_and_unknown_imports() {
         let root = temp_project("load");
         let project = Project::load(&root).unwrap();
         let names: Vec<&str> = project.files.keys().map(String::as_str).collect();
@@ -311,7 +359,7 @@ mod tests {
 
         let diags = project.check();
         let merge = &diags["merge_pr"];
-        assert!(has(merge, Severity::Error, "unknown function reference `@nope`"), "{merge:?}");
+        assert!(has(merge, Severity::Error, "cannot find module './nope'"), "{merge:?}");
         assert!(has(merge, Severity::Warning, "reference cycle: merge_pr -> ci/fix -> merge_pr"), "{merge:?}");
         let fix = &diags["ci/fix"];
         assert!(has(fix, Severity::Warning, "reference cycle: ci/fix -> merge_pr -> ci/fix"), "{fix:?}");
@@ -320,7 +368,7 @@ mod tests {
         assert!(!has(fix, Severity::Warning, "not reachable"), "{fix:?}");
         assert!(project.project_diagnostics().is_empty());
 
-        assert_eq!(project.references().len(), 4);
+        assert_eq!(project.references().len(), 3);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -330,7 +378,7 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("main.rein"), "/** m */\nreturn @f\n".to_string()),
+                (root.join("main.rein"), "import f from \"./f\";\n/** m */\nexport default function main() { return f }\n".to_string()),
                 (root.join("f.rein"), src.to_string()),
             ],
         );
@@ -339,7 +387,7 @@ mod tests {
 
     #[test]
     fn syntax_error_reports_only_the_syntax_error() {
-        let diags = check_one("/** d\n * @param a A\n */\ninput a: bool\nif a { return \"1\" }\nreturn )");
+        let diags = check_one("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return )");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].severity, Severity::Error);
     }
@@ -356,9 +404,9 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("main.rein"), "/** m */\nreturn @f\n".to_string()),
-                (root.join("f.rein"), "/** d */\nreturn @g\nreturn )".to_string()),
-                (root.join("g.rein"), "/** d */\nreturn @f\n".to_string()),
+                (root.join("main.rein"), "import f from \"./f\";\n/** m */\nexport default function main() { return f }\n".to_string()),
+                (root.join("f.rein"), "import g from \"./g\";\n/** d */\nexport default function f() { return g }\nreturn )".to_string()),
+                (root.join("g.rein"), "import f from \"./f\";\n/** d */\nexport default function g() { return f }\n".to_string()),
             ],
         );
         let diags = project.check();
@@ -383,7 +431,7 @@ mod tests {
     #[test]
     fn follows_symlinks_and_survives_symlink_loops() {
         let root = temp_project("links");
-        fs::write(root.join("real.rein"), "/** d */\nreturn \"x\"\n").unwrap();
+        fs::write(root.join("real.rein"), "/** d */\nexport default function real() { return \"x\" }\n").unwrap();
         std::os::unix::fs::symlink(root.join("real.rein"), root.join("alias.rein")).unwrap();
         std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
         let project = Project::load(&root).unwrap();
@@ -393,21 +441,25 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
-    #[test]
-    fn cycle_warns_on_every_ref_on_the_cycle() {
+    /// A project of `main` plus the given (name, source) files, all in `/proj`.
+    fn project_of(files: &[(&str, &str)]) -> Project {
         let root = PathBuf::from("/proj");
-        let project = Project::from_sources(
-            root.clone(),
-            vec![
-                (root.join("main.rein"), "/** m */\nreturn @a\n".to_string()),
-                (root.join("a.rein"), "/** d */\nreturn @b".to_string()),
-                (root.join("b.rein"), "/** d */\nreturn @c".to_string()),
-                (root.join("c.rein"), "/** d */\nreturn @a".to_string()),
-                (root.join("self.rein"), "/** d */\nreturn @self".to_string()),
-            ],
-        );
+        let mut sources = vec![(root.join("main.rein"), "/** m */\nexport default function main() { return \"m\" }\n".to_string())];
+        sources.extend(files.iter().map(|(n, t)| (root.join(format!("{n}.rein")), t.to_string())));
+        Project::from_sources(root, sources)
+    }
+
+    #[test]
+    fn cycle_warns_on_every_return_on_the_cycle() {
+        let project = project_of(&[
+            ("main", "import a from \"./a\";\n/** m */\nexport default function main() { return a }\n"),
+            ("a", "import b from \"./b\";\n/** d */\nexport default function a() { return b }\n"),
+            ("b", "import c from \"./c\";\n/** d */\nexport default function b() { return c }\n"),
+            ("c", "import a from \"./a\";\n/** d */\nexport default function c() { return a }\n"),
+            ("self", "import me from \"./self\";\n/** d */\nexport default function me() { return me }\n"),
+        ]);
         let diags = project.check();
-        for name in ["a", "b", "c", "self"] {
+        for name in ["a", "b", "c"] {
             assert!(has(&diags[name], Severity::Warning, "reference cycle"), "{name}: {:?}", diags[name]);
         }
         let cycle_count: usize = ["a", "b", "c"]
@@ -415,12 +467,13 @@ mod tests {
             .map(|n| diags[*n].iter().filter(|d| d.message.contains("reference cycle")).count())
             .sum();
         assert_eq!(cycle_count, 3);
+        assert!(has(&diags["self"], Severity::Warning, "reference cycle: self -> self"), "{:?}", diags["self"]);
     }
 
     #[test]
     fn missing_main_is_a_project_error() {
         let root = PathBuf::from("/proj");
-        let project = Project::from_sources(root.clone(), vec![(root.join("f.rein"), "/** d */\nreturn \"x\"".into())]);
+        let project = Project::from_sources(root.clone(), vec![(root.join("f.rein"), "/** d */\nexport default function f() { return \"x\" }".into())]);
         let errs = project.project_diagnostics();
         assert_eq!(errs.len(), 1);
         assert_eq!(errs[0].severity, Severity::Error);
@@ -432,16 +485,12 @@ mod tests {
 
     #[test]
     fn unreachable_function_is_a_warning() {
-        let root = PathBuf::from("/proj");
-        let project = Project::from_sources(
-            root.clone(),
-            vec![
-                (root.join("main.rein"), "/** m */\nreturn @used\n".to_string()),
-                (root.join("used.rein"), "/** u */\nreturn @deep/leaf\n".to_string()),
-                (root.join("deep/leaf.rein"), "/** l */\nreturn \"ok\"\n".to_string()),
-                (root.join("orphan.rein"), "/** o */\nreturn \"alone\"\n".to_string()),
-            ],
-        );
+        let project = project_of(&[
+            ("main", "import used from \"./used\";\n/** m */\nexport default function main() { return used }\n"),
+            ("used", "import leaf from \"./deep/leaf\";\n/** u */\nexport default function used() { return leaf }\n"),
+            ("deep/leaf", "/** l */\nexport default function leaf() { return \"ok\" }\n"),
+            ("orphan", "/** o */\nexport default function orphan() { return \"alone\" }\n"),
+        ]);
         let diags = project.check();
         assert!(has(&diags["orphan"], Severity::Warning, "`orphan` is not reachable from main"));
         assert!(!has(&diags["deep/leaf"], Severity::Warning, "not reachable"));
@@ -455,11 +504,54 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("main.rein"), "/** m */\nreturn )".to_string()),
-                (root.join("orphan.rein"), "/** o */\nreturn \"alone\"\n".to_string()),
+                (root.join("main.rein"), "/** m */\nexport default function main() { return )".to_string()),
+                (root.join("orphan.rein"), "/** o */\nexport default function orphan() { return \"alone\" }\n".to_string()),
             ],
         );
         assert!(!has(&project.check()["orphan"], Severity::Warning, "not reachable"));
+    }
+
+    #[test]
+    fn import_paths_resolve_relative_to_the_importing_file() {
+        let project = project_of(&[
+            ("ci/fix", ""),
+            ("ci/deeper", ""),
+            ("merge_pr", ""),
+            ("ci/sub/leaf", ""),
+            ("top", ""),
+        ]);
+        assert_eq!(project.resolve("ci/fix", "../merge_pr").unwrap(), "merge_pr");
+        assert_eq!(project.resolve("ci/fix", "./deeper").unwrap(), "ci/deeper");
+        assert_eq!(project.resolve("ci/sub/leaf", "../../top").unwrap(), "top");
+        assert_eq!(project.resolve("ci/sub/leaf", "./../deeper").unwrap(), "ci/deeper");
+        assert_eq!(project.resolve("main", "./top").unwrap(), "top");
+    }
+
+    #[test]
+    fn import_path_errors() {
+        let project = project_of(&[("ci/fix", ""), ("top", "")]);
+        assert_eq!(project.resolve("ci/fix", "./missing").unwrap_err(), "cannot find module './missing'");
+        assert_eq!(project.resolve("ci/fix", "top").unwrap_err(), "import path must start with `./` or `../`");
+        assert_eq!(project.resolve("ci/fix", "./top.rein").unwrap_err(), "import path must have no extension");
+        assert_eq!(project.resolve("ci/fix", "./top.js").unwrap_err(), "import path must have no extension");
+        // From ci/fix the directory is `ci`; two steps up leaves the root.
+        assert_eq!(project.resolve("ci/fix", "../../top").unwrap_err(), "import '../../top' leaves the project root");
+        assert_eq!(project.resolve("top", "../top").unwrap_err(), "import '../top' leaves the project root");
+    }
+
+    #[test]
+    fn import_outside_root_is_reported_by_the_checker() {
+        let project = project_of(&[
+            ("ci/fix", "import x from \"../../outside\";\n/** d */\nexport default function fix() { return x }\n"),
+        ]);
+        let diags = project.check();
+        assert!(has(&diags["ci/fix"], Severity::Error, "leaves the project root"), "{:?}", diags["ci/fix"]);
+    }
+
+    #[test]
+    fn unused_import_is_a_warning_from_the_checker() {
+        let project = project_of(&[("a", "import m from \"./main\";\n/** d */\nexport default function a() { return \"x\" }\n")]);
+        assert!(has(&project.check()["a"], Severity::Warning, "unused import `m`"));
     }
 
     #[test]

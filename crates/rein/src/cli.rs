@@ -72,7 +72,8 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
         Ok(i) => i,
         Err(msg) => return fail(json, &msg),
     };
-    match eval::run(&sf.function, &inputs) {
+    let targets = project.import_targets(function);
+    match eval::run(&sf.function, &inputs, &targets) {
         Err(msg) => fail(json, &msg),
         Ok(Outcome::Text(value)) => {
             if json {

@@ -1,12 +1,15 @@
+import securityReview from "./security/review";
+
 /**
  * Review the code changes in a pull request.
- *
- * @param security_sensitive Does the PR change authentication, payments, or permissions code?
  */
-input security_sensitive: bool
+export default function reviewCode(
+  /** Does the PR change authentication, payments, or permissions code? */
+  securitySensitive: boolean,
+) {
+  if (securitySensitive) {
+    return securityReview;
+  }
 
-if security_sensitive {
-    return @security/review
+  return "Read the diff. Leave comments for bugs and style issues. Approve when the review is clean. Then run merge_pr again.";
 }
-
-return "Read the diff. Leave comments for bugs and style issues. Approve when the review is clean. Then run merge_pr again."

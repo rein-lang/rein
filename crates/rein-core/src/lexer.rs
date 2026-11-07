@@ -5,37 +5,48 @@ use crate::diagnostic::{Diagnostic, Span};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {
     Ident(String),
+    /// A string in single or double quotes, with escapes applied.
     Str(String),
-    /// `@name`, stored without the `@`.
-    Ref(String),
     /// `/** ... */`, stored as the raw text between the markers.
     Doc(String),
-    Input,
+    /// A word Rein reserves so it can give a helpful error, such as `for` or `const`.
+    Reserved(String),
+    Import,
+    From,
+    Export,
+    Default,
+    Function,
     If,
     Else,
     Switch,
     Case,
-    Default,
     Return,
-    Bool,
-    Choice,
-    Not,
-    And,
-    Or,
+    Boolean,
     LBrace,
     RBrace,
     LParen,
     RParen,
     Comma,
     Colon,
-    EqEq,
-    NotEq,
+    Semi,
+    Pipe,
+    Bang,
+    /// A single `=`. Rein has no assignment, but the lexer reads it so `const x = 1` gets its own message.
+    Assign,
+    AndAnd,
+    OrOr,
+    EqEqEq,
+    NotEqEq,
     Eof,
 }
 
+/// Words with a grammar role. A function or parameter cannot use them as a name.
 pub const KEYWORDS: &[&str] = &[
-    "input", "if", "else", "switch", "case", "default", "return", "bool", "choice", "not", "and", "or",
+    "import", "from", "export", "default", "function", "if", "else", "switch", "case", "return", "boolean",
 ];
+
+/// Words from other languages. Rein rejects them with a specific message.
+pub const RESERVED: &[&str] = &["for", "while", "do", "const", "let", "var"];
 
 impl Tok {
     /// Short text for error messages, such as "`{`" or "name `x`".
@@ -43,7 +54,7 @@ impl Tok {
         match self {
             Tok::Ident(s) => format!("name `{s}`"),
             Tok::Str(s) => format!("string \"{s}\""),
-            Tok::Ref(s) => format!("reference `@{s}`"),
+            Tok::Reserved(s) => format!("reserved word `{s}`"),
             Tok::Eof => "end of file".to_string(),
             Tok::Doc(_) => "doc comment".to_string(),
             other => format!("`{}`", other.text()),
@@ -52,27 +63,32 @@ impl Tok {
 
     fn text(&self) -> &'static str {
         match self {
-            Tok::Input => "input",
+            Tok::Import => "import",
+            Tok::From => "from",
+            Tok::Export => "export",
+            Tok::Default => "default",
+            Tok::Function => "function",
             Tok::If => "if",
             Tok::Else => "else",
             Tok::Switch => "switch",
             Tok::Case => "case",
-            Tok::Default => "default",
             Tok::Return => "return",
-            Tok::Bool => "bool",
-            Tok::Choice => "choice",
-            Tok::Not => "not",
-            Tok::And => "and",
-            Tok::Or => "or",
+            Tok::Boolean => "boolean",
             Tok::LBrace => "{",
             Tok::RBrace => "}",
             Tok::LParen => "(",
             Tok::RParen => ")",
             Tok::Comma => ",",
             Tok::Colon => ":",
-            Tok::EqEq => "==",
-            Tok::NotEq => "!=",
-            Tok::Ident(_) | Tok::Str(_) | Tok::Ref(_) | Tok::Doc(_) | Tok::Eof => "",
+            Tok::Semi => ";",
+            Tok::Pipe => "|",
+            Tok::Bang => "!",
+            Tok::Assign => "=",
+            Tok::AndAnd => "&&",
+            Tok::OrOr => "||",
+            Tok::EqEqEq => "===",
+            Tok::NotEqEq => "!==",
+            Tok::Ident(_) | Tok::Str(_) | Tok::Reserved(_) | Tok::Doc(_) | Tok::Eof => "",
         }
     }
 }
@@ -87,10 +103,8 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Span)>, Diagnostic> {
         } else if src[pos..].starts_with("//") {
             pos = src[pos..].find('\n').map_or(src.len(), |i| pos + i);
         } else {
-            let (tok, end) = if c == '"' {
+            let (tok, end) = if c == '"' || c == '\'' {
                 lex_string(src, pos)?
-            } else if c == '@' {
-                lex_ref(src, pos)?
             } else if is_ident_start(c) {
                 lex_word(src, pos)?
             } else if src[pos..].starts_with("/**") {
@@ -116,18 +130,18 @@ fn is_ident_char(c: char) -> bool {
 
 fn keyword(word: &str) -> Option<Tok> {
     Some(match word {
-        "input" => Tok::Input,
+        "import" => Tok::Import,
+        "from" => Tok::From,
+        "export" => Tok::Export,
+        "default" => Tok::Default,
+        "function" => Tok::Function,
         "if" => Tok::If,
         "else" => Tok::Else,
         "switch" => Tok::Switch,
         "case" => Tok::Case,
-        "default" => Tok::Default,
         "return" => Tok::Return,
-        "bool" => Tok::Bool,
-        "choice" => Tok::Choice,
-        "not" => Tok::Not,
-        "and" => Tok::And,
-        "or" => Tok::Or,
+        "boolean" => Tok::Boolean,
+        w if RESERVED.contains(&w) => Tok::Reserved(w.to_string()),
         _ => return None,
     })
 }
@@ -153,44 +167,17 @@ fn lex_doc(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
     }
 }
 
-/// `@seg(/seg)*`. A `/` is part of the name only when a name starts after it.
-fn lex_ref(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
-    let mut end = pos + 1;
-    let mut name = String::new();
-    loop {
-        let seg = &src[end..];
-        match seg.chars().next() {
-            Some(c) if is_ident_start(c) => {}
-            _ => {
-                return Err(Diagnostic::error(
-                    Span::new(pos, end),
-                    "expected a function name after `@`",
-                ))
-            }
-        }
-        let len = seg.find(|c: char| !is_ident_char(c)).unwrap_or(seg.len());
-        name.push_str(&seg[..len]);
-        end += len;
-        let after = &src[end..];
-        if after.starts_with('/') && after[1..].chars().next().is_some_and(is_ident_start) {
-            name.push('/');
-            end += 1;
-        } else {
-            return Ok((Tok::Ref(name), end));
-        }
-    }
-}
-
-/// Double-quoted string with `\"`, `\\` and `\n` escapes. Returns the end offset.
+/// Single- or double-quoted string with `\"`, `\'`, `\\` and `\n` escapes. Returns the end offset.
 fn lex_string(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
+    let quote = src[pos..].chars().next().unwrap_or('"');
     let mut value = String::new();
     let mut i = pos + 1;
     loop {
         let Some(c) = src[i..].chars().next() else {
-            return Err(Diagnostic::error(Span::new(pos, src.len()), "unclosed string; add `\"`"));
+            return Err(Diagnostic::error(Span::new(pos, src.len()), format!("unclosed string; add `{quote}`")));
         };
         match c {
-            '"' => return Ok((Tok::Str(value), i + 1)),
+            c if c == quote => return Ok((Tok::Str(value), i + 1)),
             '\n' => {
                 return Err(Diagnostic::error(
                     Span::new(pos, i),
@@ -199,13 +186,12 @@ fn lex_string(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
             }
             '\\' => {
                 let ch = match src[i + 1..].chars().next() {
-                    Some('"') => '"',
-                    Some('\\') => '\\',
+                    Some(q @ ('"' | '\'' | '\\')) => q,
                     Some('n') => '\n',
                     _ => {
                         return Err(Diagnostic::error(
                             Span::new(i, i + 1),
-                            "unknown escape; use `\\\"`, `\\\\` or `\\n`",
+                            "unknown escape; use `\\\"`, `\\'`, `\\\\` or `\\n`",
                         ))
                     }
                 };
@@ -230,14 +216,26 @@ fn lex_punct(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
         ')' => (Tok::RParen, 1),
         ',' => (Tok::Comma, 1),
         ':' => (Tok::Colon, 1),
+        ';' => (Tok::Semi, 1),
+        '|' if rest.starts_with("||") => (Tok::OrOr, 2),
+        '|' => (Tok::Pipe, 1),
+        '&' if rest.starts_with("&&") => (Tok::AndAnd, 2),
+        '=' if rest.starts_with("===") => (Tok::EqEqEq, 3),
+        '=' if rest.starts_with("==") => {
+            return Err(Diagnostic::error(Span::new(pos, pos + 2), "use `===` instead of `==`"))
+        }
+        '=' => (Tok::Assign, 1),
+        '!' if rest.starts_with("!==") => (Tok::NotEqEq, 3),
+        '!' if rest.starts_with("!=") => {
+            return Err(Diagnostic::error(Span::new(pos, pos + 2), "use `!==` instead of `!=`"))
+        }
+        '!' => (Tok::Bang, 1),
         '/' if rest.starts_with("/*") => {
             return Err(Diagnostic::error(
                 Span::new(pos, pos + 2),
                 "use `//` for comments or `/** */` for the doc block",
             ))
         }
-        '=' if rest.starts_with("==") => (Tok::EqEq, 2),
-        '!' if rest.starts_with("!=") => (Tok::NotEq, 2),
         _ => {
             return Err(Diagnostic::error(
                 Span::new(pos, pos + c.len_utf8()),
@@ -252,44 +250,72 @@ fn lex_punct(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
 mod tests {
     use super::*;
 
+    fn kinds(src: &str) -> Vec<Tok> {
+        lex(src).unwrap().into_iter().map(|(t, _)| t).collect()
+    }
+
     #[test]
-    fn keywords_lex_as_keywords() {
-        for kw in KEYWORDS {
+    fn keywords_and_reserved_words_are_not_names() {
+        for kw in KEYWORDS.iter().chain(RESERVED.iter()) {
             let toks = lex(kw).unwrap();
             assert!(!matches!(toks[0].0, Tok::Ident(_)), "`{kw}` lexed as a name");
         }
     }
 
     #[test]
-    fn description_is_a_name_now() {
-        let toks = lex("description").unwrap();
-        assert_eq!(toks[0].0, Tok::Ident("description".into()));
+    fn old_words_are_plain_names() {
+        assert_eq!(kinds("input choice description"), vec![
+            Tok::Ident("input".into()),
+            Tok::Ident("choice".into()),
+            Tok::Ident("description".into()),
+            Tok::Eof,
+        ]);
     }
 
     #[test]
-    fn escapes_refs_and_comments() {
-        let toks = lex(r#"// note
-"a\"b\\c\nü" @ci/fix/x merge_pr== !="#).unwrap();
-        let kinds: Vec<Tok> = toks.into_iter().map(|(t, _)| t).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                Tok::Str("a\"b\\c\nü".into()),
-                Tok::Ref("ci/fix/x".into()),
-                Tok::Ident("merge_pr".into()),
-                Tok::EqEq,
-                Tok::NotEq,
-                Tok::Eof,
-            ]
-        );
+    fn single_and_double_quotes_with_escapes() {
+        assert_eq!(kinds(r#""a\"b" 'c\'d\\e\nü'"#), vec![
+            Tok::Str("a\"b".into()),
+            Tok::Str("c'd\\e\nü".into()),
+            Tok::Eof,
+        ]);
+    }
+
+    #[test]
+    fn operators_and_punctuation() {
+        assert_eq!(kinds("=== !== || && | ! ; ( ) { } , :"), vec![
+            Tok::EqEqEq,
+            Tok::NotEqEq,
+            Tok::OrOr,
+            Tok::AndAnd,
+            Tok::Pipe,
+            Tok::Bang,
+            Tok::Semi,
+            Tok::LParen,
+            Tok::RParen,
+            Tok::LBrace,
+            Tok::RBrace,
+            Tok::Comma,
+            Tok::Colon,
+            Tok::Eof,
+        ]);
+    }
+
+    #[test]
+    fn double_equals_is_an_error() {
+        let err = lex("a == \"x\"").unwrap_err();
+        assert_eq!(err.message, "use `===` instead of `==`");
+        assert_eq!(err.span, Span::new(2, 4));
+        let err = lex("a != \"x\"").unwrap_err();
+        assert_eq!(err.message, "use `!==` instead of `!=`");
     }
 
     #[test]
     fn doc_block_keeps_raw_inner_text() {
-        let toks = lex("/**\n * Hi.\n */ input").unwrap();
+        let toks = lex("/**\n * Hi.\n */ export").unwrap();
         assert_eq!(toks[0].0, Tok::Doc("\n * Hi.\n ".into()));
         assert_eq!(toks[0].1, Span::new(0, 14));
-        assert_eq!(toks[1].0, Tok::Input);
+        assert_eq!(toks[1].0, Tok::Export);
     }
 
     #[test]
@@ -325,5 +351,11 @@ mod tests {
         let err = lex("/* x */").unwrap_err();
         assert_eq!(err.message, "use `//` for comments or `/** */` for the doc block");
         assert_eq!(err.span, Span::new(0, 2));
+    }
+
+    #[test]
+    fn at_sign_is_not_rein() {
+        let err = lex("return @x").unwrap_err();
+        assert_eq!(err.message, "unexpected character `@`");
     }
 }

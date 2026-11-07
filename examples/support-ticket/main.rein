@@ -1,18 +1,26 @@
+import escalate from "./escalate";
+import billingRefund from "./billing/refund";
+import answerFaq from "./answer/faq";
+
 /**
  * Decide how the support agent handles a customer ticket.
- *
- * @param category What category best fits the ticket?
- * @param vip Is the customer on the VIP plan?
  */
-input category: choice("billing", "account", "how_to")
-input vip: bool
+export default function main(
+  /** What category best fits the ticket? */
+  category: "billing" | "account" | "how_to",
+  /** Is the customer on the VIP plan? */
+  vip: boolean,
+) {
+  if (vip) {
+    return escalate;
+  }
 
-if vip {
-    return @escalate
-}
-
-switch category {
-    case "billing" { return @billing/refund }
-    case "account" { return @escalate }
-    default { return @answer/faq }
+  switch (category) {
+    case "billing":
+      return billingRefund;
+    case "account":
+      return escalate;
+    default:
+      return answerFaq;
+  }
 }

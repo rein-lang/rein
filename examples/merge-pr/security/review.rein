@@ -1,12 +1,13 @@
 /**
  * Review changes that touch security-sensitive code.
- *
- * @param secrets_added Does the PR add or change a secret, token, or key?
  */
-input secrets_added: bool
+export default function securityReview(
+  /** Does the PR add or change a secret, token, or key? */
+  secretsAdded: boolean,
+) {
+  if (secretsAdded) {
+    return "Stop. Remove the secret from the diff. Rotate the secret. Then run merge_pr again.";
+  }
 
-if secrets_added {
-    return "Stop. Remove the secret from the diff. Rotate the secret. Then run merge_pr again."
+  return "Check the auth and permission changes. Ask the security owner to approve. Then run merge_pr again.";
 }
-
-return "Check the auth and permission changes. Ask the security owner to approve. Then run merge_pr again."
