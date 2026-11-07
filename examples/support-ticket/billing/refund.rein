@@ -1,6 +1,9 @@
-description "Process a refund request from a billing ticket."
-
-input refund_over_limit: bool "Is the requested refund above the agent's limit?"
+/**
+ * Process a refund request from a billing ticket.
+ *
+ * @param refund_over_limit Is the requested refund above the agent's limit?
+ */
+input refund_over_limit: bool
 
 if refund_over_limit {
     return @escalate

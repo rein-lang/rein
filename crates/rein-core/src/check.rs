@@ -22,7 +22,7 @@ pub fn check_function(
             ),
         );
     }
-    c.description();
+    c.doc();
     c.inputs();
     c.block(&f.body);
     if !terminates_block(f, &f.body) {
@@ -95,12 +95,42 @@ impl<'a> Checker<'a> {
         self.error(name.span, format!("unknown input `{}`", name.value));
     }
 
-    fn description(&mut self) {
+    /// Rules for the doc block: its presence, the description, the tags, and one `@param` per input.
+    fn doc(&mut self) {
         let f = self.f;
-        match &f.description {
-            None => self.error(Span::default(), "missing `description`; it must be the first item"),
-            Some(d) if d.value.trim().is_empty() => self.error(d.span, "empty description string"),
-            Some(_) => {}
+        let Some(doc) = &f.doc else {
+            self.error(Span::default(), "missing doc comment; start the file with /** description */");
+            return;
+        };
+        if f.description.as_ref().is_none_or(|d| d.value.trim().is_empty()) {
+            self.error(doc.span, "empty description; write the description before the first `@param`");
+        }
+        for tag in &doc.unknown_tags {
+            self.warning(tag.span, format!("unknown tag `@{}`; Rein supports `@param`", tag.value));
+        }
+        for (i, p) in doc.params.iter().enumerate() {
+            let name = &p.name.value;
+            if name.is_empty() {
+                self.error(p.name.span, "`@param` needs an input name");
+                continue;
+            }
+            if !f.inputs.iter().any(|input| input.name.value == *name) {
+                self.error(p.name.span, format!("`@param {name}` does not match any input"));
+            }
+            if doc.params[..i].iter().any(|q| q.name.value == *name) {
+                self.error(p.name.span, format!("duplicate `@param {name}`"));
+            }
+            if p.text.value.trim().is_empty() {
+                self.error(p.name.span, format!("`@param {name}` needs a question after the name"));
+            }
+        }
+        for input in &f.inputs {
+            if !doc.params.iter().any(|p| p.name.value == input.name.value) {
+                self.error(
+                    input.name.span,
+                    format!("input `{}` has no description; add `@param {} <question>` to the doc comment", input.name.value, input.name.value),
+                );
+            }
         }
     }
 
@@ -270,25 +300,87 @@ mod tests {
         );
     }
 
+    fn clean(src: &str) {
+        let diags = check_src(src);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
     #[test]
     fn clean_sample_has_no_diagnostics() {
         assert!(check_src(SAMPLE).is_empty(), "{:?}", check_src(SAMPLE));
     }
 
     #[test]
-    fn missing_description() {
-        expect_diag("return \"x\"", Severity::Error, "missing `description`");
+    fn missing_doc_comment() {
+        expect_diag("return \"x\"", Severity::Error, "missing doc comment; start the file with /** description */");
     }
 
     #[test]
     fn empty_description() {
-        expect_diag("description \"  \"\nreturn \"x\"", Severity::Error, "empty description string");
+        expect_diag("/**\n * @param a A?\n */\ninput a: bool\nif a { return \"1\" }\nreturn \"2\"", Severity::Error, "empty description");
+        expect_diag("/**/\nreturn \"x\"", Severity::Error, "empty description");
+        expect_diag("/**   */\nreturn \"x\"", Severity::Error, "empty description");
+    }
+
+    #[test]
+    fn input_without_param() {
+        expect_diag(
+            "/** d */\ninput a: bool\nif a { return \"1\" }\nreturn \"2\"",
+            Severity::Error,
+            "input `a` has no description; add `@param a <question>` to the doc comment",
+        );
+    }
+
+    #[test]
+    fn param_without_input() {
+        expect_diag(
+            "/** d\n * @param y Question?\n */\nreturn \"x\"",
+            Severity::Error,
+            "`@param y` does not match any input",
+        );
+    }
+
+    #[test]
+    fn duplicate_param() {
+        expect_diag(
+            "/** d\n * @param a One?\n * @param a Two?\n */\ninput a: bool\nif a { return \"1\" }\nreturn \"2\"",
+            Severity::Error,
+            "duplicate `@param a`",
+        );
+    }
+
+    #[test]
+    fn param_with_empty_text() {
+        expect_diag(
+            "/** d\n * @param a\n */\ninput a: bool\nif a { return \"1\" }\nreturn \"2\"",
+            Severity::Error,
+            "`@param a` needs a question after the name",
+        );
+        expect_diag(
+            "/** d\n * @param a -\n */\ninput a: bool\nif a { return \"1\" }\nreturn \"2\"",
+            Severity::Error,
+            "`@param a` needs a question after the name",
+        );
+    }
+
+    #[test]
+    fn param_without_name() {
+        expect_diag("/** d\n * @param\n */\nreturn \"x\"", Severity::Error, "`@param` needs an input name");
+    }
+
+    #[test]
+    fn unknown_tag_is_a_warning() {
+        expect_diag(
+            "/** d\n * @returns Something.\n */\nreturn \"x\"",
+            Severity::Warning,
+            "unknown tag `@returns`; Rein supports `@param`",
+        );
     }
 
     #[test]
     fn duplicate_input() {
         expect_diag(
-            "description \"d\"\ninput a: bool \"a\"\ninput a: bool \"again\"\nif a { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param a A\n */\ninput a: bool\ninput a: bool\nif a { return \"1\" }\nreturn \"2\"",
             Severity::Error,
             "duplicate input `a`",
         );
@@ -297,7 +389,7 @@ mod tests {
     #[test]
     fn choice_with_too_few_options() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"only\") \"c\"\nif c == \"only\" { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param c C\n */\ninput c: choice(\"only\")\nif c == \"only\" { return \"1\" }\nreturn \"2\"",
             Severity::Error,
             "needs at least 2 options",
         );
@@ -306,7 +398,7 @@ mod tests {
     #[test]
     fn duplicate_option() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"a\", \"a\") \"c\"\nif c == \"a\" { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param c C\n */\ninput c: choice(\"a\", \"a\")\nif c == \"a\" { return \"1\" }\nreturn \"2\"",
             Severity::Error,
             "duplicate option `a`",
         );
@@ -315,7 +407,7 @@ mod tests {
     #[test]
     fn empty_option() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"a\", \"\") \"c\"\nif c == \"a\" { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param c C\n */\ninput c: choice(\"a\", \"\")\nif c == \"a\" { return \"1\" }\nreturn \"2\"",
             Severity::Error,
             "empty option",
         );
@@ -323,18 +415,18 @@ mod tests {
 
     #[test]
     fn unknown_input_in_condition() {
-        expect_diag("description \"d\"\nif nope { return \"a\" }\nreturn \"b\"", Severity::Error, "unknown input `nope`");
+        expect_diag("/** d */\nif nope { return \"a\" }\nreturn \"b\"", Severity::Error, "unknown input `nope`");
     }
 
     #[test]
     fn unknown_input_in_switch_subject() {
-        expect_diag("description \"d\"\nswitch nope { default { return \"a\" } }", Severity::Error, "unknown input `nope`");
+        expect_diag("/** d */\nswitch nope { default { return \"a\" } }", Severity::Error, "unknown input `nope`");
     }
 
     #[test]
     fn bool_input_compared() {
         expect_diag(
-            "description \"d\"\ninput a: bool \"a\"\nif a == \"x\" { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param a A\n */\ninput a: bool\nif a == \"x\" { return \"1\" }\nreturn \"2\"",
             Severity::Error,
             "bool input `a` cannot be compared; use `if a` or `if not a`",
         );
@@ -343,7 +435,7 @@ mod tests {
     #[test]
     fn bool_input_as_switch_subject() {
         expect_diag(
-            "description \"d\"\ninput a: bool \"a\"\nswitch a { default { return \"1\" } }",
+            "/** d\n * @param a A\n */\ninput a: bool\nswitch a { default { return \"1\" } }",
             Severity::Error,
             "bool input `a` cannot be used in a switch",
         );
@@ -352,7 +444,7 @@ mod tests {
     #[test]
     fn choice_input_used_bare() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nif c { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nif c { return \"1\" }\nreturn \"2\"",
             Severity::Error,
             "choice input `c` needs a comparison, like `c == \"...\"`",
         );
@@ -361,7 +453,7 @@ mod tests {
     #[test]
     fn compared_value_not_an_option() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nif c == \"z\" { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nif c == \"z\" { return \"1\" }\nreturn \"2\"",
             Severity::Error,
             "`z` is not an option of `c`; options are `x`, `y`",
         );
@@ -370,7 +462,7 @@ mod tests {
     #[test]
     fn case_value_not_an_option() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nswitch c { case \"z\" { return \"1\" } default { return \"2\" } }",
+            "/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nswitch c { case \"z\" { return \"1\" } default { return \"2\" } }",
             Severity::Error,
             "`z` is not an option of `c`",
         );
@@ -379,7 +471,7 @@ mod tests {
     #[test]
     fn duplicate_case_value() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nswitch c { case \"x\" { return \"1\" } case \"x\" { return \"2\" } default { return \"3\" } }",
+            "/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nswitch c { case \"x\" { return \"1\" } case \"x\" { return \"2\" } default { return \"3\" } }",
             Severity::Error,
             "duplicate case `x`",
         );
@@ -388,7 +480,7 @@ mod tests {
     #[test]
     fn not_all_paths_return() {
         expect_diag(
-            "description \"d\"\ninput a: bool \"a\"\nif a { return \"1\" }",
+            "/** d\n * @param a A\n */\ninput a: bool\nif a { return \"1\" }",
             Severity::Error,
             "not all paths return",
         );
@@ -396,16 +488,13 @@ mod tests {
 
     #[test]
     fn if_with_else_terminates_when_both_branches_return() {
-        let diags = check_src(
-            "description \"d\"\ninput a: bool \"a\"\nif a { return \"1\" } else { return \"2\" }",
-        );
-        assert!(diags.is_empty(), "{diags:?}");
+        clean("/** d\n * @param a A\n */\ninput a: bool\nif a { return \"1\" } else { return \"2\" }");
     }
 
     #[test]
     fn if_with_non_returning_else_does_not_terminate() {
         expect_diag(
-            "description \"d\"\ninput a: bool \"a\"\nif a { return \"1\" } else { if a { return \"2\" } }",
+            "/** d\n * @param a A\n */\ninput a: bool\nif a { return \"1\" } else { if a { return \"2\" } }",
             Severity::Error,
             "not all paths return",
         );
@@ -413,16 +502,13 @@ mod tests {
 
     #[test]
     fn switch_covering_all_options_terminates_without_default() {
-        let diags = check_src(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nswitch c { case \"x\" { return \"1\" } case \"y\" { return \"2\" } }",
-        );
-        assert!(diags.is_empty(), "{diags:?}");
+        clean("/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nswitch c { case \"x\" { return \"1\" } case \"y\" { return \"2\" } }");
     }
 
     #[test]
     fn switch_partial_coverage_without_default_does_not_terminate() {
         expect_diag(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nswitch c { case \"x\" { return \"1\" } }",
+            "/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nswitch c { case \"x\" { return \"1\" } }",
             Severity::Error,
             "not all paths return",
         );
@@ -430,7 +516,7 @@ mod tests {
 
     #[test]
     fn unknown_function_reference() {
-        let diags = check_with("description \"d\"\nreturn @nope", &|_| false);
+        let diags = check_with("/** d */\nreturn @nope", &|_| false);
         assert!(
             diags.iter().any(|d| d.severity == Severity::Error && d.message.contains("unknown function reference `@nope`")),
             "{diags:?}"
@@ -439,14 +525,14 @@ mod tests {
 
     #[test]
     fn invalid_file_name() {
-        let (f, _) = parse("description \"d\"\nreturn \"x\"");
+        let (f, _) = parse("/** d */\nreturn \"x\"");
         let diags = check_function(&f, "bad-name", &|_| true);
         assert!(diags.iter().any(|d| d.severity == Severity::Error && d.message.contains("invalid function file name")), "{diags:?}");
     }
 
     #[test]
     fn keyword_in_file_name() {
-        let (f, _) = parse("description \"d\"\nreturn \"x\"");
+        let (f, _) = parse("/** d */\nreturn \"x\"");
         for name in ["if", "ci/return"] {
             let diags = check_function(&f, name, &|_| true);
             assert!(
@@ -459,7 +545,7 @@ mod tests {
     #[test]
     fn unused_input() {
         expect_diag(
-            "description \"d\"\ninput a: bool \"a\"\nreturn \"x\"",
+            "/** d\n * @param a A\n */\ninput a: bool\nreturn \"x\"",
             Severity::Warning,
             "unused input `a`",
         );
@@ -468,7 +554,7 @@ mod tests {
     #[test]
     fn unreachable_statement() {
         expect_diag(
-            "description \"d\"\nreturn \"a\"\nreturn \"b\"",
+            "/** d */\nreturn \"a\"\nreturn \"b\"",
             Severity::Warning,
             "unreachable statement",
         );

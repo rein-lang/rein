@@ -1,6 +1,9 @@
-description "Follow the runbook for an alert that has one."
-
-input fixed: bool "Did the runbook steps clear the alert?"
+/**
+ * Follow the runbook for an alert that has one.
+ *
+ * @param fixed Did the runbook steps clear the alert?
+ */
+input fixed: bool
 
 if fixed {
     return "Close the alert. Write a one-line note with the steps you ran."

@@ -159,12 +159,26 @@ fn publish_for(connection: &Connection, docs: &Docs, uri: &Url) -> BoxResult<()>
     let Some(path) = doc_path(uri) else { return Ok(()) };
     let project = build_project(docs, &Project::find_root(&path));
     let diags = project.check();
+    let mut lists: Vec<(Url, Vec<Diagnostic>)> = Vec::new();
     for (name, sf) in &project.files {
         let Some(file_uri) = uri_for(docs, &sf.path) else { continue };
         let list: Vec<Diagnostic> = diags
             .get(name)
             .map(|ds| ds.iter().map(|d| to_lsp(&sf.text, d)).collect())
             .unwrap_or_default();
+        lists.push((file_uri, list));
+    }
+    // The client does not open rein.toml, so project errors go on an open file of the project.
+    // Without one, they go on the file that changed.
+    let extra: Vec<Diagnostic> = project.project_diagnostics().iter().map(|d| to_lsp("", d)).collect();
+    if !extra.is_empty() {
+        let open = lists.iter().position(|(u, _)| docs.contains_key(u));
+        match open.or_else(|| lists.iter().position(|(u, _)| u == uri)) {
+            Some(i) => lists[i].1.extend(extra),
+            None => lists.push((uri.clone(), extra)),
+        }
+    }
+    for (file_uri, list) in lists {
         send_diagnostics(connection, file_uri, list)?;
     }
     Ok(())

@@ -8,7 +8,7 @@ The flow routes VIP customers to a human first. Other tickets follow their categ
 
 | File | Function | Job |
 | --- | --- | --- |
-| `handle_ticket.rein` | `handle_ticket` | Entry point. Routes by VIP status and category. |
+| `main.rein` | `main` | Entry point. Routes by VIP status and category. |
 | `billing/refund.rein` | `billing/refund` | Refunds within the agent limit. Escalates larger refunds. |
 | `answer/faq.rein` | `answer/faq` | Answers how-to questions from the help center. |
 | `escalate.rein` | `escalate` | Hands the ticket to a human engineer. |
@@ -17,5 +17,5 @@ The flow routes VIP customers to a human first. Other tickets follow their categ
 
 ```sh
 cargo run -p rein -- check examples/support-ticket
-cargo run -p rein -- run handle_ticket --root examples/support-ticket
+cargo run -p rein -- run --root examples/support-ticket
 ```

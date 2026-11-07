@@ -1,6 +1,9 @@
-description "Fix a failing CI run, then check the pull request again."
-
-input fix_pushed: bool "Did you push a fix for the failing job?"
+/**
+ * Fix a failing CI run, then check the pull request again.
+ *
+ * @param fix_pushed Did you push a fix for the failing job?
+ */
+input fix_pushed: bool
 
 if fix_pushed {
     return @merge_pr

@@ -1,0 +1,26 @@
+/**
+ * Decide how the on-call agent handles a new production alert.
+ *
+ * @param severity How severe is the alert?
+ * @param customer_impact Are customers seeing errors or downtime right now?
+ * @param known_runbook Does a runbook exist for this alert?
+ */
+input severity: choice("sev1", "sev2", "sev3")
+input customer_impact: bool
+input known_runbook: bool
+
+if customer_impact {
+    return @page_human
+}
+
+switch severity {
+    case "sev1" {
+        return @page_human
+    }
+    default {
+        if known_runbook {
+            return @runbook/follow
+        }
+        return @ticket/open
+    }
+}

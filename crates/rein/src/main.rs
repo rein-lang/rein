@@ -25,7 +25,8 @@ enum Command {
     },
     /// Evaluate one step of a function.
     Run {
-        /// Function name, as its path under the root without `.rein`.
+        /// Function name, as its path under the root without `.rein`. Default: `main`.
+        #[arg(default_value = "main")]
         function: String,
         /// Project root. Default: the nearest directory with rein.toml.
         #[arg(long)]
@@ -39,7 +40,8 @@ enum Command {
     },
     /// Print a function's schema as JSON.
     Describe {
-        /// Function name.
+        /// Function name. Default: `main`.
+        #[arg(default_value = "main")]
         function: String,
         /// Project root. Default: the nearest directory with rein.toml.
         #[arg(long)]

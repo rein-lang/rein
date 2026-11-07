@@ -10,6 +10,9 @@ use crate::check::check_function;
 use crate::diagnostic::{Diagnostic, Span};
 use crate::parser::parse;
 
+/// The function every project starts from. It is `main.rein` at the project root.
+pub const ENTRY: &str = "main";
+
 pub struct SourceFile {
     pub path: PathBuf,
     pub text: String,
@@ -81,10 +84,24 @@ impl Project {
         self.files.get(name)
     }
 
-    /// Diagnostics per function, sorted by span: parse, single-file checks, and cycles.
+    /// Diagnostics that belong to the project, not to one function. They point into `rein.toml`.
+    pub fn project_diagnostics(&self) -> Vec<Diagnostic> {
+        if self.files.contains_key(ENTRY) {
+            return Vec::new();
+        }
+        vec![Diagnostic::error(Span::default(), "project has no main.rein; it is the agent's entry point")]
+    }
+
+    /// The project marker file, `rein.toml` in the root.
+    pub fn marker_path(&self) -> PathBuf {
+        self.root.join("rein.toml")
+    }
+
+    /// Diagnostics per function, sorted by span: parse, single-file checks, cycles, and reachability.
     /// A file with a syntax error reports only that error. Its tree is partial.
     pub fn check(&self) -> BTreeMap<String, Vec<Diagnostic>> {
         let adj = self.adjacency();
+        let reachable = self.reachable_from_entry(&adj);
         let known = |n: &str| self.files.contains_key(n);
         self.files
             .iter()
@@ -95,6 +112,10 @@ impl Project {
                 let mut diags = Vec::new();
                 diags.extend(check_function(&sf.function, name, &known));
                 diags.extend(self.cycle_warnings(name, &sf.function, &adj));
+                if reachable.as_ref().is_some_and(|r| !r.contains(name)) {
+                    let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
+                    diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from main")));
+                }
                 diags.sort_by_key(|d| (d.span.start, d.span.end));
                 (name.clone(), diags)
             })
@@ -111,6 +132,22 @@ impl Project {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
+    }
+
+    /// Functions reachable from `main` through references. None when `main` is missing or has a syntax error.
+    fn reachable_from_entry(&self, adj: &BTreeMap<String, BTreeSet<String>>) -> Option<BTreeSet<String>> {
+        let entry = self.files.get(ENTRY)?;
+        if !entry.parse_diagnostics.is_empty() {
+            return None;
+        }
+        let mut seen = BTreeSet::new();
+        let mut queue = VecDeque::from([ENTRY.to_string()]);
+        while let Some(name) = queue.pop_front() {
+            if seen.insert(name.clone()) {
+                queue.extend(adj.get(&name).into_iter().flatten().cloned());
+            }
+        }
+        Some(seen)
     }
 
     /// Edges between known functions only.
@@ -253,13 +290,14 @@ mod tests {
             fs::write(p, text).unwrap();
         };
         write("rein.toml", "");
+        write("main.rein", "/** Entry. */\nreturn @merge_pr\n");
         write(
             "merge_pr.rein",
-            "description \"Merge a pull request.\"\ninput ci: choice(\"green\", \"red\") \"CI status\"\n\
+            "/** Merge a pull request.\n * @param ci CI status?\n */\ninput ci: choice(\"green\", \"red\")\n\
              switch ci {\n    case \"green\" { return \"merge\" }\n    case \"red\" { return @ci/fix }\n    default { return @nope }\n}\n",
         );
-        write("ci/fix.rein", "description \"Fix red CI.\"\nreturn @merge_pr\n");
-        write("bad-name.rein", "description \"x\"\nreturn \"y\"\n");
+        write("ci/fix.rein", "/** Fix red CI. */\nreturn @merge_pr\n");
+        write("bad-name.rein", "/** x */\nreturn \"y\"\n");
         fs::create_dir_all(root.join("nested/deeper")).unwrap();
         root
     }
@@ -269,7 +307,7 @@ mod tests {
         let root = temp_project("load");
         let project = Project::load(&root).unwrap();
         let names: Vec<&str> = project.files.keys().map(String::as_str).collect();
-        assert_eq!(names, ["bad-name", "ci/fix", "merge_pr"]);
+        assert_eq!(names, ["bad-name", "ci/fix", "main", "merge_pr"]);
 
         let diags = project.check();
         let merge = &diags["merge_pr"];
@@ -278,28 +316,37 @@ mod tests {
         let fix = &diags["ci/fix"];
         assert!(has(fix, Severity::Warning, "reference cycle: ci/fix -> merge_pr -> ci/fix"), "{fix:?}");
         assert!(has(&diags["bad-name"], Severity::Error, "invalid function file name"));
+        assert!(has(&diags["bad-name"], Severity::Warning, "`bad-name` is not reachable from main"));
+        assert!(!has(fix, Severity::Warning, "not reachable"), "{fix:?}");
+        assert!(project.project_diagnostics().is_empty());
 
-        assert_eq!(project.references().len(), 3);
+        assert_eq!(project.references().len(), 4);
         fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Diagnostics for one in-memory file named `f`.
+    /// Diagnostics for one in-memory file named `f`, in a project with a valid `main`.
     fn check_one(src: &str) -> Vec<Diagnostic> {
         let root = PathBuf::from("/proj");
-        let project = Project::from_sources(root.clone(), vec![(root.join("f.rein"), src.to_string())]);
+        let project = Project::from_sources(
+            root.clone(),
+            vec![
+                (root.join("main.rein"), "/** m */\nreturn @f\n".to_string()),
+                (root.join("f.rein"), src.to_string()),
+            ],
+        );
         project.check().remove("f").unwrap()
     }
 
     #[test]
     fn syntax_error_reports_only_the_syntax_error() {
-        let diags = check_one("description \"d\"\ninput a: bool \"a\"\nif a { return \"1\" }\nreturn )");
+        let diags = check_one("/** d\n * @param a A\n */\ninput a: bool\nif a { return \"1\" }\nreturn )");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].severity, Severity::Error);
     }
 
     #[test]
     fn lex_error_reports_only_the_syntax_error() {
-        let diags = check_one("description \"abc");
+        let diags = check_one("/** abc");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 
@@ -309,8 +356,9 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("f.rein"), "description \"d\"\nreturn @g\nreturn )".to_string()),
-                (root.join("g.rein"), "description \"d\"\nreturn @f\n".to_string()),
+                (root.join("main.rein"), "/** m */\nreturn @f\n".to_string()),
+                (root.join("f.rein"), "/** d */\nreturn @g\nreturn )".to_string()),
+                (root.join("g.rein"), "/** d */\nreturn @f\n".to_string()),
             ],
         );
         let diags = project.check();
@@ -335,7 +383,7 @@ mod tests {
     #[test]
     fn follows_symlinks_and_survives_symlink_loops() {
         let root = temp_project("links");
-        fs::write(root.join("real.rein"), "description \"d\"\nreturn \"x\"\n").unwrap();
+        fs::write(root.join("real.rein"), "/** d */\nreturn \"x\"\n").unwrap();
         std::os::unix::fs::symlink(root.join("real.rein"), root.join("alias.rein")).unwrap();
         std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
         let project = Project::load(&root).unwrap();
@@ -351,10 +399,11 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("a.rein"), "description \"d\"\nreturn @b".to_string()),
-                (root.join("b.rein"), "description \"d\"\nreturn @c".to_string()),
-                (root.join("c.rein"), "description \"d\"\nreturn @a".to_string()),
-                (root.join("self.rein"), "description \"d\"\nreturn @self".to_string()),
+                (root.join("main.rein"), "/** m */\nreturn @a\n".to_string()),
+                (root.join("a.rein"), "/** d */\nreturn @b".to_string()),
+                (root.join("b.rein"), "/** d */\nreturn @c".to_string()),
+                (root.join("c.rein"), "/** d */\nreturn @a".to_string()),
+                (root.join("self.rein"), "/** d */\nreturn @self".to_string()),
             ],
         );
         let diags = project.check();
@@ -366,6 +415,51 @@ mod tests {
             .map(|n| diags[*n].iter().filter(|d| d.message.contains("reference cycle")).count())
             .sum();
         assert_eq!(cycle_count, 3);
+    }
+
+    #[test]
+    fn missing_main_is_a_project_error() {
+        let root = PathBuf::from("/proj");
+        let project = Project::from_sources(root.clone(), vec![(root.join("f.rein"), "/** d */\nreturn \"x\"".into())]);
+        let errs = project.project_diagnostics();
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].severity, Severity::Error);
+        assert_eq!(errs[0].message, "project has no main.rein; it is the agent's entry point");
+        assert_eq!(project.marker_path(), root.join("rein.toml"));
+        // Without main, nothing is reported as unreachable.
+        assert!(!has(&project.check()["f"], Severity::Warning, "not reachable"));
+    }
+
+    #[test]
+    fn unreachable_function_is_a_warning() {
+        let root = PathBuf::from("/proj");
+        let project = Project::from_sources(
+            root.clone(),
+            vec![
+                (root.join("main.rein"), "/** m */\nreturn @used\n".to_string()),
+                (root.join("used.rein"), "/** u */\nreturn @deep/leaf\n".to_string()),
+                (root.join("deep/leaf.rein"), "/** l */\nreturn \"ok\"\n".to_string()),
+                (root.join("orphan.rein"), "/** o */\nreturn \"alone\"\n".to_string()),
+            ],
+        );
+        let diags = project.check();
+        assert!(has(&diags["orphan"], Severity::Warning, "`orphan` is not reachable from main"));
+        assert!(!has(&diags["deep/leaf"], Severity::Warning, "not reachable"));
+        assert!(!has(&diags["used"], Severity::Warning, "not reachable"));
+        assert!(project.project_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn main_with_syntax_error_skips_reachability() {
+        let root = PathBuf::from("/proj");
+        let project = Project::from_sources(
+            root.clone(),
+            vec![
+                (root.join("main.rein"), "/** m */\nreturn )".to_string()),
+                (root.join("orphan.rein"), "/** o */\nreturn \"alone\"\n".to_string()),
+            ],
+        );
+        assert!(!has(&project.check()["orphan"], Severity::Warning, "not reachable"));
     }
 
     #[test]

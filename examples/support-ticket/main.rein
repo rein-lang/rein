@@ -1,0 +1,18 @@
+/**
+ * Decide how the support agent handles a customer ticket.
+ *
+ * @param category What category best fits the ticket?
+ * @param vip Is the customer on the VIP plan?
+ */
+input category: choice("billing", "account", "how_to")
+input vip: bool
+
+if vip {
+    return @escalate
+}
+
+switch category {
+    case "billing" { return @billing/refund }
+    case "account" { return @escalate }
+    default { return @answer/faq }
+}

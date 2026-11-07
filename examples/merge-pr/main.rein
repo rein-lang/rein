@@ -1,0 +1,11 @@
+/**
+ * Decide the next step for a pull request task.
+ *
+ * @param task Which task does the agent do?
+ */
+input task: choice("merge", "security review")
+
+switch task {
+    case "merge" { return @merge_pr }
+    default { return @security/review }
+}

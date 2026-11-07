@@ -1,6 +1,9 @@
-description "Review the code changes in a pull request."
-
-input security_sensitive: bool "Does the PR change authentication, payments, or permissions code?"
+/**
+ * Review the code changes in a pull request.
+ *
+ * @param security_sensitive Does the PR change authentication, payments, or permissions code?
+ */
+input security_sensitive: bool
 
 if security_sensitive {
     return @security/review

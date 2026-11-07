@@ -8,7 +8,7 @@ The flow asks three questions: how severe the alert is, whether customers feel i
 
 | File | Function | Job |
 | --- | --- | --- |
-| `triage.rein` | `triage` | Entry point. Routes the alert. |
+| `main.rein` | `main` | Entry point. Routes the alert. |
 | `page_human.rein` | `page_human` | Pages the on-call engineer. |
 | `runbook/follow.rein` | `runbook/follow` | Runs the known runbook. Pages a human if the fix fails. |
 | `ticket/open.rein` | `ticket/open` | Opens or updates a ticket for non-urgent alerts. |
@@ -17,5 +17,5 @@ The flow asks three questions: how severe the alert is, whether customers feel i
 
 ```sh
 cargo run -p rein -- check examples/incident-triage
-cargo run -p rein -- run triage --root examples/incident-triage
+cargo run -p rein -- run --root examples/incident-triage
 ```

@@ -2,7 +2,7 @@
 
 use crate::diagnostic::Span;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Spanned<T> {
     pub value: T,
     pub span: Span,
@@ -10,9 +10,34 @@ pub struct Spanned<T> {
 
 #[derive(Debug, Clone, Default)]
 pub struct Function {
+    /// Text of the doc block before the first `@` tag. Filled from `doc`.
     pub description: Option<Spanned<String>>,
     pub inputs: Vec<Input>,
     pub body: Vec<Stmt>,
+    /// The `/** */` doc block at the top of the file. `None` when the file has none.
+    pub doc: Option<DocBlock>,
+}
+
+/// The parsed `/** */` doc block.
+#[derive(Debug, Clone, Default)]
+pub struct DocBlock {
+    /// Span of the whole comment, from `/**` to `*/`.
+    pub span: Span,
+    /// Text before the first `@` line. Empty when there is none.
+    pub description: Spanned<String>,
+    /// `@param` tags, in file order.
+    pub params: Vec<ParamTag>,
+    /// Tags other than `@param`, without the `@`. Each one gets a warning.
+    pub unknown_tags: Vec<Spanned<String>>,
+}
+
+/// One `@param <name> [-] <text>` tag.
+#[derive(Debug, Clone)]
+pub struct ParamTag {
+    /// The input name. Empty when the tag has no name.
+    pub name: Spanned<String>,
+    /// The question after the name, joined over continuation lines. Empty when none.
+    pub text: Spanned<String>,
 }
 
 impl Function {
@@ -25,6 +50,7 @@ impl Function {
 pub struct Input {
     pub name: Spanned<String>,
     pub ty: InputType,
+    /// The `@param` text for this input. Empty, at the name span, when there is no tag.
     pub description: Spanned<String>,
     pub span: Span,
 }

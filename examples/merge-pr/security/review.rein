@@ -1,6 +1,9 @@
-description "Review changes that touch security-sensitive code."
-
-input secrets_added: bool "Does the PR add or change a secret, token, or key?"
+/**
+ * Review changes that touch security-sensitive code.
+ *
+ * @param secrets_added Does the PR add or change a secret, token, or key?
+ */
+input secrets_added: bool
 
 if secrets_added {
     return "Stop. Remove the secret from the diff. Rotate the secret. Then run merge_pr again."

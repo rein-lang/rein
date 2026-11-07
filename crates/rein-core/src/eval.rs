@@ -162,20 +162,20 @@ mod tests {
 
     #[test]
     fn text_return() {
-        let f = func("description \"d\"\nreturn \"done\"");
+        let f = func("/** d */\nreturn \"done\"");
         assert_eq!(run(&f, &inputs(&[])), Ok(Outcome::Text("done".into())));
     }
 
     #[test]
     fn ref_return() {
-        let f = func("description \"d\"\nreturn @ci/fix");
+        let f = func("/** d */\nreturn @ci/fix");
         assert_eq!(run(&f, &inputs(&[])), Ok(Outcome::Ref("ci/fix".into())));
     }
 
     #[test]
     fn and_does_not_need_right_side_when_left_is_false() {
         let f = func(
-            "description \"d\"\ninput a: bool \"a\"\ninput b: bool \"b\"\nif a and b { return \"both\" }\nreturn \"neither\"",
+            "/** d\n * @param a A\n * @param b B\n */\ninput a: bool\ninput b: bool\nif a and b { return \"both\" }\nreturn \"neither\"",
         );
         assert_eq!(run(&f, &inputs(&[("a", "false")])), Ok(Outcome::Text("neither".into())));
         assert_eq!(run(&f, &inputs(&[("a", "true")])), Ok(Outcome::NeedInput("b".into())));
@@ -184,14 +184,14 @@ mod tests {
     #[test]
     fn or_short_circuits() {
         let f = func(
-            "description \"d\"\ninput a: bool \"a\"\ninput b: bool \"b\"\nif a or b { return \"either\" }\nreturn \"none\"",
+            "/** d\n * @param a A\n * @param b B\n */\ninput a: bool\ninput b: bool\nif a or b { return \"either\" }\nreturn \"none\"",
         );
         assert_eq!(run(&f, &inputs(&[("a", "true")])), Ok(Outcome::Text("either".into())));
     }
 
     #[test]
     fn invalid_bool_value_is_error() {
-        let f = func("description \"d\"\ninput a: bool \"a\"\nif a { return \"1\" }\nreturn \"2\"");
+        let f = func("/** d\n * @param a A\n */\ninput a: bool\nif a { return \"1\" }\nreturn \"2\"");
         let err = run(&f, &inputs(&[("a", "maybe")])).unwrap_err();
         assert!(err.contains("expected true, false, yes or no"), "{err}");
     }
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn invalid_choice_value_is_error() {
         let f = func(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nif c == \"x\" { return \"1\" }\nreturn \"2\"",
+            "/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nif c == \"x\" { return \"1\" }\nreturn \"2\"",
         );
         let err = run(&f, &inputs(&[("c", "purple")])).unwrap_err();
         assert!(err.contains("expected one of: `x`, `y`"), "{err}");
@@ -207,14 +207,14 @@ mod tests {
 
     #[test]
     fn unknown_input_is_error() {
-        let f = func("description \"d\"\nreturn \"x\"");
+        let f = func("/** d */\nreturn \"x\"");
         assert_eq!(run(&f, &inputs(&[("zzz", "1")])), Err("unknown input `zzz`".into()));
     }
 
     #[test]
     fn switch_falls_through_to_default() {
         let f = func(
-            "description \"d\"\ninput c: choice(\"green\", \"red\", \"pending\") \"c\"\n\
+            "/** d\n * @param c C\n */\ninput c: choice(\"green\", \"red\", \"pending\")\n\
              switch c {\n case \"green\" { return \"go\" }\n case \"red\" { return @ci/fix }\n default { return \"wait\" }\n}",
         );
         assert_eq!(run(&f, &inputs(&[("c", "green")])), Ok(Outcome::Text("go".into())));
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn not_equal_comparison() {
         let f = func(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nif c != \"x\" { return \"not x\" }\nreturn \"x\"",
+            "/** d\n * @param c C\n */\ninput c: choice(\"x\", \"y\")\nif c != \"x\" { return \"not x\" }\nreturn \"x\"",
         );
         assert_eq!(run(&f, &inputs(&[("c", "y")])), Ok(Outcome::Text("not x".into())));
         assert_eq!(run(&f, &inputs(&[("c", "x")])), Ok(Outcome::Text("x".into())));
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn yes_no_and_case_insensitive_bools() {
-        let f = func("description \"d\"\ninput a: bool \"a\"\nif a { return \"t\" }\nreturn \"f\"");
+        let f = func("/** d\n * @param a A\n */\ninput a: bool\nif a { return \"t\" }\nreturn \"f\"");
         assert_eq!(run(&f, &inputs(&[("a", "YES")])), Ok(Outcome::Text("t".into())));
         assert_eq!(run(&f, &inputs(&[("a", "No")])), Ok(Outcome::Text("f".into())));
         assert_eq!(run(&f, &inputs(&[("a", "True")])), Ok(Outcome::Text("t".into())));

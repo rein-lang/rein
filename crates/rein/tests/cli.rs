@@ -38,7 +38,27 @@ fn check_examples_have_no_errors() {
 }
 
 #[test]
-fn run_without_input_asks_for_it() {
+fn run_without_function_runs_main() {
+    let out = rein(&["run", "--root", "examples/merge-pr", "--json"]);
+    assert_eq!(code(&out), 2);
+    let v = json(&out);
+    assert_eq!(v["kind"], "need_input");
+    assert_eq!(v["input"]["name"], "task");
+    assert_eq!(v["input"]["options"], serde_json::json!(["merge", "security review"]));
+}
+
+#[test]
+fn run_merge_task_returns_ref_to_merge_pr() {
+    let out = rein(&["run", "--root", "examples/merge-pr", "--set", "task=merge", "--json"]);
+    assert_eq!(code(&out), 0);
+    let v = json(&out);
+    assert_eq!(v["kind"], "ref");
+    assert_eq!(v["function"], "merge_pr");
+    assert_eq!(v["inputs"][0]["name"], "docs_only");
+}
+
+#[test]
+fn run_merge_pr_without_input_asks_for_it() {
     let out = rein(&["run", "merge_pr", "--root", "examples/merge-pr", "--json"]);
     assert_eq!(code(&out), 2);
     let v = json(&out);
@@ -67,6 +87,15 @@ fn run_red_ci_returns_ref() {
 }
 
 #[test]
+fn describe_defaults_to_main() {
+    let out = rein(&["describe", "--root", "examples/merge-pr"]);
+    assert_eq!(code(&out), 0);
+    let v = json(&out);
+    assert_eq!(v["name"], "main");
+    assert_eq!(v["inputs"][0]["name"], "task");
+}
+
+#[test]
 fn describe_prints_schema() {
     let out = rein(&["describe", "merge_pr", "--root", "examples/merge-pr"]);
     assert_eq!(code(&out), 0);
@@ -77,10 +106,20 @@ fn describe_prints_schema() {
 }
 
 #[test]
+fn graph_draws_main_as_entry() {
+    let out = rein(&["graph", "--root", "examples/merge-pr"]);
+    assert_eq!(code(&out), 0);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("main([\"main\"])"), "{text}");
+    assert!(text.contains("main --> merge_pr"), "{text}");
+}
+
+#[test]
 fn check_reports_errors_in_broken_project() {
     let root = temp_dir("broken");
     fs::write(root.join("rein.toml"), "").unwrap();
-    fs::write(root.join("bad.rein"), "description \"x\"\nreturn @missing\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nreturn @bad\n").unwrap();
+    fs::write(root.join("bad.rein"), "/** x */\nreturn @missing\n").unwrap();
 
     let out = rein(&["check", root.to_str().unwrap()]);
     assert_eq!(code(&out), 1);
@@ -98,11 +137,47 @@ fn check_reports_errors_in_broken_project() {
 fn run_refuses_function_with_errors() {
     let root = temp_dir("refuse");
     fs::write(root.join("rein.toml"), "").unwrap();
-    fs::write(root.join("bad.rein"), "description \"x\"\nreturn @missing\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nreturn \"ok\"\n").unwrap();
+    fs::write(root.join("bad.rein"), "/** x */\nreturn @missing\n").unwrap();
 
     let out = rein(&["run", "bad", "--root", root.to_str().unwrap(), "--json"]);
     assert_eq!(code(&out), 1);
     assert_eq!(json(&out)["kind"], "error");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn missing_main_is_a_project_error() {
+    let root = temp_dir("nomain");
+    fs::write(root.join("rein.toml"), "").unwrap();
+    fs::write(root.join("other.rein"), "/** Other. */\nreturn \"x\"\n").unwrap();
+
+    let out = rein(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let marker = root.join("rein.toml").display().to_string();
+    let expected = format!("{marker}:1:1: error: project has no main.rein; it is the agent's entry point");
+    assert!(stdout.contains(&expected) || stdout.contains("rein.toml:1:1: error: project has no main.rein"), "{stdout}");
+
+    let out = rein(&["run", "--root", root.to_str().unwrap(), "--json"]);
+    assert_eq!(code(&out), 1);
+    assert_eq!(json(&out)["message"], "project has no main.rein; it is the agent's entry point");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn unreachable_function_is_a_warning() {
+    let root = temp_dir("orphan");
+    fs::write(root.join("rein.toml"), "").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nreturn \"ok\"\n").unwrap();
+    fs::write(root.join("orphan.rein"), "/** Orphan. */\nreturn \"x\"\n").unwrap();
+
+    let out = rein(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 0);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("warning: `orphan` is not reachable from main"), "{stdout}");
 
     fs::remove_dir_all(&root).unwrap();
 }

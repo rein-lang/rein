@@ -2,6 +2,7 @@
 
 use crate::ast::{Case, Expr, Function, Input, InputType, ReturnValue, Spanned, Stmt};
 use crate::diagnostic::{Diagnostic, Span};
+use crate::doc::parse_doc;
 use crate::lexer::{lex, Tok};
 
 /// Parses one function file. Stops at the first error and returns the
@@ -49,6 +50,9 @@ impl Parser {
     }
 
     fn unexpected(&self, expected: &str) -> Diagnostic {
+        if matches!(self.peek(), Tok::Doc(_)) {
+            return Diagnostic::error(self.span(), "the doc comment must be at the top of the file");
+        }
         Diagnostic::error(
             self.span(),
             format!("expected {expected}, found {}", self.peek().describe()),
@@ -83,12 +87,17 @@ impl Parser {
 
     /// Fills `f` in place, so a failed parse keeps what came before the error.
     fn file(&mut self, f: &mut Function) -> Result<(), Diagnostic> {
-        if *self.peek() == Tok::Description {
-            self.bump();
-            f.description = Some(self.string("description string")?);
+        if let Tok::Doc(inner) = self.peek().clone() {
+            let span = self.bump();
+            // The text starts after `/**`.
+            let mut doc = parse_doc(&inner, span.start + 3);
+            doc.span = span;
+            f.description = Some(doc.description.clone());
+            f.doc = Some(doc);
         }
         while *self.peek() == Tok::Input {
-            f.inputs.push(self.input()?);
+            let input = self.input(f)?;
+            f.inputs.push(input);
         }
         while *self.peek() != Tok::Eof {
             f.body.push(self.stmt()?);
@@ -96,13 +105,19 @@ impl Parser {
         Ok(())
     }
 
-    fn input(&mut self) -> Result<Input, Diagnostic> {
+    fn input(&mut self, f: &Function) -> Result<Input, Diagnostic> {
         let start = self.bump();
         let name = self.ident("input name")?;
         self.expect(Tok::Colon, "`:`")?;
         let ty = self.input_type()?;
-        let description = self.string("input description")?;
-        Ok(Input { span: start.to(description.span), name, ty, description })
+        let span = start.to(self.last_span());
+        // The question comes from the matching `@param`. A missing one is empty; the checker reports it.
+        let description = f
+            .doc
+            .as_ref()
+            .and_then(|d| d.params.iter().find(|p| p.name.value == name.value))
+            .map_or_else(|| Spanned { value: String::new(), span: name.span }, |p| p.text.clone());
+        Ok(Input { span, name, ty, description })
     }
 
     fn input_type(&mut self) -> Result<InputType, Diagnostic> {
@@ -262,10 +277,14 @@ pub(crate) mod tests {
 
     pub(crate) const SAMPLE: &str = r#"
 // merge_pr.rein
-description "Decide whether a pull request can be merged."
-
-input docs_only: bool "Does the PR change only documentation files?"
-input ci: choice("green", "red", "pending") "What is the CI status of the PR?"
+/**
+ * Decide whether a pull request can be merged.
+ *
+ * @param docs_only Does the PR change only documentation files?
+ * @param ci - What is the CI status of the PR?
+ */
+input docs_only: bool
+input ci: choice("green", "red", "pending")
 
 if docs_only {
     return "approved"
@@ -285,6 +304,8 @@ switch ci {
         assert_eq!(f.description.unwrap().value, "Decide whether a pull request can be merged.");
         assert_eq!(f.inputs.len(), 2);
         assert_eq!(f.inputs[0].ty, InputType::Bool);
+        assert_eq!(f.inputs[0].description.value, "Does the PR change only documentation files?");
+        assert_eq!(f.inputs[1].description.value, "What is the CI status of the PR?");
         let opts = f.inputs[1].ty.options().unwrap();
         assert_eq!(opts, ["green", "red", "pending"]);
         assert_eq!(f.body.len(), 2);
@@ -297,17 +318,20 @@ switch ci {
 
     #[test]
     fn parses_else_if_logic_and_escapes() {
-        let src = r#"description "Escapes: \"quoted\" and \\ and \n and ünïcode"
-input a: bool "a"
-input b: bool "b"
-input c: choice("x", "y",) "c"
+        let src = r#"/** Escapes: \"quoted\" and \\ and \n and ünïcode
+ * @param a A.
+ * @param b B.
+ * @param c C.
+ */
+input a: bool
+input b: bool
+input c: choice("x", "y",)
 if not (a and b) or c == "x" { return "one" }
 else if a { return "two" }
 else { return "three" }
 "#;
         let (f, diags) = parse(src);
         assert!(diags.is_empty(), "{diags:?}");
-        assert_eq!(f.description.unwrap().value, "Escapes: \"quoted\" and \\ and \n and ünïcode");
         assert_eq!(f.inputs.len(), 3);
         let Stmt::If { cond, otherwise: Some(else_branch), .. } = &f.body[0] else {
             panic!("expected if")
@@ -317,8 +341,16 @@ else { return "three" }
     }
 
     #[test]
+    fn input_without_param_has_empty_description() {
+        let (f, diags) = parse("/** d */\ninput a: bool\nreturn \"x\"");
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(f.inputs[0].description.value, "");
+        assert_eq!(f.inputs[0].description.span, f.inputs[0].name.span);
+    }
+
+    #[test]
     fn return_without_value_is_one_error_with_partial_tree() {
-        let (f, diags) = parse("description \"x\"\ninput a: bool \"a\"\nreturn");
+        let (f, diags) = parse("/** x */\ninput a: bool\nreturn");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].message.contains("expected string or `@function`"), "{}", diags[0].message);
         assert!(f.description.is_some());
@@ -329,7 +361,7 @@ else { return "three" }
     #[test]
     fn default_must_be_last_switch_branch() {
         let (_, diags) = parse(
-            "description \"d\"\ninput c: choice(\"x\", \"y\") \"c\"\nswitch c { default { return \"a\" } case \"x\" { return \"b\" } }",
+            "/** d */\ninput c: choice(\"x\", \"y\")\nswitch c { default { return \"a\" } case \"x\" { return \"b\" } }",
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
@@ -340,9 +372,29 @@ else { return "three" }
     }
 
     #[test]
+    fn doc_comment_not_at_top_is_an_error() {
+        for src in [
+            "input a: bool\n/** x */\nreturn \"x\"",
+            "/** d */\nreturn \"x\"\n/** y */",
+            "/** d */\n/** again */\nreturn \"x\"",
+        ] {
+            let (_, diags) = parse(src);
+            assert_eq!(diags.len(), 1, "{src}: {diags:?}");
+            assert_eq!(diags[0].message, "the doc comment must be at the top of the file", "{src}");
+        }
+    }
+
+    #[test]
     fn lex_error_gives_one_error_and_no_tree() {
-        let (f, diags) = parse("description \"abc");
+        let (f, diags) = parse("/** abc");
         assert_eq!(diags.len(), 1);
         assert!(f.description.is_none());
+        assert!(f.doc.is_none());
+    }
+
+    #[test]
+    fn old_description_keyword_is_a_syntax_error() {
+        let (_, diags) = parse("description \"d\"\nreturn \"x\"");
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }

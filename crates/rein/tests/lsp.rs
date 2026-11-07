@@ -143,7 +143,8 @@ fn temp_project(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("rein.toml"), "").unwrap();
-    fs::write(root.join("target.rein"), "description \"Target function does X.\"\nreturn \"done\"\n").unwrap();
+    fs::write(root.join("target.rein"), "/** Target function does X. */\nreturn \"done\"\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nreturn @target\n").unwrap();
     root
 }
 
@@ -169,14 +170,15 @@ fn diagnostics_hover_and_shutdown() {
 
     // Unknown @ref: the error arrives as a diagnostic.
     let caller = uri_of(&root, "caller.rein");
-    server.open(&caller, "description \"Caller.\"\nreturn @nope\n");
+    server.open(&caller, "/** Caller. */\nreturn @nope\n");
     let diags = server.wait_diagnostics(&caller, |d| has_message(d, "`@nope`"));
-    assert_eq!(diags[0]["severity"], 1);
-    assert_eq!(diags[0]["source"], "rein");
+    let error = diags.iter().find(|d| d["severity"] == 1).expect("error diagnostic");
+    assert!(error["message"].as_str().unwrap().contains("`@nope`"));
+    assert_eq!(error["source"], "rein");
 
     // Hover on a valid @ref shows the target's description.
     let start = uri_of(&root, "start.rein");
-    server.open(&start, "description \"Start.\"\nreturn @target\n");
+    server.open(&start, "/** Start. */\nreturn @target\n");
     let hover = server.request(
         2,
         "textDocument/hover",
@@ -200,13 +202,50 @@ fn fixing_one_file_clears_errors_in_another() {
     initialize(&mut server);
 
     let start = uri_of(&root, "start.rein");
-    server.open(&start, "description \"Start.\"\nreturn @fresh\n");
+    server.open(&start, "/** Start. */\nreturn @fresh\n");
     server.wait_diagnostics(&start, |d| has_message(d, "`@fresh`"));
 
     // Creating `fresh` in an open buffer must clear the error in `start`.
-    server.open(&uri_of(&root, "fresh.rein"), "description \"Fresh.\"\nreturn \"ok\"\n");
-    let cleared = server.wait_diagnostics(&start, |d| d.is_empty());
-    assert!(cleared.is_empty());
+    server.open(&uri_of(&root, "fresh.rein"), "/** Fresh. */\nreturn \"ok\"\n");
+    let cleared = server.wait_diagnostics(&start, |d| !has_message(d, "`@fresh`"));
+    assert!(!has_message(&cleared, "`@fresh`"));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+
+}
+#[test]
+fn hover_on_param_name_shows_the_input_type() {
+    let root = temp_project("param");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, "/** Start.\n * @param docs_only Does it change docs?\n */\ninput docs_only: bool\nif docs_only { return \"x\" }\nreturn \"y\"\n");
+    let hover = server.request(
+        2,
+        "textDocument/hover",
+        json!({"textDocument": {"uri": start}, "position": {"line": 1, "character": 12}}),
+    );
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("docs_only: bool"), "{text}");
+    assert!(text.contains("Does it change docs?"), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn missing_main_is_reported_on_an_open_file() {
+    let root = temp_project("nomain");
+    fs::remove_file(root.join("main.rein")).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let target = uri_of(&root, "target.rein");
+    server.open(&target, "/** Target function does X. */\nreturn \"done\"\n");
+    let diags = server.wait_diagnostics(&target, |d| has_message(d, "project has no main.rein"));
+    assert!(has_message(&diags, "project has no main.rein"));
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();

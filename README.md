@@ -10,10 +10,14 @@ Rein is a language for agent flows. Other tools manage the harness or a graph th
 
 ```rein
 // merge_pr.rein
-description "Decide whether a pull request can be merged."
-
-input docs_only: bool "Does the PR change only documentation files?"
-input ci: choice("green", "red", "pending") "What is the CI status of the PR?"
+/**
+ * Decide whether a pull request can be merged.
+ *
+ * @param docs_only Does the PR change only documentation files?
+ * @param ci What is the CI status of the PR?
+ */
+input docs_only: bool
+input ci: choice("green", "red", "pending")
 
 if docs_only {
     return "approved"
@@ -42,20 +46,27 @@ flowchart TD
 The agent runs one step at a time. Output below is the intended shape. The format can change during the PoC.
 
 ```text
-$ rein run merge_pr
-need input docs_only (bool): Does the PR change only documentation files?
+$ rein run
+need input task (choice: merge, security review): Which task does the agent do?
+hint: rerun with --set task=<value>
 # exit 2
+
+$ rein run --set task=merge
+@merge_pr
+  Decide whether a pull request can be merged.
+  docs_only (bool): Does the PR change only documentation files?
+  ci (choice: green, red, pending): What is the CI status of the PR?
 
 $ rein run merge_pr --set docs_only=no --set ci=green
 @review_code
-Review the code changes in a pull request.
-input security_sensitive (bool): Does the PR change authentication, payments, or permissions code?
+  Review the code changes in a pull request.
+  security_sensitive (bool): Does the PR change authentication, payments, or permissions code?
 
 $ rein run review_code --set security_sensitive=no
 Read the diff. Leave comments for bugs and style issues. Approve when the review is clean. Then run merge_pr again.
 ```
 
-The agent asks the user only for the inputs the path needs. It follows each `@reference` by running that function next.
+`rein run` with no function runs `main`. Every project has a `main.rein` at its root. It is the agent's entry point. The agent asks the user only for the inputs the path needs. It follows each `@reference` by running that function next.
 
 ## Quickstart
 

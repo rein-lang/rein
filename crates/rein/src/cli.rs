@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use rein_core::ast::{Function, Input};
 use rein_core::diagnostic::{line_col, Severity};
 use rein_core::eval::{self, Outcome};
-use rein_core::project::Project;
+use rein_core::project::{Project, ENTRY};
 use serde_json::{json, Value};
 
 const OK: u8 = 0;
@@ -49,7 +49,7 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
         Err(msg) => return fail(json, &msg),
     };
     let Some(sf) = project.get(function) else {
-        return fail(json, &format!("unknown function `{function}`"));
+        return fail(json, &unknown_function(&project, function));
     };
     let errors: Vec<Row> = rows(&project, Some(sf.path.as_path()))
         .into_iter()
@@ -93,7 +93,7 @@ pub fn describe(function: &str, root: Option<PathBuf>) -> u8 {
         Err(msg) => return fail(false, &msg),
     };
     let Some(sf) = project.get(function) else {
-        return fail(false, &format!("unknown function `{function}`"));
+        return fail(false, &unknown_function(&project, function));
     };
     let schema = json!({
         "name": function,
@@ -110,7 +110,14 @@ pub fn graph(root: Option<PathBuf>) -> u8 {
         Err(msg) => return fail(false, &msg),
     };
     let mut lines = vec!["flowchart TD".to_string()];
-    lines.extend(project.files.keys().map(|n| format!("    {}[\"{n}\"]", node_id(n))));
+    // The entry point is drawn as a stadium, so it stands out.
+    lines.extend(project.files.keys().map(|n| {
+        if n == ENTRY {
+            format!("    {}([\"{n}\"])", node_id(n))
+        } else {
+            format!("    {}[\"{n}\"]", node_id(n))
+        }
+    }));
     lines.extend(
         project
             .references()
@@ -119,6 +126,14 @@ pub fn graph(root: Option<PathBuf>) -> u8 {
     );
     println!("{}", lines.join("\n"));
     OK
+}
+
+/// Error text for a function name that is not in the project. A missing `main` gets the project error.
+fn unknown_function(project: &Project, function: &str) -> String {
+    match project.project_diagnostics().first() {
+        Some(d) if function == ENTRY => d.message.clone(),
+        _ => format!("unknown function `{function}`"),
+    }
 }
 
 /// Description text of a function, or empty when it has none.
@@ -140,6 +155,7 @@ fn load(root: Option<PathBuf>) -> Result<Project, String> {
 }
 
 /// Diagnostics of the project, optionally for one file only, sorted by file then position.
+/// Project-level diagnostics (such as a missing `main.rein`) show only for the whole project.
 fn rows(project: &Project, only: Option<&Path>) -> Vec<Row> {
     let mut rows = Vec::new();
     for (name, diags) in project.check() {
@@ -150,20 +166,29 @@ fn rows(project: &Project, only: Option<&Path>) -> Vec<Row> {
         let file = display_path(&sf.path);
         for d in diags {
             let (line, col) = line_col(&sf.text, d.span.start);
-            let label = match d.severity {
-                Severity::Error => "error",
-                Severity::Warning => "warning",
-            };
-            rows.push(Row {
-                line: format!("{file}:{}:{}: {label}: {}", line + 1, col + 1, d.message),
-                start: d.span.start,
-                severity: d.severity,
-                file: file.clone(),
-            });
+            rows.push(row(&file, line, col, &d));
         }
+    }
+    if only.is_none() {
+        let file = display_path(&project.marker_path());
+        rows.extend(project.project_diagnostics().iter().map(|d| row(&file, 0, 0, d)));
     }
     rows.sort_by(|a, b| (&a.file, a.start).cmp(&(&b.file, b.start)));
     rows
+}
+
+/// One printed row. `line` and `col` are 0-based.
+fn row(file: &str, line: usize, col: usize, d: &rein_core::diagnostic::Diagnostic) -> Row {
+    let label = match d.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+    };
+    Row {
+        line: format!("{file}:{}:{}: {label}: {}", line + 1, col + 1, d.message),
+        start: d.span.start,
+        severity: d.severity,
+        file: file.to_string(),
+    }
 }
 
 /// Path relative to the working directory when it lies under it.
