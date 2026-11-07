@@ -76,6 +76,14 @@ impl InputType {
             InputType::Choice(o) => Some(o.iter().map(|s| s.value.as_str()).collect()),
         }
     }
+
+    /// The type as TypeScript writes it: `boolean`, or `"a" | "b"`.
+    pub fn ts_type(&self) -> String {
+        match self {
+            InputType::Bool => "boolean".to_string(),
+            InputType::Choice(o) => o.iter().map(|s| format!("\"{}\"", s.value)).collect::<Vec<_>>().join(" | "),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

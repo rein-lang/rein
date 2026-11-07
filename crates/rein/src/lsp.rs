@@ -3,19 +3,19 @@
 //! Every request rebuilds the project from disk plus the open buffers. That is slow on big
 //! projects, which is fine for the proof of concept.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, CompletionTextEdit, Diagnostic,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    FileChangeType, Hover, HoverContents, HoverProviderCapability, Location, MarkupContent,
+    Hover, HoverContents, HoverProviderCapability, Location, MarkupContent,
     MarkupKind, OneOf, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
 };
 use rein_core::ast::{Function, Import, Input};
 use rein_core::diagnostic::{Diagnostic as ReinDiagnostic, Severity, Span};
@@ -23,7 +23,7 @@ use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
 use serde_json::Value;
 
-use crate::cli::{description, type_label};
+use crate::cli::description;
 
 /// Open editor buffers by document URI. They replace the files on disk.
 type Docs = HashMap<Url, String>;
@@ -64,6 +64,8 @@ fn capabilities() -> ServerCapabilities {
 
 fn main_loop(connection: &Connection) -> BoxResult<()> {
     let mut docs = Docs::new();
+    // Every URI that has a diagnostics list from us. A file that leaves its project gets an empty one.
+    let mut published = BTreeSet::new();
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
@@ -76,7 +78,7 @@ fn main_loop(connection: &Connection) -> BoxResult<()> {
                 if note.method == "exit" {
                     return Ok(());
                 }
-                handle_notification(connection, &mut docs, note)?;
+                handle_notification(connection, &mut docs, &mut published, note)?;
             }
             Message::Response(_) => {}
         }
@@ -103,7 +105,12 @@ fn handle_request(docs: &Docs, req: Request) -> Response {
     }
 }
 
-fn handle_notification(connection: &Connection, docs: &mut Docs, note: Notification) -> BoxResult<()> {
+fn handle_notification(
+    connection: &Connection,
+    docs: &mut Docs,
+    published: &mut BTreeSet<Url>,
+    note: Notification,
+) -> BoxResult<()> {
     match note.method.as_str() {
         "textDocument/didOpen" => {
             let Ok(p) = serde_json::from_value::<DidOpenTextDocumentParams>(note.params) else {
@@ -111,7 +118,7 @@ fn handle_notification(connection: &Connection, docs: &mut Docs, note: Notificat
             };
             let uri = p.text_document.uri;
             docs.insert(uri.clone(), p.text_document.text);
-            publish_for(connection, docs, &uri)
+            refresh(connection, docs, published, &uri)
         }
         "textDocument/didChange" => {
             let Ok(p) = serde_json::from_value::<DidChangeTextDocumentParams>(note.params) else {
@@ -122,30 +129,27 @@ fn handle_notification(connection: &Connection, docs: &mut Docs, note: Notificat
             if let Some(change) = p.content_changes.into_iter().last() {
                 docs.insert(uri.clone(), change.text);
             }
-            publish_for(connection, docs, &uri)
+            refresh(connection, docs, published, &uri)
         }
         "textDocument/didSave" => {
             let Ok(p) = serde_json::from_value::<DidSaveTextDocumentParams>(note.params) else {
                 return Ok(());
             };
-            publish_for(connection, docs, &p.text_document.uri)
+            refresh(connection, docs, published, &p.text_document.uri)
         }
         "textDocument/didClose" => {
             let Ok(p) = serde_json::from_value::<DidCloseTextDocumentParams>(note.params) else {
                 return Ok(());
             };
             docs.remove(&p.text_document.uri);
-            publish_for(connection, docs, &p.text_document.uri)
+            refresh(connection, docs, published, &p.text_document.uri)
         }
         "workspace/didChangeWatchedFiles" => {
             let Ok(p) = serde_json::from_value::<DidChangeWatchedFilesParams>(note.params) else {
                 return Ok(());
             };
             for event in p.changes {
-                if event.typ == FileChangeType::DELETED {
-                    send_diagnostics(connection, event.uri.clone(), Vec::new())?;
-                }
-                publish_for(connection, docs, &event.uri)?;
+                refresh(connection, docs, published, &event.uri)?;
             }
             Ok(())
         }
@@ -153,34 +157,43 @@ fn handle_notification(connection: &Connection, docs: &mut Docs, note: Notificat
     }
 }
 
-/// Re-checks the project that holds `uri`, then publishes diagnostics for every file in it.
-/// Clean files get an empty list, so fixed errors clear.
-fn publish_for(connection: &Connection, docs: &Docs, uri: &Url) -> BoxResult<()> {
-    let Some(path) = doc_path(uri) else { return Ok(()) };
-    let project = build_project(docs, &Project::find_root(&path));
-    let diags = project.check();
-    let mut lists: Vec<(Url, Vec<Diagnostic>)> = Vec::new();
-    for (name, sf) in &project.files {
-        let Some(file_uri) = uri_for(docs, &sf.path) else { continue };
-        let list: Vec<Diagnostic> = diags
-            .get(name)
-            .map(|ds| ds.iter().map(|d| to_lsp(&sf.text, d)).collect())
-            .unwrap_or_default();
-        lists.push((file_uri, list));
-    }
-    // The client does not open rein.toml, so project errors go on an open file of the project.
-    // Without one, they go on the file that changed.
-    let extra: Vec<Diagnostic> = project.project_diagnostics().iter().map(|d| to_lsp("", d)).collect();
-    if !extra.is_empty() {
-        let open = lists.iter().position(|(u, _)| docs.contains_key(u));
-        match open.or_else(|| lists.iter().position(|(u, _)| u == uri)) {
-            Some(i) => lists[i].1.extend(extra),
-            None => lists.push((uri.clone(), extra)),
+/// Re-checks the projects that hold `changed` and every file published so far. Then it publishes.
+/// A file gets diagnostics from the project its own path resolves to. A file that is no longer in
+/// such a project gets an empty list, so its errors clear.
+fn refresh(connection: &Connection, docs: &Docs, published: &mut BTreeSet<Url>, changed: &Url) -> BoxResult<()> {
+    let Some(path) = doc_path(changed) else { return Ok(()) };
+    let mut roots: BTreeSet<PathBuf> = published.iter().filter_map(doc_path).map(|p| Project::find_root(&p)).collect();
+    roots.insert(Project::find_root(&path));
+    let mut lists: BTreeMap<Url, Vec<Diagnostic>> = BTreeMap::new();
+    for root in roots {
+        let project = build_project(docs, &root);
+        let diags = project.check();
+        for (name, sf) in &project.files {
+            if Project::find_root(&sf.path) != root {
+                continue;
+            }
+            let Some(file_uri) = uri_for(docs, &sf.path) else { continue };
+            let list: Vec<Diagnostic> = diags
+                .get(name)
+                .map(|ds| ds.iter().map(|d| to_lsp(&sf.text, d)).collect())
+                .unwrap_or_default();
+            lists.insert(file_uri, list);
+        }
+        // The client does not open rein.toml, so project errors go on an open file of the project.
+        // Without one, they go on the file that changed.
+        let extra: Vec<Diagnostic> = project.project_diagnostics().iter().map(|d| to_lsp("", d)).collect();
+        if !extra.is_empty() {
+            let open = lists.keys().find(|u| docs.contains_key(u)).cloned();
+            lists.entry(open.unwrap_or_else(|| changed.clone())).or_default().extend(extra);
         }
     }
-    for (file_uri, list) in lists {
-        send_diagnostics(connection, file_uri, list)?;
+    for stale in published.iter().filter(|u| !lists.contains_key(*u)) {
+        send_diagnostics(connection, stale.clone(), Vec::new())?;
     }
+    for (file_uri, list) in &lists {
+        send_diagnostics(connection, file_uri.clone(), list.clone())?;
+    }
+    *published = lists.into_keys().collect();
     Ok(())
 }
 
@@ -192,12 +205,16 @@ fn send_diagnostics(connection: &Connection, uri: Url, diagnostics: Vec<Diagnost
 }
 
 /// Project under `root`: files on disk, with open buffers replacing their disk copies.
+/// A buffer in a nested project is left out, as its file is left out of this one.
 fn build_project(docs: &Docs, root: &Path) -> Project {
     let mut by_path: BTreeMap<PathBuf, String> = BTreeMap::new();
     if let Ok(disk) = Project::load(root) {
         by_path.extend(disk.files.into_values().map(|sf| (sf.path, sf.text)));
     }
-    by_path.extend(docs.iter().filter_map(|(uri, text)| Some((doc_path(uri)?, text.clone()))));
+    by_path.extend(docs.iter().filter_map(|(uri, text)| {
+        let path = doc_path(uri)?;
+        (Project::find_root(&path) == root).then(|| (path, text.clone()))
+    }));
     Project::from_sources(root.to_path_buf(), by_path.into_iter().collect())
 }
 
@@ -386,16 +403,17 @@ fn target_location(docs: &Docs, project: &Project, target: &str) -> Option<Locat
 fn completion(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
     let (project, name) = locate(docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
-    let before = line_before(&sf.text, offset(&sf.text, p.position));
+    let off = offset(&sf.text, p.position);
+    let before = line_before(&sf.text, off);
     let items: Vec<CompletionItem> = if in_import_path(before) {
-        import_path_items(&project, &name)
+        import_path_completions(&sf.text, off, &project, &name)
     } else if after_return(before) {
         return_items(&project, &name)
     } else {
         let inputs = sf.function.inputs.iter().map(|i| CompletionItem {
             label: i.name.value.clone(),
             kind: Some(CompletionItemKind::VARIABLE),
-            detail: Some(type_label(&i.ty)),
+            detail: Some(i.ty.ts_type()),
             ..Default::default()
         });
         let keywords = KEYWORDS.iter().map(|k| CompletionItem {
@@ -406,6 +424,26 @@ fn completion(docs: &Docs, p: &TextDocumentPositionParams) -> Option<Value> {
         inputs.chain(keywords).collect()
     };
     serde_json::to_value(CompletionResponse::Array(items)).ok()
+}
+
+/// Import paths for the string the cursor is in. Each item replaces the whole string content, from the
+/// opening quote to the closing quote or the cursor. Items must start with the text typed so far.
+fn import_path_completions(text: &str, off: usize, project: &Project, from: &str) -> Vec<CompletionItem> {
+    let before = line_before(text, off);
+    let quote = off - before.len() + before.rfind(['"', '\'']).unwrap_or(0);
+    let typed = &text[quote + 1..off];
+    let line_rest = &text[off..];
+    let line_rest = &line_rest[..line_rest.find('\n').unwrap_or(line_rest.len())];
+    let end = line_rest.find(['"', '\'']).map_or(off, |i| off + i);
+    let range = Range::new(position(text, quote + 1), position(text, end));
+    import_path_items(project, from)
+        .into_iter()
+        .filter(|item| item.label.starts_with(typed))
+        .map(|mut item| {
+            item.text_edit = Some(CompletionTextEdit::Edit(TextEdit { range, new_text: item.label.clone() }));
+            item
+        })
+        .collect()
 }
 
 /// Every other file of the project, as an import path from `from`.
@@ -466,11 +504,7 @@ fn ref_markdown(name: &str, f: &Function) -> String {
 
 /// `name: boolean` or `name: "a" | "b"`, as TypeScript writes it.
 fn input_sig(input: &Input) -> String {
-    let ty = match input.ty.options() {
-        None => "boolean".to_string(),
-        Some(options) => options.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(" | "),
-    };
-    format!("{}: {ty}", input.name.value)
+    format!("{}: {}", input.name.value, input.ty.ts_type())
 }
 
 #[cfg(test)]

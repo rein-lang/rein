@@ -56,25 +56,25 @@ The agent runs one step at a time. The output below is what `rein run` prints to
 
 ```text
 $ rein run --root examples/merge-pr
-need input task (choice: merge, security review): Which task does the agent do?
+need input task: "merge" | "security review" - Which task does the agent do?
 hint: rerun with --set task=<value>
 # exit 2
 
 $ rein run --root examples/merge-pr --set task=merge
-@merge_pr
+next: merge_pr
   Decide whether a pull request can be merged.
-  docsOnly (bool): Does the PR change only documentation files?
-  ci (choice: green, red, pending): What is the CI status of the PR?
+  docsOnly: boolean - Does the PR change only documentation files?
+  ci: "green" | "red" | "pending" - What is the CI status of the PR?
 
 $ rein run merge_pr --root examples/merge-pr --set docsOnly=no
-need input ci (choice: green, red, pending): What is the CI status of the PR?
+need input ci: "green" | "red" | "pending" - What is the CI status of the PR?
 hint: rerun with --set ci=<value>
 # exit 2
 
 $ rein run merge_pr --root examples/merge-pr --set docsOnly=no --set ci=green
-@review_code
+next: review_code
   Review the code changes in a pull request.
-  securitySensitive (bool): Does the PR change authentication, payments, or permissions code?
+  securitySensitive: boolean - Does the PR change authentication, payments, or permissions code?
 
 $ rein run review_code --root examples/merge-pr --set securitySensitive=no
 Read the diff. Leave comments for bugs and style issues. Approve when the review is clean. Then run merge_pr again.

@@ -29,8 +29,10 @@ pub struct Project {
 impl Project {
     /// Nearest ancestor of `start` (or its parent, if `start` is a file) that
     /// has a `rein.toml`. Falls back to the start directory.
+    /// The walk uses the absolute path, not the symlink target, so a linked file belongs to the
+    /// project that holds the link.
     pub fn find_root(start: &Path) -> PathBuf {
-        let start = fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+        let start = std::path::absolute(start).unwrap_or_else(|_| start.to_path_buf());
         let base = if start.is_file() {
             start.parent().unwrap_or(start.as_path()).to_path_buf()
         } else {
@@ -245,7 +247,8 @@ fn collect(
         // `metadata` follows symlinks. A broken link fails here and is skipped.
         let Ok(meta) = fs::metadata(&path) else { continue };
         if meta.is_dir() {
-            if file_name.starts_with('.') || file_name == "target" || file_name == "node_modules" {
+            // A subdirectory with its own marker is another project. Skip it.
+            if file_name.starts_with('.') || file_name == "target" || file_name == "node_modules" || path.join("rein.toml").is_file() {
                 continue;
             }
             let _ = collect(&path, out, seen);
@@ -552,6 +555,28 @@ mod tests {
     fn unused_import_is_a_warning_from_the_checker() {
         let project = project_of(&[("a", "import m from \"./main\";\n/** d */\nexport default function a() { return \"x\" }\n")]);
         assert!(has(&project.check()["a"], Severity::Warning, "unused import `m`"));
+    }
+
+    #[test]
+    fn subdirectory_with_marker_is_another_project() {
+        let root = temp_project("nested");
+        fs::write(root.join("nested/rein.toml"), "").unwrap();
+        fs::write(root.join("nested/x.rein"), "/** x */\nexport default function x() { return \"x\" }\n").unwrap();
+        let project = Project::load(&root).unwrap();
+        assert!(project.get("nested/x").is_none(), "{:?}", project.files.keys().collect::<Vec<_>>());
+        assert!(project.get("ci/fix").is_some());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_root_walks_from_the_link_not_its_target() {
+        let a = temp_project("link-a");
+        let b = temp_project("link-b");
+        std::os::unix::fs::symlink(b.join("ci/fix.rein"), a.join("link.rein")).unwrap();
+        assert_eq!(Project::find_root(&a.join("link.rein")), a);
+        fs::remove_dir_all(&a).unwrap();
+        fs::remove_dir_all(&b).unwrap();
     }
 
     #[test]

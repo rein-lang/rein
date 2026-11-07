@@ -57,6 +57,8 @@ fn run_merge_task_returns_ref_to_merge_pr() {
     assert_eq!(v["description"], "Decide whether a pull request can be merged.");
     assert_eq!(v["inputs"][0]["name"], "docsOnly");
     assert_eq!(v["inputs"][0]["description"], "Does the PR change only documentation files?");
+    assert_eq!(v["inputs"][0]["type"], "boolean");
+    assert_eq!(v["inputs"][1]["type"], "union");
 }
 
 #[test]
@@ -66,7 +68,7 @@ fn run_merge_pr_without_input_asks_for_it() {
     let v = json(&out);
     assert_eq!(v["kind"], "need_input");
     assert_eq!(v["input"]["name"], "docsOnly");
-    assert_eq!(v["input"]["type"], "bool");
+    assert_eq!(v["input"]["type"], "boolean");
 }
 
 #[test]
@@ -104,6 +106,7 @@ fn describe_prints_schema() {
     let v = json(&out);
     assert_eq!(v["name"], "merge_pr");
     assert_eq!(v["inputs"].as_array().unwrap().len(), 2);
+    assert_eq!(v["inputs"][1]["type"], "union");
     assert_eq!(v["inputs"][1]["options"], serde_json::json!(["green", "red", "pending"]));
 }
 
@@ -112,9 +115,9 @@ fn graph_draws_main_as_entry() {
     let out = rein(&["graph", "--root", "examples/merge-pr"]);
     assert_eq!(code(&out), 0);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("main([\"main\"])"), "{text}");
-    assert!(text.contains("main --> merge_pr"), "{text}");
-    assert!(text.contains("merge_pr --> ci__fix"), "{text}");
+    assert!(text.contains("[\"main\"])"), "{text}");
+    assert!(text.contains("[\"merge_pr\"]"), "{text}");
+    assert!(text.contains("[\"ci/fix\"]"), "{text}");
 }
 
 #[test]
@@ -196,6 +199,135 @@ fn unreachable_function_is_a_warning() {
     assert!(stdout.contains("warning: `orphan` is not reachable from main"), "{stdout}");
 
     fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn check_missing_path_is_an_error() {
+    let root = temp_dir("missing");
+    fs::write(root.join("rein.toml"), "").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
+    let missing = root.join("nothere.rein");
+
+    let out = rein(&["check", missing.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(&format!("error: no such file or directory: {}", missing.display())), "{stderr}");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn check_directory_inside_project_reports_only_its_files() {
+    let root = temp_dir("subdir");
+    fs::write(root.join("rein.toml"), "").unwrap();
+    fs::create_dir_all(root.join("ci")).unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
+    fs::write(root.join("ci/fix.rein"), "import gone from \"./gone\";\n/** F. */\nexport default function fix() {\n  return gone;\n}\n").unwrap();
+    fs::write(root.join("other.rein"), "import nope from \"./nope\";\n/** O. */\nexport default function other() {\n  return nope;\n}\n").unwrap();
+
+    let out = rein(&["check", root.join("ci").to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ci/fix.rein") && stdout.contains("cannot find module './gone'"), "{stdout}");
+    assert!(!stdout.contains("other.rein"), "{stdout}");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn check_rejects_a_non_rein_file() {
+    let root = temp_dir("notrein");
+    fs::write(root.join("rein.toml"), "").unwrap();
+    fs::write(root.join("notes.txt"), "hello").unwrap();
+
+    let out = rein(&["check", root.join("notes.txt").to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: not a .rein file"));
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn check_symlinked_file_is_checked_in_the_project_of_the_link() {
+    let a = temp_dir("link-a");
+    let b = temp_dir("link-b");
+    fs::write(a.join("rein.toml"), "").unwrap();
+    fs::write(a.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
+    fs::write(b.join("rein.toml"), "").unwrap();
+    fs::write(b.join("real.rein"), "/** Real. */\nexport default function real() {\n  return \"x\";\n}\n").unwrap();
+    std::os::unix::fs::symlink(b.join("real.rein"), a.join("link.rein")).unwrap();
+
+    let out = rein(&["check", a.join("link.rein").to_str().unwrap()]);
+    assert_eq!(code(&out), 0);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("`link` is not reachable from main"), "{stdout}");
+    assert!(!stdout.contains("real"), "{stdout}");
+
+    fs::remove_dir_all(&a).unwrap();
+    fs::remove_dir_all(&b).unwrap();
+}
+
+#[test]
+fn graph_ids_are_unique_and_labels_are_escaped() {
+    let root = temp_dir("graph");
+    fs::write(root.join("rein.toml"), "").unwrap();
+    fs::create_dir_all(root.join("ci")).unwrap();
+    fs::write(
+        root.join("main.rein"),
+        "import a from \"./ci/fix\";\nimport b from \"./ci__fix\";\nimport c from \"./my task\";\n/** Entry. */\nexport default function main() {\n  return a;\n}\n",
+    )
+    .unwrap();
+    fs::write(root.join("ci/fix.rein"), "/** F. */\nexport default function fix() {\n  return \"f\";\n}\n").unwrap();
+    fs::write(root.join("ci__fix.rein"), "/** C. */\nexport default function ci__fix() {\n  return \"c\";\n}\n").unwrap();
+    fs::write(root.join("my task.rein"), "/** M. */\nexport default function m() {\n  return \"m\";\n}\n").unwrap();
+
+    let out = rein(&["graph", "--root", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 0);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    for label in ["[\"ci/fix\"]", "[\"ci__fix\"]", "[\"my task\"]", "([\"main\"])"] {
+        assert!(text.contains(label), "{text}");
+    }
+    let ids: Vec<String> = text
+        .lines()
+        .filter(|l| l.contains("[\"") && !l.contains("-->"))
+        .map(|l| l.trim().split(['[', '(']).next().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 4, "{text}");
+    let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "{text}");
+    assert!(ids.iter().all(|id| id.chars().all(|c| c.is_ascii_alphanumeric())), "{text}");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn set_twice_is_an_error() {
+    let out = rein(&["run", "merge_pr", "--root", "examples/merge-pr", "--set", "docsOnly=yes", "--set", "docsOnly=no"]);
+    assert_eq!(code(&out), 1);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: input `docsOnly` set twice"));
+}
+
+#[test]
+fn text_output_uses_typescript_types() {
+    let out = rein(&["run", "merge_pr", "--root", "examples/merge-pr"]);
+    assert_eq!(code(&out), 2);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).lines().next().unwrap(),
+        "need input docsOnly: boolean - Does the PR change only documentation files?"
+    );
+
+    let out = rein(&["run", "merge_pr", "--root", "examples/merge-pr", "--set", "docsOnly=no"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).lines().next().unwrap(),
+        "need input ci: \"green\" | \"red\" | \"pending\" - What is the CI status of the PR?"
+    );
+
+    let out = rein(&["run", "--root", "examples/merge-pr", "--set", "task=merge"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "next: merge_pr\n  Decide whether a pull request can be merged.\n  docsOnly: boolean - Does the PR change only documentation files?\n  ci: \"green\" | \"red\" | \"pending\" - What is the CI status of the PR?\n"
+    );
 }
 
 fn temp_dir(tag: &str) -> PathBuf {

@@ -312,3 +312,110 @@ fn missing_main_is_reported_on_an_open_file() {
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn closing_a_deleted_file_clears_its_diagnostics() {
+    let root = temp_project("deleted");
+    let caller_text = "import nope from \"./nope\";\n/** Caller. */\nexport default function caller() {\n  return nope;\n}\n";
+    fs::write(root.join("caller.rein"), caller_text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let caller = uri_of(&root, "caller.rein");
+    server.open(&caller, caller_text);
+    server.wait_diagnostics(&caller, |d| has_message(d, "cannot find module './nope'"));
+
+    // The file goes away while its buffer is still open, then the editor closes the buffer.
+    fs::remove_file(root.join("caller.rein")).unwrap();
+    server.notify("textDocument/didClose", json!({"textDocument": {"uri": caller}}));
+    let cleared = server.wait_diagnostics(&caller, |d| d.is_empty());
+    assert!(cleared.is_empty());
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
+    let root = temp_project("marker");
+    let sub = root.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("rein.toml"), "").unwrap();
+    fs::write(root.join("outside.rein"), "/** Outside. */\nexport default function outside() {\n  return \"o\";\n}\n").unwrap();
+    let x_text = "import o from \"../outside\";\n/** X. */\nexport default function x() {\n  return o;\n}\n";
+    fs::write(sub.join("x.rein"), x_text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // Under sub's own marker, `../outside` leaves the project root.
+    let x = uri_of(&root, "sub/x.rein");
+    server.open(&x, x_text);
+    server.wait_diagnostics(&x, |d| has_message(d, "leaves the project root"));
+
+    // Without the marker, sub belongs to the project of the root, and the import resolves.
+    fs::remove_file(sub.join("rein.toml")).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": uri_of(&root, "sub/rein.toml"), "type": 3}]}),
+    );
+    let rechecked = server.wait_diagnostics(&x, |d| !has_message(d, "leaves the project root"));
+    assert!(!has_message(&rechecked, "leaves the project root"));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_nested_project_is_not_checked_as_part_of_the_outer_one() {
+    let root = temp_project("nested");
+    let sub = root.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("rein.toml"), "").unwrap();
+    let x_text = "import n from \"./nope\";\n/** X. */\nexport default function x() {\n  return n;\n}\n";
+    fs::write(sub.join("x.rein"), x_text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let x = uri_of(&root, "sub/x.rein");
+    server.open(&x, x_text);
+    server.wait_diagnostics(&x, |d| has_message(d, "cannot find module './nope'"));
+
+    // Opening main makes the outer project check again. It must not add sub's file as an unreachable one.
+    let main = uri_of(&root, "main.rein");
+    server.open(&main, "import target from \"./target\";\n/** Entry. */\nexport default function main() {\n  return target;\n}\n");
+    let next = server.wait_diagnostics(&x, |_| true);
+    assert!(has_message(&next, "cannot find module './nope'"), "{next:?}");
+    assert!(!has_message(&next, "not reachable"), "{next:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn import_path_completion_filters_and_replaces_the_string() {
+    let root = temp_project("complete");
+    fs::create_dir_all(root.join("ci")).unwrap();
+    fs::write(root.join("ci/fix.rein"), "/** Fix. */\nexport default function fix() {\n  return \"f\";\n}\n").unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // The cursor sits after `./c`. The closing quote is at column 23.
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, "import x from \"./ci/fix\";\n/** Start. */\nexport default function start() {\n  return \"s\";\n}\n");
+    let items = server.request(
+        2,
+        "textDocument/completion",
+        json!({"textDocument": {"uri": start}, "position": {"line": 0, "character": 18}}),
+    );
+    let items = items["result"].as_array().unwrap();
+    let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, ["./ci/fix"], "{items:?}");
+    let edit = &items[0]["textEdit"];
+    assert_eq!(edit["newText"], "./ci/fix", "{items:?}");
+    assert_eq!(edit["range"]["start"]["character"], 15, "{items:?}");
+    assert_eq!(edit["range"]["end"]["character"], 23, "{items:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+

@@ -1,6 +1,6 @@
 //! Command bodies for `check`, `run`, `describe` and `graph`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,14 +22,20 @@ struct Row {
     line: String,
 }
 
-pub fn check(path: &Path) -> u8 {
-    let root = Project::find_root(path);
+pub fn check(given: &Path) -> u8 {
+    if !given.exists() {
+        return fail(false, &format!("no such file or directory: {}", given.display()));
+    }
+    if given.is_file() && given.extension().and_then(|e| e.to_str()) != Some("rein") {
+        return fail(false, &format!("not a .rein file: {}", given.display()));
+    }
+    let scope = absolute(given);
+    let root = Project::find_root(&scope);
     let project = match Project::load(&root) {
         Ok(p) => p,
         Err(e) => return fail(false, &format!("cannot read {}: {e}", root.display())),
     };
-    let only = if path.is_file() { fs::canonicalize(path).ok() } else { None };
-    let rows = rows(&project, only.as_deref());
+    let rows = rows(&project, &scope);
     let errors = rows.iter().filter(|r| r.severity == Severity::Error).count();
     let warnings = rows.len() - errors;
     for r in &rows {
@@ -51,7 +57,7 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
     let Some(sf) = project.get(function) else {
         return fail(json, &unknown_function(&project, function));
     };
-    let errors: Vec<Row> = rows(&project, Some(sf.path.as_path()))
+    let errors: Vec<Row> = rows(&project, &sf.path)
         .into_iter()
         .filter(|r| r.severity == Severity::Error)
         .collect();
@@ -111,19 +117,22 @@ pub fn graph(root: Option<PathBuf>) -> u8 {
         Err(msg) => return fail(false, &msg),
     };
     let mut lines = vec!["flowchart TD".to_string()];
+    // Ids are positional, so no two names can collide. The name is the label.
+    let ids: BTreeMap<&str, String> = project.files.keys().enumerate().map(|(i, n)| (n.as_str(), format!("n{i}"))).collect();
     // The entry point is drawn as a stadium, so it stands out.
-    lines.extend(project.files.keys().map(|n| {
-        if n == ENTRY {
-            format!("    {}([\"{n}\"])", node_id(n))
+    for (name, id) in &ids {
+        let label = name.replace('"', "#quot;");
+        if *name == ENTRY {
+            lines.push(format!("    {id}([\"{label}\"])"));
         } else {
-            format!("    {}[\"{n}\"]", node_id(n))
+            lines.push(format!("    {id}[\"{label}\"]"));
         }
-    }));
+    }
     lines.extend(
         project
             .references()
             .iter()
-            .map(|(from, to)| format!("    {} --> {}", node_id(from), node_id(to))),
+            .map(|(from, to)| format!("    {} --> {}", ids[from.as_str()], ids[to.as_str()])),
     );
     println!("{}", lines.join("\n"));
     OK
@@ -142,26 +151,18 @@ pub fn description(f: &Function) -> String {
     f.description.as_ref().map_or_else(String::new, |d| d.value.clone())
 }
 
-/// `bool`, or `choice: a, b` for a choice input.
-pub fn type_label(ty: &rein_core::ast::InputType) -> String {
-    match ty.options() {
-        None => "bool".to_string(),
-        Some(options) => format!("choice: {}", options.join(", ")),
-    }
-}
-
 fn load(root: Option<PathBuf>) -> Result<Project, String> {
     let root = root.unwrap_or_else(|| Project::find_root(Path::new(".")));
     Project::load(&root).map_err(|e| format!("cannot read {}: {e}", root.display()))
 }
 
-/// Diagnostics of the project, optionally for one file only, sorted by file then position.
-/// Project-level diagnostics (such as a missing `main.rein`) show only for the whole project.
-fn rows(project: &Project, only: Option<&Path>) -> Vec<Row> {
+/// Diagnostics under `scope`: one file, one directory, or the whole project. Sorted by file then position.
+/// Project-level diagnostics (such as a missing `main.rein`) show only when `scope` is the project root.
+fn rows(project: &Project, scope: &Path) -> Vec<Row> {
     let mut rows = Vec::new();
     for (name, diags) in project.check() {
         let Some(sf) = project.get(&name) else { continue };
-        if only.is_some_and(|p| p != sf.path.as_path()) {
+        if !sf.path.starts_with(scope) {
             continue;
         }
         let file = display_path(&sf.path);
@@ -170,7 +171,7 @@ fn rows(project: &Project, only: Option<&Path>) -> Vec<Row> {
             rows.push(row(&file, line, col, &d));
         }
     }
-    if only.is_none() {
+    if scope == project.root {
         let file = display_path(&project.marker_path());
         rows.extend(project.project_diagnostics().iter().map(|d| row(&file, 0, 0, d)));
     }
@@ -192,6 +193,11 @@ fn row(file: &str, line: usize, col: usize, d: &rein_core::diagnostic::Diagnosti
     }
 }
 
+/// The path made absolute, without resolving symlinks. Project lookup and file matching use it.
+fn absolute(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Path relative to the working directory when it lies under it.
 fn display_path(path: &Path) -> String {
     let cwd = fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
@@ -199,13 +205,14 @@ fn display_path(path: &Path) -> String {
 }
 
 fn parse_sets(sets: &[String]) -> Result<HashMap<String, String>, String> {
-    sets.iter()
-        .map(|s| {
-            s.split_once('=')
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .ok_or_else(|| format!("invalid --set `{s}`; expected name=value"))
-        })
-        .collect()
+    let mut out = HashMap::new();
+    for s in sets {
+        let (k, v) = s.split_once('=').ok_or_else(|| format!("invalid --set `{s}`; expected name=value"))?;
+        if out.insert(k.to_string(), v.to_string()).is_some() {
+            return Err(format!("input `{k}` set twice"));
+        }
+    }
+    Ok(out)
 }
 
 fn show_ref(project: &Project, target: &str, json: bool) -> u8 {
@@ -221,7 +228,7 @@ fn show_ref(project: &Project, target: &str, json: bool) -> u8 {
             "inputs": inputs_json(&t.function),
         }));
     } else {
-        println!("@{target}");
+        println!("next: {target}");
         println!("  {desc}");
         for input in &t.function.inputs {
             println!("  {}", input_line(input));
@@ -261,7 +268,7 @@ fn inputs_json(f: &Function) -> Vec<Value> {
 }
 
 fn input_json(input: &Input) -> Value {
-    let kind = if input.ty.options().is_some() { "choice" } else { "bool" };
+    let kind = if input.ty.options().is_some() { "union" } else { "boolean" };
     let mut v = json!({
         "name": input.name.value,
         "type": kind,
@@ -273,11 +280,7 @@ fn input_json(input: &Input) -> Value {
     v
 }
 
-/// `name (bool|choice: a, b): description`.
+/// `name: type - description`, with the type as TypeScript writes it.
 fn input_line(input: &Input) -> String {
-    format!("{} ({}): {}", input.name.value, type_label(&input.ty), input.description.value)
-}
-
-fn node_id(name: &str) -> String {
-    name.replace('/', "__")
+    format!("{}: {} - {}", input.name.value, input.ty.ts_type(), input.description.value)
 }
