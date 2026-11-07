@@ -17,6 +17,6 @@ The flow routes VIP customers to a human first. Other tickets follow their categ
 ## Run it
 
 ```sh
-cargo run -p rein -- check examples/support-ticket
-cargo run -p rein -- run --root examples/support-ticket
+cargo run -p rein -- check examples/.rein/support-ticket
+cargo run -p rein -- run --root examples/.rein/support-ticket
 ```

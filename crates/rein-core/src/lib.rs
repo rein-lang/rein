@@ -3,6 +3,7 @@ pub mod check;
 pub mod doc;
 pub mod diagnostic;
 pub mod eval;
+pub mod flows;
 pub mod lexer;
 pub mod parser;
 pub mod project;
