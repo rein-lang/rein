@@ -223,6 +223,14 @@ fn check_answer(input: &Input, raw: &str) -> Eval<()> {
     }
 }
 
+/// Checks one value the agent gives for a parameter or `const` answer. Returns the error text when it is not valid.
+pub fn check_value(input: &Input, raw: &str) -> Result<(), String> {
+    match check_answer(input, raw) {
+        Err(Stop::Error(msg)) => Err(msg),
+        _ => Ok(()),
+    }
+}
+
 /// The raw value the agent gave. A missing value stops the run with `Need`.
 fn provided<'a>(env: &Env<'a>, name: &str) -> Eval<&'a str> {
     match env.inputs.get(name) {

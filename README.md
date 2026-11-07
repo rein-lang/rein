@@ -49,55 +49,32 @@ flowchart TD
 
 ## How an agent uses it
 
-The agent runs one step at a time. The output below is what `rein run` prints today.
-
-```text
-$ rein run --root examples/merge-pr
-need input task: "merge" | "security review" - Which task does the agent do?
-hint: rerun with --set task=<value>
-# exit 2
-
-$ rein run --root examples/merge-pr --set task=merge
-next: merge_pr
-  Decide whether a pull request can be merged.
-  docsOnly: boolean - Does the PR change only documentation files?
-  ci: "green" | "red" | "pending" - What is the CI status of the PR?
-
-$ rein run merge_pr --root examples/merge-pr --set docsOnly=no
-need input ci: "green" | "red" | "pending" - What is the CI status of the PR?
-hint: rerun with --set ci=<value>
-# exit 2
-
-$ rein run merge_pr --root examples/merge-pr --set docsOnly=no --set ci=green
-next: review_code
-  Review the code changes in a pull request.
-  securitySensitive: boolean - Does the PR change authentication, payments, or permissions code?
-
-$ rein run review_code --root examples/merge-pr --set securitySensitive=yes
-Delegate this task to a subagent.
-Model: use opus model
-Task: code review the pr with a security focus
-```
-
-`rein run` with no function runs `main`. Every project has a `main.rein` at its root. It is the agent's entry point. The agent asks the user only for the parameters the path needs. It follows each returned reference by running that function next.
-
-### An async request
-
-`examples/support-ticket/answer/faq.rein` asks the agent to do a step, then branches on the answer. The run stops and asks for the answer (exit code 3). The agent does the step, reports the answer, and runs again:
+The agent steps the flow with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
 
 ```text
 $ cd examples/support-ticket
-$ rein run answer/faq --set articleFound=yes
-request: Reply with the help article link and ask the customer if it solved the problem.
-then answer: solved: boolean - Did the customer confirm the article solved the problem?
-hint: rerun with --set solved=<value>
+$ rein step --json
+{"kind":"question","version":1,"key":"main.vip","function":"main","name":"vip","type":"boolean","options":null,"description":"Is the customer on the VIP plan?","answers":{},"trace":["main"]}
+# exit 2
+
+$ rein step --json --answer main.vip=no
+{"kind":"question","version":1,"key":"main.category","function":"main","name":"category","type":"union","options":["billing","account","how_to"],"description":"What category best fits the ticket?","answers":{"main.vip":"no"},"trace":["main"]}
+# exit 2
+
+$ rein step --json --answer main.vip=no --answer main.category=how_to
+{"kind":"question","version":1,"key":"answer/faq.articleFound","function":"answer/faq","name":"articleFound","type":"boolean","options":null,"description":"Did you find a help article that answers the question?","answers":{"main.category":"how_to","main.vip":"no"},"trace":["main","answer/faq"]}
+# exit 2
+
+$ rein step --json --answer main.vip=no --answer main.category=how_to --answer answer/faq.articleFound=yes
+{"kind":"request","version":1,"key":"answer/faq.solved","function":"answer/faq","instruction":"Reply with the help article link and ask the customer if it solved the problem.","response":{"name":"solved","type":"boolean","options":null,"description":"Did the customer confirm the article solved the problem?"},"answers":{"answer/faq.articleFound":"yes","main.category":"how_to","main.vip":"no"},"trace":["main","answer/faq"]}
 # exit 3
 
-$ rein run answer/faq --set articleFound=yes --set solved=no
-next: escalate
-  Hand the ticket to a human support engineer.
+$ rein step --json --answer main.vip=no --answer main.category=how_to --answer answer/faq.articleFound=yes --answer answer/faq.solved=yes
+{"kind":"done","version":1,"instruction":"Close the ticket as solved.","answers":{"answer/faq.articleFound":"yes","answer/faq.solved":"yes","main.category":"how_to","main.vip":"no"},"trace":["main","answer/faq"]}
 # exit 0
 ```
+
+A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein run` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](docs/spec.md#11-stepping-agent-interface).
 
 ## Quickstart
 

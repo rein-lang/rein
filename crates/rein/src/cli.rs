@@ -1,13 +1,15 @@
-//! Command bodies for `check`, `run`, `describe` and `graph`.
+//! Command bodies for `check`, `run`, `step`, `describe` and `graph`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use rein_core::ast::{Function, Input, InputType};
 use rein_core::diagnostic::{line_col, Severity};
 use rein_core::eval::{self, Outcome};
 use rein_core::project::{Project, ENTRY};
+use rein_core::step::{invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 
 const OK: u8 = 0;
@@ -93,6 +95,98 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
         }
         Ok(Outcome::Ref(target)) => show_ref(&project, &target, json),
         Ok(Outcome::NeedInput(name)) => need_input(&sf.function, &name, json),
+    }
+}
+
+/// Steps the whole flow once. The request comes from flags, or from stdin as JSON. This is only an adapter:
+/// `rein_core::step::step` decides everything.
+pub fn step(entry: Option<String>, root: Option<PathBuf>, answers: &[String], from_stdin: bool, json: bool) -> u8 {
+    let response = match build_request(entry, answers, from_stdin) {
+        Err(message) => invalid_request(message),
+        Ok(request) => match load(root) {
+            Ok(project) => step_flow(&project, &request),
+            Err(message) => invalid_request(message),
+        },
+    };
+    print_step(&response, json || from_stdin);
+    match response {
+        StepResponse::Done { .. } => OK,
+        StepResponse::Question { .. } => NEED_INPUT,
+        StepResponse::Request { .. } => REQUEST,
+        StepResponse::Error { .. } => FAILED,
+    }
+}
+
+/// The request from stdin (JSON, all of it) or from `--entry` and `--answer key=value` flags.
+fn build_request(entry: Option<String>, answers: &[String], from_stdin: bool) -> Result<StepRequest, String> {
+    if from_stdin {
+        if entry.is_some() || !answers.is_empty() {
+            return Err("--stdin reads the whole request; do not combine it with --entry or --answer".into());
+        }
+        let text = io::read_to_string(io::stdin()).map_err(|e| format!("cannot read stdin: {e}"))?;
+        return serde_json::from_str(&text).map_err(|e| format!("invalid request JSON: {e}"));
+    }
+    let mut map = BTreeMap::new();
+    for a in answers {
+        let (key, value) = a.split_once('=').ok_or_else(|| format!("invalid --answer `{a}`; expected key=value"))?;
+        if map.insert(key.to_string(), value.to_string()).is_some() {
+            return Err(format!("answer `{key}` given twice"));
+        }
+    }
+    Ok(StepRequest {
+        version: PROTOCOL_VERSION,
+        entry: entry.unwrap_or_else(|| ENTRY.to_string()),
+        answers: map,
+    })
+}
+
+fn print_step(response: &StepResponse, as_json: bool) {
+    if as_json {
+        println!("{}", serde_json::to_string(response).unwrap_or_default());
+        return;
+    }
+    match response {
+        StepResponse::Question { key, r#type, options, description, answers, trace, .. } => {
+            println!("question: {key}: {} - {description}", shown_type(r#type, options));
+            println!("hint: rerun with --answer {key}=<value>");
+            print_answers(answers);
+            println!("trace: {}", trace.join(" -> "));
+        }
+        StepResponse::Request { key, instruction, response, answers, trace, .. } => {
+            println!("request: {instruction}");
+            println!("then answer: {key}: {} - {}", shown_type(&response.r#type, &response.options), response.description);
+            println!("hint: rerun with --answer {key}=<value>");
+            print_answers(answers);
+            println!("trace: {}", trace.join(" -> "));
+        }
+        StepResponse::Done { instruction, answers, trace, .. } => {
+            println!("{instruction}");
+            print_answers(answers);
+            println!("trace: {}", trace.join(" -> "));
+        }
+        StepResponse::Error { message, diagnostics, .. } => {
+            for d in diagnostics {
+                println!("{}:{}:{}: error: {}", d.file, d.line, d.column, d.message);
+            }
+            eprintln!("error: {message}");
+        }
+    }
+}
+
+/// The answers so far, as `--answer` flags to repeat. Nothing is printed when there are none.
+fn print_answers(answers: &BTreeMap<String, String>) {
+    if answers.is_empty() {
+        return;
+    }
+    let flags: Vec<String> = answers.iter().map(|(k, v)| format!("--answer {k}={v}")).collect();
+    println!("answers: {}", flags.join(" "));
+}
+
+/// The type as TypeScript writes it: `boolean`, or the union such as `"green" | "red"`.
+fn shown_type(kind: &str, options: &Option<Vec<String>>) -> String {
+    match options {
+        Some(list) => list.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(" | "),
+        None => kind.to_string(),
     }
 }
 

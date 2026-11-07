@@ -7,3 +7,4 @@ pub mod lexer;
 pub mod parser;
 pub mod project;
 pub mod stdlib;
+pub mod step;

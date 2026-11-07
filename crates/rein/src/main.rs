@@ -23,7 +23,7 @@ enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Evaluate one step of a function.
+    /// Evaluate one function. Agents should use `rein step`; `run` is the single-function debug command.
     Run {
         /// Function name, as its path under the root without `.rein`. Default: `main`.
         #[arg(default_value = "main")]
@@ -35,6 +35,24 @@ enum Command {
         #[arg(long = "set", value_name = "NAME=VALUE")]
         set: Vec<String>,
         /// Print the result as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Step the whole flow from `main`. This is the agent-facing interface: answer one key per call.
+    Step {
+        /// Function to start from, as its path under the root without `.rein`. Default: `main`.
+        #[arg(long)]
+        entry: Option<String>,
+        /// Project root. Default: the nearest directory with rein.toml.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
+        #[arg(long = "answer", value_name = "KEY=VALUE")]
+        answer: Vec<String>,
+        /// Read the whole request as JSON from stdin. Output is always JSON.
+        #[arg(long)]
+        stdin: bool,
+        /// Print the response as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -64,6 +82,7 @@ fn main() -> ExitCode {
     let code = match Cli::parse().command {
         Command::Check { path } => cli::check(&path),
         Command::Run { function, root, set, json } => cli::run(&function, root, &set, json),
+        Command::Step { entry, root, answer, stdin, json } => cli::step(entry, root, &answer, stdin, json),
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { root } => cli::graph(root),
         Command::Lsp => lsp::serve(),
