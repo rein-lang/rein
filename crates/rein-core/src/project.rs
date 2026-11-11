@@ -157,6 +157,18 @@ impl Project {
         })
     }
 
+    /// What a reference written in function `from` names, for the checker. A function reports how many
+    /// `string` parameters it takes, so a hand-off can be checked.
+    fn kind_for(&self, from: &str, key: &str) -> Result<Kind, String> {
+        Ok(match self.binding_for(from, key)? {
+            Binding::Function(path) => Kind::Function {
+                strings: self.files.get(&path).map_or(0, |sf| sf.function.text_inputs().count()),
+            },
+            Binding::Template { function, .. } => Kind::Template { params: function.inputs.len() },
+            Binding::Request => Kind::Request,
+        })
+    }
+
     /// Diagnostics per function, sorted by span: parse, single-file checks, cycles, and reachability.
     /// A file with a syntax error reports only that error. Its tree is partial.
     pub fn check(&self) -> BTreeMap<String, Vec<Diagnostic>> {
@@ -169,7 +181,7 @@ impl Project {
                     return (name.clone(), sf.parse_diagnostics.clone());
                 }
                 let mut diags = Vec::new();
-                let resolve = |path: &str| self.binding_for(name, path).map(|b| Kind::from(&b));
+                let resolve = |path: &str| self.kind_for(name, path);
                 diags.extend(check_function(&sf.function, name, &resolve));
                 let bindings = self.bindings(name);
                 diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &adj));

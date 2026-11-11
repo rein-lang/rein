@@ -7,21 +7,21 @@ use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{KEYWORDS, RESERVED};
 use crate::stdlib;
 
-/// What a reference or a std name is, as the checker needs it. A template also needs its parameter count.
+/// What a reference or a std name is, as the checker needs it. A template needs its parameter count.
+/// A function needs its count of `string` parameters, which a hand-off must pass as arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    Function,
+    Function { strings: usize },
     Template { params: usize },
     Request,
 }
 
-impl From<&Binding<'_>> for Kind {
-    fn from(b: &Binding<'_>) -> Self {
-        match b {
-            Binding::Function(_) => Kind::Function,
-            Binding::Template { function, .. } => Kind::Template { params: function.inputs.len() },
-            Binding::Request => Kind::Request,
-        }
+/// `1 argument` or `2 arguments`.
+fn count_args(n: usize) -> String {
+    if n == 1 {
+        "1 argument".to_string()
+    } else {
+        format!("{n} arguments")
     }
 }
 
@@ -47,8 +47,8 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
     }
     c.doc();
     c.params();
-    if f.is_template() {
-        c.template();
+    if let Some(lit) = f.template_literal() {
+        c.template(lit);
     } else if f.body.is_empty() {
         let span = f.doc.as_ref().map_or_else(Span::default, |d| d.span);
         c.error(span, "function must return something");
@@ -116,6 +116,11 @@ fn missing_members<'a>(f: &'a Function, subject: &str, cases: &[Case]) -> Vec<&'
     }
 }
 
+/// A `string` input cannot decide a branch. A condition and a switch subject both give this error.
+pub fn string_in_condition(name: &str) -> String {
+    format!("`{name}` is a string input; a condition cannot read it")
+}
+
 fn members_text(members: &[Spanned<String>]) -> String {
     members.iter().map(|o| format!("`{}`", o.value)).collect::<Vec<_>>().join(", ")
 }
@@ -161,12 +166,22 @@ impl<'a> Checker<'a> {
             .or_else(|| self.f.input(name).map(|i| i.ty.clone()))
     }
 
-    /// A value of `string`, a template literal, or a template call.
+    /// A value of `string`, a template literal, a bare name of a `string` parameter, or a call.
+    /// A call here is not a hand-off: only a `return` hands the agent to a function.
     fn value(&mut self, v: &Value) {
         match v {
             Value::Str(_) => {}
             Value::Template(lit) => self.template_names(lit),
-            Value::Call(call) => self.call(call),
+            Value::Name(name) => self.string_arg(name),
+            Value::Call(call) => self.call(call, false),
+        }
+    }
+
+    /// A bare name as a call argument: it must be a `string` parameter of this function.
+    fn string_arg(&mut self, name: &Spanned<String>) {
+        self.used.insert(name.value.clone());
+        if self.lookup(&name.value) != Some(InputType::Text) {
+            self.error(name.span, format!("`{}` is not a string input", name.value));
         }
     }
 
@@ -226,26 +241,9 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// A template file: one `return` of a template literal, whose names are its own `string` parameters.
-    fn template(&mut self) {
+    /// A template: every parameter is `string` and the body is `lit`, so each parameter must be used in it.
+    fn template(&mut self, lit: &TemplateLit) {
         let f = self.f;
-        for input in &f.inputs {
-            if input.ty != InputType::Text {
-                let name = &input.name.value;
-                self.error(
-                    input.name.span,
-                    format!("a template takes only `string` parameters; `{name}` is `{}`", input.ty.ts_type()),
-                );
-            }
-        }
-        let lit = match f.body.as_slice() {
-            [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => lit,
-            _ => {
-                let span = f.body.first().map(Stmt::span).or(f.doc.as_ref().map(|d| d.span)).unwrap_or_default();
-                self.error(span, "a template is one `return` of a template literal, like return `...${name}...`;");
-                return;
-            }
-        };
         let mut used = BTreeSet::new();
         for piece in &lit.pieces {
             if let Piece::Name(n) = piece {
@@ -328,12 +326,13 @@ impl<'a> Checker<'a> {
                 ReturnValue::Text(_) => {}
                 ReturnValue::Ref(reference) => self.returned_ref(reference),
                 ReturnValue::Template(lit) => self.template_names(lit),
-                ReturnValue::Call(call) => self.call(call),
+                ReturnValue::Call(call) => self.call(call, true),
             },
         }
     }
 
-    /// A `return` of a reference. It must name a function, not a template.
+    /// A `return` of a reference. It must name a function, not a template. A function with `string`
+    /// parameters needs them as arguments, so a bare reference to it is an error.
     fn returned_ref(&mut self, reference: &Spanned<String>) {
         let path = reference.value.as_str();
         match (self.resolve)(path) {
@@ -342,26 +341,40 @@ impl<'a> Checker<'a> {
                 reference.span,
                 format!("`@{path}` is a template; call it with arguments, like `@{path}(...)`"),
             ),
-            Ok(Kind::Function | Kind::Request) => {}
+            Ok(Kind::Function { strings }) if strings > 0 => self.error(
+                reference.span,
+                format!("`@{path}` takes {}, got 0", count_args(strings)),
+            ),
+            Ok(Kind::Function { .. } | Kind::Request) => {}
         }
     }
 
-    /// A call of a template: a std name, or a reference. The arguments must match its parameters.
-    fn call(&mut self, call: &Call) {
+    /// A call. A call of a template expands to text. A `return` of a call to a function is a hand-off that
+    /// passes the `string` arguments. Elsewhere, only a template can be called.
+    fn call(&mut self, call: &Call, hand_off: bool) {
         match &call.callee {
             Callee::Ref(path) => match (self.resolve)(&path.value) {
                 Err(msg) => self.error(path.span, msg),
-                Ok(Kind::Function) => {
+                Ok(Kind::Function { .. }) if !hand_off => {
                     self.error(path.span, "only templates can be called; return the function to hand off");
                 }
-                Ok(kind) => self.arity(call, kind),
+                Ok(Kind::Function { strings: 0 }) => {
+                    self.error(call.span, format!("`@{}` takes no arguments; return it without a call", path.value));
+                }
+                Ok(Kind::Function { strings }) => self.arity(call, strings, &format!("@{}", path.value)),
+                Ok(Kind::Template { params }) => self.arity(call, params, &format!("@{}", path.value)),
+                Ok(Kind::Request) => {}
             },
             Callee::Std(name) => match stdlib::item(&name.value) {
                 Err(msg) => self.error(name.span, msg),
                 Ok(Binding::Request) => {
                     self.error(name.span, "`request` is not a template; use `await request(...)`");
                 }
-                Ok(binding) => self.arity(call, Kind::from(&binding)),
+                Ok(Binding::Template { function, .. }) => {
+                    self.arity(call, function.inputs.len(), &name.value);
+                }
+                // Std names are templates or `request`, never functions.
+                Ok(Binding::Function(_)) => {}
             },
         }
         for arg in &call.args {
@@ -369,16 +382,11 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn arity(&mut self, call: &Call, kind: Kind) {
-        if let Kind::Template { params } = kind {
-            let got = call.args.len();
-            if params != got {
-                let name = match call.callee {
-                    Callee::Ref(_) => format!("@{}", call.callee.key()),
-                    Callee::Std(_) => call.callee.key().to_string(),
-                };
-                self.error(call.span, format!("`{name}` takes {params} arguments, got {got}"));
-            }
+    /// The argument count of a call must equal the parameter count of its target.
+    fn arity(&mut self, call: &Call, params: usize, name: &str) {
+        let got = call.args.len();
+        if params != got {
+            self.error(call.span, format!("`{name}` takes {}, got {got}", count_args(params)));
         }
     }
 
@@ -412,6 +420,7 @@ impl<'a> Checker<'a> {
                             format!("union parameter `{n}` needs a comparison, like `{n} === \"...\"`"),
                         );
                     }
+                    Some(InputType::Text) => self.error(v.span, string_in_condition(&v.value)),
                     Some(_) => {}
                 }
             }
@@ -425,7 +434,7 @@ impl<'a> Checker<'a> {
                         format!("boolean parameter `{n}` cannot be compared; use `if ({n})` or `if (!{n})`"),
                     ),
                     Some(InputType::Choice(members)) => self.check_member(n, value, &members),
-                    Some(InputType::Text) => {}
+                    Some(InputType::Text) => self.error(var.span, string_in_condition(n)),
                 }
             }
             Expr::Not(inner, _) => self.expr(inner),
@@ -455,10 +464,7 @@ impl<'a> Checker<'a> {
                 subject.span,
                 format!("boolean parameter `{n}` cannot be used in a switch; use `if ({n})` or `if (!{n})`"),
             ),
-            Some(InputType::Text) => self.error(
-                subject.span,
-                format!("string parameter `{n}` cannot be used in a switch; only union parameters can"),
-            ),
+            Some(InputType::Text) => self.error(subject.span, string_in_condition(n)),
             Some(InputType::Choice(members)) => {
                 let mut seen: Vec<&str> = Vec::new();
                 for c in cases {
@@ -509,8 +515,8 @@ export default function tpl(
         F.get_or_init(|| parse(TPL).0)
     }
 
-    /// Test resolver: `./tpl` is a template, `std` names come from std, paths with `missing` do not resolve,
-    /// and every other path is a function.
+    /// Test resolver: `./tpl` is a template, paths with `missing` do not resolve, `./merge` is a function
+    /// with one `string` parameter, and every other path is a function with none.
     fn resolves(path: &str) -> Result<Kind, String> {
         if path == "./tpl" {
             return Ok(Kind::Template { params: tpl().inputs.len() });
@@ -518,7 +524,10 @@ export default function tpl(
         if path.contains("missing") {
             return Err(format!("cannot find function `@{path}`"));
         }
-        Ok(Kind::Function)
+        if path == "./merge" {
+            return Ok(Kind::Function { strings: 1 });
+        }
+        Ok(Kind::Function { strings: 0 })
     }
 
     fn check_src(src: &str) -> Vec<Diagnostic> {
@@ -904,11 +913,26 @@ export default function f() { return @./tpl("only one") }"#),
 
     #[test]
     fn only_templates_can_be_called() {
+        // A function is handed off by `return`. Inside `request(...)`, only a template can be called.
+        expect_diag(
+            r#"/** d */
+export default async function f() {
+  /** Ok? */
+  const ok: boolean = await request(@./other("a"));
+  return "y"
+}"#,
+            Severity::Error,
+            "only templates can be called; return the function to hand off",
+        );
+    }
+
+    #[test]
+    fn call_of_a_function_without_strings_takes_no_arguments() {
         expect_diag(
             &with("", r#"/** d */
 export default function f() { return @./other("a") }"#),
             Severity::Error,
-            "only templates can be called; return the function to hand off",
+            "`@./other` takes no arguments; return it without a call",
         );
     }
 
@@ -979,39 +1003,42 @@ export default function hi(
     }
 
     #[test]
-    fn template_body_must_be_one_template_return() {
+    fn string_body_that_is_not_one_template_return_is_a_normal_function() {
+        // Not a template, so `a` is an input. Here it is never used, which is a warning.
         expect_diag(
             r#"/** d */
 export default function t(
   /** A */ a: string,
 ) { return "x" }"#,
-            Severity::Error,
-            "a template is one `return` of a template literal",
+            Severity::Warning,
+            "unused parameter `a`",
         );
     }
 
     #[test]
-    fn template_cannot_have_an_if() {
+    fn template_cannot_have_an_if_a_string_input_cannot_be_a_condition() {
+        // Not a template, because of the `if`. A `string` input cannot decide a branch.
         expect_diag(
             r#"/** d */
 export default function t(
   /** A */ a: string,
 ) { if (a) { return `${a}` } return `b`  }"#,
             Severity::Error,
-            "a template is one `return` of a template literal",
+            "`a` is a string input; a condition cannot read it",
         );
     }
 
     #[test]
-    fn template_takes_only_string_parameters() {
+    fn mixed_parameters_make_a_normal_function_not_a_template() {
+        // A union is not a string, so this is not a template. The unused union is a warning, not a template error.
         expect_diag(
             r#"/** d */
 export default function t(
   /** A */ a: string,
   /** B */ b: "x" | "y",
 ) { return `${a}` }"#,
-            Severity::Error,
-            "a template takes only `string` parameters; `b` is",
+            Severity::Warning,
+            "unused parameter `b`",
         );
     }
 
@@ -1155,6 +1182,99 @@ export default async function f() {
             "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } }",
             Severity::Error,
             "every path must return something",
+        );
+    }
+
+    /// A normal function with one `string` input `pr`, whose body is `ret`.
+    fn with_pr(ret: &str) -> String {
+        format!("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {{\n  {ret}\n}}")
+    }
+
+    #[test]
+    fn string_parameter_makes_a_normal_function_when_mixed_with_a_union() {
+        // Not all parameters are `string`, so this is not a template. `pr` is an input, and no error is given.
+        clean(
+            "/** d */\nexport default function f(\n  /** Link */ pr: string,\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return `Pick ${pr}` }\n  return `Other ${pr} ${c}`;\n}",
+        );
+    }
+
+    #[test]
+    fn string_input_is_used_in_a_template_literal() {
+        clean(&with_pr("return `Review ${pr}`;"));
+    }
+
+    #[test]
+    fn string_input_is_passed_to_a_std_template() {
+        clean(&with_pr("return delegate(\"use opus model\", pr);"));
+    }
+
+    #[test]
+    fn string_input_cannot_be_a_condition() {
+        for cond in ["if (pr) { return \"a\" }", "if (pr === \"x\") { return \"a\" }", "if (!pr) { return \"a\" }"] {
+            let src = format!(
+                "/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {{\n  {cond}\n  return \"b\"\n}}"
+            );
+            expect_diag(&src, Severity::Error, "`pr` is a string input; a condition cannot read it");
+        }
+    }
+
+    #[test]
+    fn string_input_cannot_be_a_switch_subject() {
+        expect_diag(
+            &with_pr("switch (pr) { case \"x\": return \"a\"; case \"y\": return \"b\" }"),
+            Severity::Error,
+            "`pr` is a string input; a condition cannot read it",
+        );
+    }
+
+    #[test]
+    fn hand_off_passes_the_string_inputs() {
+        // `./merge` takes one `string`, so one argument is right.
+        clean(&with_pr("return @./merge(pr);"));
+    }
+
+    #[test]
+    fn hand_off_with_the_wrong_count_is_an_error() {
+        expect_diag(&with_pr("return @./merge;"), Severity::Error, "`@./merge` takes 1 argument, got 0");
+        expect_diag(&with_pr("return @./merge(pr, pr);"), Severity::Error, "`@./merge` takes 1 argument, got 2");
+    }
+
+    #[test]
+    fn hand_off_arguments_to_a_function_without_strings_are_an_error() {
+        expect_diag(
+            &with_pr("return @./other(pr);"),
+            Severity::Error,
+            "`@./other` takes no arguments; return it without a call",
+        );
+        // A bare reference needs no arguments, so this one is clean.
+        clean("/** d */\nexport default function f() {\n  return @./other;\n}");
+    }
+
+    #[test]
+    fn argument_that_is_not_a_string_input_is_an_error() {
+        expect_diag(&with_pr("return @./merge(c);"), Severity::Error, "`c` is not a string input");
+        expect_diag(&with_pr("return @./merge(zz);"), Severity::Error, "`zz` is not a string input");
+        expect_diag(&with_pr("return delegate(\"m\", c);"), Severity::Error, "`c` is not a string input");
+    }
+
+    #[test]
+    fn template_call_accepts_a_string_input_as_an_argument() {
+        // `./tpl` takes two `string` parameters.
+        clean(&with_pr("return @./tpl(pr, \"b\");"));
+    }
+
+    #[test]
+    fn string_input_not_used_is_a_warning() {
+        expect_diag(&with_pr("return \"x\";"), Severity::Warning, "unused parameter `pr`");
+    }
+
+    #[test]
+    fn all_string_body_that_is_a_hand_off_is_a_normal_function() {
+        // All parameters are `string` but the body is not one template literal, so `b` is an input, not a template parameter.
+        expect_diag(
+            "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./merge(a);\n}",
+            Severity::Warning,
+            "unused parameter `b`",
         );
     }
 }

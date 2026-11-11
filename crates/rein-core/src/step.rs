@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{Input, InputType};
+use crate::ast::{Function, Input, InputType};
 use crate::diagnostic::{line_col, Severity};
 use crate::eval::{self, Outcome};
 use crate::project::{Project, ENTRY};
@@ -38,6 +38,9 @@ pub struct StepRequest {
     /// passes a root instead. The stepping itself ignores it: it runs on the project it is given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<String>,
+    /// The values of the entry function's `string` parameters, by name. The agent is never asked for them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, String>,
 }
 
 fn default_version() -> u32 {
@@ -142,9 +145,15 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
         let message = "templates are called from functions, not run";
         return failure(message, None, Vec::new(), answers, Vec::new());
     }
+    if let Err(message) = check_entry_inputs(&entry.function, &req.inputs) {
+        return failure(message, None, Vec::new(), answers, Vec::new());
+    }
 
     let mut trace = Vec::new();
     let mut current = req.entry.clone();
+    // The `string` values of the function being run. The entry gets them from the request; a hand-off
+    // passes them on, bound to the target's `string` parameters in declaration order.
+    let mut strings: BTreeMap<String, String> = req.inputs.clone();
     for _ in 0..HOP_LIMIT {
         trace.push(current.clone());
         let Some(sf) = project.get(&current) else {
@@ -156,14 +165,26 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                 trace,
             );
         };
-        let inputs = inputs_of(&current, &req.answers);
+        let mut inputs = inputs_of(&current, &req.answers);
+        inputs.extend(strings.iter().map(|(k, v)| (k.clone(), v.clone())));
         let outcome = match eval::run(&sf.function, &inputs, &project.bindings(&current)) {
             Ok(outcome) => outcome,
             Err(message) => return failure(message, None, Vec::new(), answers, trace),
         };
         match outcome {
             // Auto-follow: the agent does not need to see a hop that asks nothing.
-            Outcome::Ref(target) => current = target,
+            Outcome::Ref { target, args } => {
+                let Some(next) = project.get(&target) else {
+                    return failure(format!("unknown function `{target}`"), None, Vec::new(), answers, trace);
+                };
+                let names: Vec<String> = next.function.text_inputs().map(|i| i.name.value.clone()).collect();
+                if names.len() != args.len() {
+                    let message = format!("`{target}` takes {} arguments, got {}", names.len(), args.len());
+                    return failure(message, None, Vec::new(), answers, trace);
+                }
+                strings = names.into_iter().zip(args).collect();
+                current = target;
+            }
             Outcome::Text(instruction) => {
                 return StepResponse::Done {
                     version: PROTOCOL_VERSION,
@@ -182,6 +203,11 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                         trace,
                     );
                 };
+                // The agent is never asked for a `string` input. The entry's are checked up front, so this
+                // only guards a value that did not reach the function.
+                if input.ty == InputType::Text {
+                    return failure(missing_input(&name), None, Vec::new(), answers, trace);
+                }
                 let (r#type, options) = type_of(input);
                 return StepResponse::Question {
                     version: PROTOCOL_VERSION,
@@ -316,6 +342,22 @@ fn declared<'a>(project: &'a Project, key: &str) -> Option<&'a Input> {
     f.input(name).or_else(|| f.response(name))
 }
 
+/// The error for a `string` input that was not given.
+fn missing_input(name: &str) -> String {
+    format!("missing input `{name}`; give it with --input {name}=<value>")
+}
+
+/// The entry's `string` inputs must all be given, and no other name may be. Checked before the flow runs.
+fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>) -> Result<(), String> {
+    if let Some(name) = given.keys().find(|k| !entry.text_inputs().any(|i| i.name.value == **k)) {
+        return Err(format!("unknown input `{name}`"));
+    }
+    match entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
+        Some(input) => Err(missing_input(&input.name.value)),
+        None => Ok(()),
+    }
+}
+
 /// The answers that belong to `function`, keyed by the bare name the evaluator uses.
 fn inputs_of(function: &str, answers: &Answers) -> HashMap<String, String> {
     answers
@@ -381,6 +423,7 @@ mod tests {
             entry: entry.into(),
             answers: answers(pairs),
             flow: None,
+            inputs: BTreeMap::new(),
         }
     }
 
@@ -750,6 +793,7 @@ mod tests {
                 entry: "main".into(),
                 answers: answers(&[]),
                 flow: None,
+                inputs: BTreeMap::new(),
             }
         );
     }
@@ -793,5 +837,97 @@ mod tests {
         assert_send_sync::<Project>();
         assert_send_sync::<StepRequest>();
         assert_send_sync::<StepResponse>();
+    }
+
+    /// `main` takes a link as an input and hands it to `merge`, which asks the agent for `ci`.
+    fn pr_project() -> Project {
+        project(&[
+            ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Draft? */\n  draft: boolean,\n) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return @./merge(pr);\n}\n"),
+            ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}.`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
+        ])
+    }
+
+    /// A request with `answers` and `inputs`, both as `(name, value)` pairs.
+    fn req_with(entry: &str, answers: &[(&str, &str)], inputs: &[(&str, &str)]) -> StepRequest {
+        let mut r = req(entry, answers);
+        r.inputs = inputs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        r
+    }
+
+    #[test]
+    fn string_input_is_never_asked() {
+        let res = step(&pr_project(), &req_with("main", &[], &[("pr", "L")]));
+        let StepResponse::Question { key, .. } = res else { panic!("{res:?}") };
+        assert_eq!(key, "main.draft");
+    }
+
+    #[test]
+    fn missing_entry_input_is_an_error() {
+        let res = step(&pr_project(), &req("main", &[]));
+        let StepResponse::Error { message, key, .. } = res else { panic!("{res:?}") };
+        assert_eq!(message, "missing input `pr`; give it with --input pr=<value>");
+        assert_eq!(key, None);
+    }
+
+    #[test]
+    fn unknown_entry_input_is_an_error() {
+        let res = step(&pr_project(), &req_with("main", &[], &[("pr", "L"), ("zz", "x")]));
+        let StepResponse::Error { message, .. } = res else { panic!("{res:?}") };
+        assert_eq!(message, "unknown input `zz`");
+    }
+
+    #[test]
+    fn a_boolean_parameter_is_not_an_input() {
+        let res = step(&pr_project(), &req_with("main", &[], &[("pr", "L"), ("draft", "no")]));
+        let StepResponse::Error { message, .. } = res else { panic!("{res:?}") };
+        assert_eq!(message, "unknown input `draft`");
+    }
+
+    #[test]
+    fn hand_off_binds_the_input_for_the_target() {
+        let res = step(
+            &pr_project(),
+            &req_with("main", &[("main.draft", "no"), ("merge.ci", "green")], &[("pr", "L")]),
+        );
+        assert_eq!(
+            res,
+            StepResponse::Done {
+                version: 1,
+                instruction: "Merge L.".into(),
+                answers: answers(&[("main.draft", "no"), ("merge.ci", "green")]),
+                trace: trace(&["main", "merge"]),
+            }
+        );
+    }
+
+    #[test]
+    fn hand_off_arguments_bind_in_declaration_order() {
+        let project = project(&[
+            ("main.rein", "/** Entry. */\nexport default function main(\n  /** A */\n  a: string,\n  /** B */\n  b: string,\n) {\n  return @./two(b, a);\n}\n"),
+            ("two.rein", "/** Two. */\nexport default function two(\n  /** X */\n  x: string,\n  /** Y */\n  y: string,\n  /** Keep order? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `${x} then ${y}`;\n  }\n  return `${y} then ${x}`;\n}\n"),
+        ]);
+        let inputs = [("a", "A"), ("b", "B")];
+        let res = step(&project, &req_with("main", &[("two.ok", "yes")], &inputs));
+        let StepResponse::Done { instruction, .. } = res else { panic!("{res:?}") };
+        assert_eq!(instruction, "B then A");
+        let res = step(&project, &req_with("main", &[("two.ok", "no")], &inputs));
+        let StepResponse::Done { instruction, .. } = res else { panic!("{res:?}") };
+        assert_eq!(instruction, "A then B");
+    }
+
+    #[test]
+    fn string_answer_key_is_still_an_error() {
+        let res = step(&pr_project(), &req_with("main", &[("main.pr", "x")], &[("pr", "L")]));
+        let StepResponse::Error { message, key, .. } = res else { panic!("{res:?}") };
+        assert_eq!(message, "`main.pr` is a string parameter; only a template takes one");
+        assert_eq!(key, Some("main.pr".into()));
+    }
+
+    #[test]
+    fn inputs_are_read_from_json_and_left_out_when_empty() {
+        let parsed: StepRequest = serde_json::from_str(r#"{"inputs": {"pr": "L"}}"#).unwrap();
+        assert_eq!(parsed.inputs.get("pr").map(String::as_str), Some("L"));
+        let empty = serde_json::to_string(&req("main", &[])).unwrap();
+        assert!(!empty.contains("inputs"), "{empty}");
     }
 }

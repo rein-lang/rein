@@ -95,7 +95,7 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
             }
             OK
         }
-        Ok(Outcome::Ref(target)) => show_ref(&project, &target, json),
+        Ok(Outcome::Ref { target, .. }) => show_ref(&project, &target, json),
         Ok(Outcome::NeedInput(name)) => need_input(&sf.function, &name, json),
     }
 }
@@ -103,8 +103,8 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
 /// Steps the whole flow once. The request comes from flags, or from stdin as JSON. This is only an adapter:
 /// `rein_core::step::step` decides everything. A flow name, from `--flow` or the stdin `flow` field, is
 /// resolved through the scoped `.rein/` folders.
-pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, answers: &[String], from_stdin: bool, json: bool) -> u8 {
-    let response = match build_request(entry, answers, from_stdin) {
+pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool, json: bool) -> u8 {
+    let response = match build_request(entry, answers, inputs, from_stdin) {
         Err(message) => invalid_request(message),
         Ok(request) => {
             let flow = flow.or_else(|| request.flow.clone());
@@ -130,10 +130,10 @@ pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, 
 }
 
 /// The request from stdin (JSON, all of it) or from `--entry` and `--answer key=value` flags.
-fn build_request(entry: Option<String>, answers: &[String], from_stdin: bool) -> Result<StepRequest, String> {
+fn build_request(entry: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool) -> Result<StepRequest, String> {
     if from_stdin {
-        if entry.is_some() || !answers.is_empty() {
-            return Err("--stdin reads the whole request; do not combine it with --entry or --answer".into());
+        if entry.is_some() || !answers.is_empty() || !inputs.is_empty() {
+            return Err("--stdin reads the whole request; do not combine it with --entry, --answer or --input".into());
         }
         let text = io::read_to_string(io::stdin()).map_err(|e| format!("cannot read stdin: {e}"))?;
         return serde_json::from_str(&text).map_err(|e| format!("invalid request JSON: {e}"));
@@ -145,11 +145,19 @@ fn build_request(entry: Option<String>, answers: &[String], from_stdin: bool) ->
             return Err(format!("answer `{key}` given twice"));
         }
     }
+    let mut given = BTreeMap::new();
+    for i in inputs {
+        let (name, value) = i.split_once('=').ok_or_else(|| format!("invalid --input `{i}`; expected name=value"))?;
+        if given.insert(name.to_string(), value.to_string()).is_some() {
+            return Err(format!("input `{name}` set twice"));
+        }
+    }
     Ok(StepRequest {
         version: PROTOCOL_VERSION,
         entry: entry.unwrap_or_else(|| ENTRY.to_string()),
         answers: map,
         flow: None,
+        inputs: given,
     })
 }
 

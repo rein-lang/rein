@@ -51,9 +51,26 @@ impl Function {
         found
     }
 
-    /// A template takes only `string` parameters, so it is never run by itself.
+    /// A template is never run by itself. See [`Function::template_literal`].
     pub fn is_template(&self) -> bool {
-        self.inputs.iter().any(|i| i.ty == InputType::Text)
+        self.template_literal().is_some()
+    }
+
+    /// The template literal of a template: every parameter is `string`, there is at least one, and the body is
+    /// exactly one `return` of a template literal. Any other function is a normal function.
+    pub fn template_literal(&self) -> Option<&TemplateLit> {
+        if self.inputs.is_empty() || self.inputs.iter().any(|i| i.ty != InputType::Text) {
+            return None;
+        }
+        match self.body.as_slice() {
+            [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => Some(lit),
+            _ => None,
+        }
+    }
+
+    /// The `string` parameters, in declaration order. Their values come from the caller.
+    pub fn text_inputs(&self) -> impl Iterator<Item = &Input> {
+        self.inputs.iter().filter(|i| i.ty == InputType::Text)
     }
 }
 
@@ -204,10 +221,13 @@ pub struct TemplateLit {
 pub enum Value {
     Str(Spanned<String>),
     Template(TemplateLit),
+    /// A bare name of a `string` parameter of the caller. Only a call argument can be one.
+    Name(Spanned<String>),
     Call(Call),
 }
 
-/// `callee(args)`, where the callee is a template. The args are strings or template literals.
+/// `callee(args)`: a template call, or a hand-off to a function that has `string` parameters.
+/// The args are strings, template literals, or bare names of the caller's `string` parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub callee: Callee,

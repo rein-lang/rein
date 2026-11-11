@@ -4,13 +4,15 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::{Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
+use crate::check::string_in_condition;
 
 /// Result of a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Text(String),
-    /// The project path of the function to run next, such as `ci/fix`.
-    Ref(String),
+    /// The function to run next, by project path such as `ci/fix`. `args` are the values of its `string`
+    /// parameters, in declaration order. They come from `return @./target(args);`, or are empty.
+    Ref { target: String, args: Vec<String> },
     NeedInput(String),
     /// The agent must answer `response`, after doing `instruction`.
     Request { instruction: String, response: String },
@@ -80,9 +82,16 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
             }
             Stmt::Return(r) => Some(match &r.value {
                 ReturnValue::Text(t) => Outcome::Text(t.clone()),
-                ReturnValue::Ref(reference) => Outcome::Ref(target(env, &reference.value)?),
+                ReturnValue::Ref(reference) => Outcome::Ref { target: target(env, &reference.value)?, args: Vec::new() },
                 ReturnValue::Template(lit) => Outcome::Text(expand_template(env, lit)?),
-                ReturnValue::Call(call) => Outcome::Text(expand_call(env, call)?),
+                ReturnValue::Call(call) => match env.bindings.get(call.callee.key()) {
+                    // A hand-off: the arguments are the values of the target's `string` parameters.
+                    Some(Binding::Function(path)) => {
+                        let args = call.args.iter().map(|a| expand_value(env, a)).collect::<Eval<Vec<String>>>()?;
+                        Outcome::Ref { target: path.clone(), args }
+                    }
+                    _ => Outcome::Text(expand_call(env, call)?),
+                },
             }),
             Stmt::If { cond, then, .. } => {
                 if eval(env, cond)? {
@@ -93,8 +102,10 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
             }
             Stmt::Switch { subject, cases, .. } => {
                 let input = declared(env, &subject.value)?;
-                let InputType::Choice(members) = &input.ty else {
-                    return Err(bool_in_switch(&subject.value));
+                let members = match &input.ty {
+                    InputType::Choice(members) => members,
+                    InputType::Text => return Err(Stop::Error(string_in_condition(&subject.value))),
+                    InputType::Bool => return Err(bool_in_switch(&subject.value)),
                 };
                 let raw = provided(env, &subject.value)?;
                 check_member(&subject.value, members, raw)?;
@@ -116,7 +127,7 @@ fn find_case<'a>(cases: &'a [Case], raw: &str) -> Option<&'a Case> {
     cases.iter().find(|c| c.values.iter().any(|v| v.value == raw))
 }
 
-/// Text of a template literal in a function. Each `${name}` is a union parameter, read now.
+/// Text of a template literal in a function. Each `${name}` is a union or a `string` parameter, read now.
 fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
     let mut out = String::new();
     for piece in &lit.pieces {
@@ -124,16 +135,26 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
             Piece::Text(t) => out.push_str(t),
             Piece::Name(n) => {
                 let input = declared(env, &n.value)?;
-                let InputType::Choice(members) = &input.ty else {
-                    return Err(Stop::Error(format!("boolean parameter `{}` cannot be interpolated", n.value)));
-                };
-                let raw = provided(env, &n.value)?;
-                check_member(&n.value, members, raw)?;
-                out.push_str(raw);
+                match &input.ty {
+                    InputType::Bool => {
+                        return Err(Stop::Error(format!("boolean parameter `{}` cannot be interpolated", n.value)));
+                    }
+                    InputType::Choice(members) => check_member(&n.value, members, provided(env, &n.value)?)?,
+                    InputType::Text => {}
+                }
+                out.push_str(provided(env, &n.value)?);
             }
         }
     }
     Ok(out)
+}
+
+/// The value of a `string` parameter of this function, for a bare name argument.
+fn string_input(env: &Env, name: &str) -> Eval<String> {
+    match declared(env, name)?.ty {
+        InputType::Text => Ok(provided(env, name)?.to_string()),
+        _ => Err(Stop::Error(format!("`{name}` is not a string input"))),
+    }
 }
 
 /// Text of a template call: the template's own literal, with its parameters replaced by the arguments.
@@ -166,6 +187,7 @@ fn expand_value(env: &Env, v: &Value) -> Eval<String> {
     match v {
         Value::Str(s) => Ok(s.value.clone()),
         Value::Template(lit) => expand_template(env, lit),
+        Value::Name(n) => string_input(env, &n.value),
         Value::Call(call) => expand_call(env, call),
     }
 }
@@ -182,7 +204,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
         Expr::Var(v) => {
             let input = declared(env, &v.value)?;
             match input.ty {
-                InputType::Text => Err(Stop::Error("todo".into())),
+                InputType::Text => Err(Stop::Error(string_in_condition(&v.value))),
                 InputType::Bool => parse_bool(&v.value, provided(env, &v.value)?),
                 InputType::Choice(_) => Err(Stop::Error(format!(
                     "union parameter `{0}` needs a comparison, like `{0} === \"...\"`",
@@ -193,7 +215,10 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
         Expr::Compare { var, value, equal } => {
             let input = declared(env, &var.value)?;
             let InputType::Choice(members) = &input.ty else {
-                return Err(bool_compared(&var.value));
+                return Err(match input.ty {
+                    InputType::Text => Stop::Error(string_in_condition(&var.value)),
+                    _ => bool_compared(&var.value),
+                });
             };
             let raw = provided(env, &var.value)?;
             check_member(&var.value, members, raw)?;
@@ -305,7 +330,10 @@ mod tests {
     fn ref_return_resolves_the_import_to_its_project_path() {
         let f = func("/** d */\nexport default function f() { return @./ci/fix }");
         let bindings = BTreeMap::from([("./ci/fix".to_string(), Binding::Function("ci/fix".into()))]);
-        assert_eq!(run(&f, &inputs(&[]), &bindings), Ok(Outcome::Ref("ci/fix".into())));
+        assert_eq!(
+            run(&f, &inputs(&[]), &bindings),
+            Ok(Outcome::Ref { target: "ci/fix".into(), args: vec![] })
+        );
     }
 
     #[test]
@@ -521,5 +549,45 @@ export default async function f(
             Ok(Outcome::Request { instruction: "fix it".into(), response: "ok".into() })
         );
         assert_eq!(run_plain(&f, &[("c", "x"), ("ok", "no")]), Ok(Outcome::Text("not fixed".into())));
+    }
+
+    #[test]
+    fn hand_off_returns_the_string_arguments() {
+        let f = func(r#"/** d */
+export default function f(
+  /** Link */ pr: string,
+) {
+  return @./merge(pr);
+}"#);
+        let bindings = BTreeMap::from([("./merge".to_string(), Binding::Function("merge".into()))]);
+        assert_eq!(
+            run(&f, &inputs(&[("pr", "https://example.com/pr/1")]), &bindings),
+            Ok(Outcome::Ref { target: "merge".into(), args: vec!["https://example.com/pr/1".into()] })
+        );
+    }
+
+    #[test]
+    fn string_input_is_interpolated_in_a_template_literal() {
+        // A union makes this a normal function, so `pr` is an input and not a template parameter.
+        let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return `Review ${pr}` }\n  return `Other ${pr}`;\n}");
+        assert_eq!(run_plain(&f, &[("c", "x"), ("pr", "L")]), Ok(Outcome::Text("Review L".into())));
+        assert_eq!(run_plain(&f, &[("c", "y"), ("pr", "L")]), Ok(Outcome::Text("Other L".into())));
+        assert_eq!(run_plain(&f, &[("c", "x")]), Ok(Outcome::NeedInput("pr".into())));
+    }
+
+    #[test]
+    fn string_input_is_a_bare_argument_of_a_std_template() {
+        let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  return delegate(\"use opus model\", pr);\n}");
+        let bindings = BTreeMap::from([std_binding("delegate")]);
+        assert_eq!(
+            run(&f, &inputs(&[("pr", "L")]), &bindings),
+            Ok(Outcome::Text("Delegate this task to a subagent.\nModel: use opus model\nTask: L".into()))
+        );
+    }
+
+    #[test]
+    fn string_input_in_a_condition_is_an_error() {
+        let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  if (pr) { return \"a\" }\n  return \"b\"\n}");
+        assert_eq!(run_plain(&f, &[("pr", "x")]), Err("`pr` is a string input; a condition cannot read it".into()));
     }
 }
