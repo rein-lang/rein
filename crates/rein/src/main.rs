@@ -37,7 +37,7 @@ enum Command {
     },
     /// Run a flow as a live process. Writes one step per line, reads one answer per line on stdin.
     Run {
-        /// Program to run, by name (see `rein list`).
+        /// Program to run: a `.rein` file, or a name (see `rein list`).
         #[arg(conflicts_with = "root")]
         flow: Option<String>,
         /// Project root. Default: the nearest directory with main.rein.
@@ -67,13 +67,16 @@ enum Command {
     },
     /// Step the whole flow from `main`. This is the agent-facing interface: answer one key per call.
     Step {
+        /// Program to step: a `.rein` file (its folder is the project root), or a name (see `rein list`).
+        #[arg(conflicts_with_all = ["flow", "root", "entry"])]
+        program: Option<String>,
         /// Function to start from, as its path under the root without `.rein`. Default: `main`.
         #[arg(long)]
         entry: Option<String>,
         /// Project root. Default: the nearest directory with main.rein.
         #[arg(long, conflicts_with = "flow")]
         root: Option<PathBuf>,
-        /// Flow to step, by name, from the scoped `rein/` folders (see `rein list`).
+        /// Program to step, by name (see `rein list`). Same as the positional program.
         #[arg(long, conflicts_with = "root")]
         flow: Option<String>,
         /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
@@ -160,8 +163,8 @@ fn main() -> ExitCode {
         Command::Check { path } => cli::check(&path),
         Command::Run { flow, root, entry, json } => live_run::run(flow, root, entry, json),
         Command::Eval { function, root, set, json } => cli::eval(&function, root, &set, json),
-        Command::Step { entry, root, flow, answer, input, stdin, json } => {
-            cli::step(entry, root, flow, &answer, &input, stdin, json)
+        Command::Step { program, entry, root, flow, answer, input, stdin, json } => {
+            cli::step(entry, root, flow.or(program), &answer, &input, stdin, json)
         }
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { root } => cli::graph(root),

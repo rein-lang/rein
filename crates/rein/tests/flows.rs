@@ -368,3 +368,86 @@ fn install_refuses_invalid_existing_json_and_leaves_it() {
     assert_eq!(code(&out), 1);
     assert_eq!(fs::read_to_string(repo.join(".claude/settings.json")).unwrap(), "{ broken");
 }
+
+/// A program with no `rein/` folder, no manifest and no `main.rein`: the file is the program. It refs `@./ci/fix`.
+fn write_file_program(base: &Path) -> PathBuf {
+    write(
+        base,
+        "x/review.rein",
+        "/**\n * Review a failing change.\n */\nexport default function review(\n  /** Is CI green? */\n  green: boolean,\n) {\n  if (green) {\n    return \"approved\";\n  }\n  return @./ci/fix;\n}\n",
+    );
+    write(
+        base,
+        "x/ci/fix.rein",
+        "/**\n * Fix the failing CI.\n */\nexport default function fix(\n  /** Is the fix pushed? */\n  pushed: boolean,\n) {\n  if (pushed) {\n    return \"rerun CI\";\n  }\n  return \"push the fix\";\n}\n",
+    );
+    base.join("x/review.rein")
+}
+
+#[test]
+fn step_runs_a_program_from_its_entry_file() {
+    let sb = Sandbox::new("filestep");
+    let file = write_file_program(&sb.home);
+    let path = file.to_str().unwrap();
+    // Run from a folder with no `rein/`: the file alone decides the project root.
+    let out = sb.run(&sb.home, &["step", path, "--json"]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    let v = json_out(&out);
+    assert_eq!(v["kind"], "question");
+    assert_eq!(v["key"], "review.green");
+
+    let out = sb.run(&sb.home, &["step", path, "--answer", "review.green=no", "--json"]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    let v = json_out(&out);
+    assert_eq!(v["key"], "ci/fix.pushed");
+    assert_eq!(v["function"], "ci/fix");
+
+    let out = sb.run(&sb.home, &["step", path, "--answer", "review.green=no", "--answer", "ci/fix.pushed=yes", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stdout(&out));
+    let v = json_out(&out);
+    assert_eq!(v["kind"], "done");
+    assert_eq!(v["instruction"], "rerun CI");
+    assert_eq!(v["trace"], json!(["review", "ci/fix"]));
+}
+
+#[test]
+fn run_takes_a_program_file_path() {
+    let sb = Sandbox::new("filerun");
+    let file = write_file_program(&sb.home);
+    let out = sb.run_with_stdin(
+        &sb.home,
+        &["run", file.to_str().unwrap(), "--json"],
+        "{\"value\": \"no\"}\n{\"value\": \"yes\"}\n",
+    );
+    assert_eq!(code(&out), 0, "{}", stdout(&out));
+    let last = stdout(&out).lines().last().unwrap().to_string();
+    let v: Value = serde_json::from_str(&last).unwrap();
+    assert_eq!(v["kind"], "done", "{}", stdout(&out));
+}
+
+#[test]
+fn check_takes_a_program_file_path() {
+    let sb = Sandbox::new("filecheck");
+    let file = write_file_program(&sb.home);
+    let out = sb.run(&sb.home, &["check", file.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn step_program_file_that_does_not_exist_is_a_clear_error() {
+    let sb = Sandbox::new("missingfile");
+    let out = sb.run(&sb.home, &["step", "nope/review.rein", "--json"]);
+    assert_eq!(code(&out), 1);
+    let v = json_out(&out);
+    assert_eq!(v["kind"], "error");
+    assert_eq!(v["message"], "no such file: nope/review.rein", "{v}");
+}
+
+#[test]
+fn step_program_name_still_resolves_through_the_catalog() {
+    let sb = Sandbox::new("namestep");
+    write(&sb.user_flows(), "my-gate/main.rein", &flow_text("A user gate."));
+    let out = sb.run(&sb.home, &["step", "my-gate", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stdout(&out));
+    assert_eq!(json_out(&out)["kind"], "done");
+}

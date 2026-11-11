@@ -121,7 +121,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
             req.version
         ));
     }
-    let errors = error_diagnostics(project);
+    let errors = error_diagnostics(project, &req.entry);
     if !errors.is_empty() {
         let message = format!(
             "project has {} error(s); run `rein check` and fix them",
@@ -295,8 +295,9 @@ fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
     (name.to_string(), options)
 }
 
-/// Errors of every file and of the project, in a fixed order. Warnings are left out.
-fn error_diagnostics(project: &Project) -> Vec<StepDiagnostic> {
+/// Errors of every file and of the project, in a fixed order. Warnings are left out. A program is its entry file,
+/// so the project-level error (no `main.rein`) counts only when the entry itself is missing.
+fn error_diagnostics(project: &Project, entry: &str) -> Vec<StepDiagnostic> {
     let mut out = Vec::new();
     for (name, diags) in project.check() {
         let Some(sf) = project.get(&name) else {
@@ -313,7 +314,8 @@ fn error_diagnostics(project: &Project) -> Vec<StepDiagnostic> {
             });
         }
     }
-    for d in project.project_diagnostics() {
+    let project_errors = if project.get(entry).is_some() { Vec::new() } else { project.project_diagnostics() };
+    for d in project_errors {
         let file = "main.rein".to_string();
         out.push(StepDiagnostic {
             file,

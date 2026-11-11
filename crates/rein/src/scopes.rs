@@ -47,3 +47,24 @@ pub fn find(name: &str) -> Result<Flow, String> {
         None => Err(format!("unknown program `{name}`; run `rein list` to list programs")),
     }
 }
+
+/// The project root and entry function of a program named on the command line. A `.rein` path, or any
+/// path to an existing file, is the program itself: its folder is the root and its name is the entry, with
+/// no manifest or scope. Anything else is a visible program name (see `rein list`).
+pub fn locate(program: &str) -> Result<(PathBuf, String), String> {
+    let path = Path::new(program);
+    if !program.ends_with(".rein") && !path.is_file() {
+        let flow = find(program)?;
+        return Ok((flow.root, flow.entry));
+    }
+    let file = std::path::absolute(path).map_err(|e| format!("cannot read {program}: {e}"))?;
+    if !file.is_file() {
+        return Err(format!("no such file: {program}"));
+    }
+    if file.extension().and_then(|e| e.to_str()) != Some("rein") {
+        return Err(format!("not a .rein file: {program}"));
+    }
+    let root = file.parent().map(Path::to_path_buf).unwrap_or_default();
+    let entry = file.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+    Ok((root, entry))
+}
