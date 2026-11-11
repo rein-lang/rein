@@ -850,3 +850,71 @@ fn rename_a_function_needs_a_client_that_renames_files() {
 
     server.shutdown();
 }
+
+/// The labels of a completion list.
+fn labels(items: &Value) -> Vec<String> {
+    items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
+}
+
+/// A buffer in support-ticket that calls the template with one argument given. Line 2, column 50 is after `, `.
+const PARTIAL_CALL: &str =
+    "/** R. */\nexport default function r() {\n  return @../templates/tell_customer(opening=\"x\", );\n}\n";
+
+#[test]
+fn completion_offers_argument_names_and_union_members() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // Inside the call, after one named argument: the parameter not given yet.
+    let partial = uri_of(&root, "billing/partial.rein");
+    server.open(&partial, PARTIAL_CALL);
+    let items = server.request(2, "textDocument/completion", at(&partial, 2, 50));
+    assert_eq!(labels(&items), ["nextStep="], "{items}");
+    assert_eq!(items["result"][0]["detail"], "nextStep: string");
+
+    // After `case "`: the members of the switch subject. Each replaces the whole literal.
+    let main = open_file(&mut server, &root, "main.rein");
+    let items = server.request(3, "textDocument/completion", at(&main, 13, 10));
+    assert_eq!(labels(&items), ["\"billing\"", "\"account\"", "\"how_to\""], "{items}");
+    let range = json!({"start": {"line": 13, "character": 9}, "end": {"line": 13, "character": 18}});
+    assert_eq!(items["result"][0]["textEdit"]["range"], range);
+
+    // After `c === "`: the members of `c`.
+    let tmp = temp_project("options");
+    let start = uri_of(&tmp, "start.rein");
+    server.open(
+        &start,
+        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return \"a\";\n  }\n  return \"z\";\n}\n",
+    );
+    let items = server.request(4, "textDocument/completion", at(&start, 4, 13));
+    assert_eq!(labels(&items), ["\"x\"", "\"y\""], "{items}");
+    let range = json!({"start": {"line": 4, "character": 12}, "end": {"line": 4, "character": 15}});
+    assert_eq!(items["result"][0]["textEdit"]["range"], range);
+
+    server.shutdown();
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+fn signature_help_shows_the_callee_parameters() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let partial = uri_of(&root, "billing/partial.rein");
+    server.open(&partial, PARTIAL_CALL);
+
+    let help = server.request(2, "textDocument/signatureHelp", at(&partial, 2, 50));
+    let signature = &help["result"]["signatures"][0];
+    assert_eq!(signature["label"], "@../templates/tell_customer(opening: string, nextStep: string)");
+    assert_eq!(signature["parameters"][0]["label"], json!([28, 43]));
+    assert_eq!(signature["parameters"][1]["label"], json!([45, 61]));
+    assert_eq!(signature["parameters"][1]["documentation"], "The next step the customer can expect.");
+    assert_eq!(help["result"]["activeParameter"], 1, "{help}");
+
+    // In the first argument, the first parameter is active.
+    let help = server.request(3, "textDocument/signatureHelp", at(&partial, 2, 40));
+    assert_eq!(help["result"]["activeParameter"], 0, "{help}");
+
+    server.shutdown();
+}

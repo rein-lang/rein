@@ -1,35 +1,41 @@
-//! Completion: reference paths after `@./`, and elsewhere the parameter names, std names and keywords.
+//! Completion: reference paths after `@./`, argument names inside a call, union members after `===` or `case`,
+//! and elsewhere the parameter names, std names and keywords.
 
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Range, TextDocumentPositionParams,
-    TextEdit,
+    CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation, Range,
+    TextDocumentPositionParams, TextEdit,
 };
+use rein_core::ast::Function;
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
 
-use super::text::{is_path_char, line_before, offset, position, relative_import};
+use super::call_context::{call_at, callee_params};
+use super::hover::input_sig;
+use super::occurrences::declaration;
+use super::text::{is_path_char, is_token_char, line_before, offset, position, relative_import};
 use super::workspace::{locate, State};
 
 pub fn completion(state: &State, p: &TextDocumentPositionParams) -> Option<CompletionResponse> {
     let (project, name) = locate(&state.docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
     let off = offset(&sf.text, p.position);
-    let items: Vec<CompletionItem> = if let Some(items) = ref_completions(&sf.text, off, &project, &name) {
-        items
-    } else {
-        let inputs = sf.function.inputs.iter().map(|i| CompletionItem {
-            label: i.name.value.clone(),
-            kind: Some(CompletionItemKind::VARIABLE),
-            detail: Some(i.ty.ts_type()),
-            ..Default::default()
+    let items = ref_completions(&sf.text, off, &project, &name)
+        .or_else(|| arg_name_completions(&sf.text, off, &project, &name))
+        .or_else(|| option_completions(&sf.text, off, &sf.function))
+        .unwrap_or_else(|| {
+            let inputs = sf.function.inputs.iter().map(|i| CompletionItem {
+                label: i.name.value.clone(),
+                kind: Some(CompletionItemKind::VARIABLE),
+                detail: Some(i.ty.ts_type()),
+                ..Default::default()
+            });
+            let keywords = KEYWORDS.iter().map(|k| CompletionItem {
+                label: k.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            });
+            inputs.chain(std_completions()).chain(keywords).collect()
         });
-        let keywords = KEYWORDS.iter().map(|k| CompletionItem {
-            label: k.to_string(),
-            kind: Some(CompletionItemKind::KEYWORD),
-            ..Default::default()
-        });
-        inputs.chain(std_completions()).chain(keywords).collect()
-    };
     Some(CompletionResponse::Array(items))
 }
 
@@ -59,6 +65,75 @@ fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Opt
         })
         .collect();
     Some(items)
+}
+
+/// Inside call parentheses, where an argument name goes: the callee's parameters not given yet, as `name=`.
+fn arg_name_completions(text: &str, off: usize, project: &Project, from: &str) -> Option<Vec<CompletionItem>> {
+    let call = call_at(text, off)?;
+    if !call.at_name {
+        return None;
+    }
+    let params = callee_params(project, from, &call.callee)?;
+    let items = params
+        .into_iter()
+        .filter(|i| !call.given.contains(&i.name.value))
+        .map(|i| CompletionItem {
+            label: format!("{}=", i.name.value),
+            kind: Some(CompletionItemKind::FIELD),
+            detail: Some(input_sig(i)),
+            documentation: Some(Documentation::String(i.description.value.clone())),
+            ..Default::default()
+        })
+        .collect();
+    Some(items)
+}
+
+/// After `x === ` or `case `: the members of the union `x`, or of the switch subject, as string literals. Each
+/// item replaces the literal under the cursor.
+fn option_completions(text: &str, off: usize, f: &Function) -> Option<Vec<CompletionItem>> {
+    let before = line_before(text, off);
+    let mut head = before.trim_end_matches(is_token_char);
+    let mut start = off - (before.len() - head.len());
+    if let Some(h) = head.strip_suffix(['"', '\'']) {
+        head = h;
+        start -= 1;
+    }
+    let head = head.trim_end();
+    let var = if let Some(h) = head.strip_suffix("===").or_else(|| head.strip_suffix("!==")) {
+        let h = h.trim_end();
+        &h[h.trim_end_matches(is_token_char).len()..]
+    } else if head.trim_start() == "case" {
+        switch_subject(&text[..off])?
+    } else {
+        return None;
+    };
+    let options = declaration(f, var)?.ty.options()?;
+    let rest = &text[off..];
+    let mut end = off + (rest.len() - rest.trim_start_matches(is_token_char).len());
+    if text[end..].starts_with(['"', '\'']) {
+        end += 1;
+    }
+    let range = Range::new(position(text, start), position(text, end));
+    let items = options
+        .into_iter()
+        .map(|o| {
+            let label = format!("\"{o}\"");
+            CompletionItem {
+                label: label.clone(),
+                kind: Some(CompletionItemKind::ENUM_MEMBER),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: label })),
+                ..Default::default()
+            }
+        })
+        .collect();
+    Some(items)
+}
+
+/// The name in the last `switch (name)` of `text`.
+fn switch_subject(text: &str) -> Option<&str> {
+    let rest = text[text.rfind("switch")? + "switch".len()..].trim_start().strip_prefix('(')?.trim_start();
+    let end = rest.find(|c: char| !is_token_char(c))?;
+    Some(&rest[..end])
 }
 
 /// Each std name, for completion. Its detail is its description.

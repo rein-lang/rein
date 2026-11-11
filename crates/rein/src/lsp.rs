@@ -4,6 +4,7 @@
 //! Every request rebuilds the project from disk plus the open buffers. That is slow on big
 //! projects, which is fine for the proof of concept.
 
+mod call_context;
 mod call_hierarchy;
 mod code_lens;
 mod completion;
@@ -14,6 +15,7 @@ mod hover;
 mod occurrences;
 mod references;
 mod rename;
+mod signature_help;
 mod sync;
 mod text;
 mod workspace;
@@ -25,7 +27,8 @@ use std::error::Error;
 use lsp_server::{Connection, ErrorCode, Message, Request, Response};
 use lsp_types::{
     CallHierarchyServerCapability, CodeLensOptions, CompletionOptions, HoverProviderCapability, InitializeParams,
-    OneOf, RenameOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    OneOf, RenameOptions, ServerCapabilities, SignatureHelpOptions, TextDocumentSyncCapability,
+    TextDocumentSyncKind,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -70,8 +73,15 @@ fn capabilities() -> ServerCapabilities {
             work_done_progress_options: Default::default(),
         })),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec![" ".into(), "\"".into(), "'".into(), "/".into(), ".".into()]),
+            trigger_characters: Some(
+                [" ", "\"", "'", "/", ".", "(", ","].into_iter().map(String::from).collect(),
+            ),
             ..Default::default()
+        }),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".into(), ",".into()]),
+            retrigger_characters: Some(vec!["=".into()]),
+            work_done_progress_options: Default::default(),
         }),
         ..Default::default()
     }
@@ -113,6 +123,7 @@ fn handle_request(state: &State, req: Request) -> Response {
         "callHierarchy/outgoingCalls" => reply(req, |p| Ok(call_hierarchy::outgoing(state, &p))),
         "textDocument/documentSymbol" => reply(req, |p| Ok(document_symbols::document_symbols(state, &p))),
         "workspace/symbol" => reply(req, |p| Ok(workspace_symbols::workspace_symbols(state, &p))),
+        "textDocument/signatureHelp" => reply(req, |p| Ok(signature_help::signature_help(state, &p))),
         "textDocument/prepareRename" => reply(req, |p| rename::prepare(state, &p)),
         "textDocument/rename" => reply(req, |p| rename::rename(state, &p)),
         other => Response::new_err(req.id, ErrorCode::MethodNotFound as i32, format!("method not found: {other}")),
