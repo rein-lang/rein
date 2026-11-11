@@ -410,7 +410,7 @@ fn hover_and_completion_know_the_std_library() {
     let start = uri_of(&root, "start.rein");
     server.open(
         &start,
-        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return delegate(\"a\", \"b\");\n  }\n  return \"z\";\n}\n",
+        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return delegate(model=\"a\", task=\"b\");\n  }\n  return \"z\";\n}\n",
     );
     let hover = server.request(
         2,

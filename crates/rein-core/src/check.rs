@@ -7,12 +7,12 @@ use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{KEYWORDS, RESERVED};
 use crate::stdlib;
 
-/// What a reference or a std name is, as the checker needs it. A template needs its parameter count.
-/// A function needs its count of `string` parameters, which a hand-off must pass as arguments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a reference or a std name is, as the checker needs it. A template needs its parameter names.
+/// A function needs the names of its `string` parameters, which a hand-off must pass as named arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
-    Function { strings: usize },
-    Template { params: usize },
+    Function { strings: Vec<String> },
+    Template { params: Vec<String> },
     Request,
 }
 
@@ -345,9 +345,9 @@ impl<'a> Checker<'a> {
                 reference.span,
                 format!("`@{path}` is a template; call it with arguments, like `@{path}(...)`"),
             ),
-            Ok(Kind::Function { strings }) if strings > 0 => self.error(
+            Ok(Kind::Function { strings }) if !strings.is_empty() => self.error(
                 reference.span,
-                format!("`@{path}` takes {}, got 0", count_args(strings)),
+                format!("`@{path}` takes {}, got 0", count_args(strings.len())),
             ),
             Ok(Kind::Function { .. } | Kind::Request) => {}
         }
@@ -362,11 +362,11 @@ impl<'a> Checker<'a> {
                 Ok(Kind::Function { .. }) if !hand_off => {
                     self.error(path.span, "A hand-off cannot be an argument of a call.");
                 }
-                Ok(Kind::Function { strings: 0 }) => {
+                Ok(Kind::Function { strings }) if strings.is_empty() => {
                     self.error(call.span, format!("`@{}` takes no arguments; return it without a call", path.value));
                 }
-                Ok(Kind::Function { strings }) => self.arity(call, strings, &format!("@{}", path.value)),
-                Ok(Kind::Template { params }) => self.arity(call, params, &format!("@{}", path.value)),
+                Ok(Kind::Function { strings }) => self.arguments(call, &strings, &format!("@{}", path.value)),
+                Ok(Kind::Template { params }) => self.arguments(call, &params, &format!("@{}", path.value)),
                 Ok(Kind::Request) => {}
             },
             Callee::Std(name) => match stdlib::item(&name.value) {
@@ -375,22 +375,42 @@ impl<'a> Checker<'a> {
                     self.error(name.span, "`request` is not a template; use `await request(...)`");
                 }
                 Ok(Binding::Template { function, .. }) => {
-                    self.arity(call, function.inputs.len(), &name.value);
+                    let params: Vec<String> = function.inputs.iter().map(|i| i.name.value.clone()).collect();
+                    self.arguments(call, &params, &name.value);
                 }
                 // Std names are templates or `request`, never functions.
                 Ok(Binding::Function(_)) => {}
             },
         }
         for arg in &call.args {
-            self.value(arg);
+            self.value(&arg.value);
         }
     }
 
-    /// The argument count of a call must equal the parameter count of its target.
-    fn arity(&mut self, call: &Call, params: usize, name: &str) {
-        let got = call.args.len();
-        if params != got {
-            self.error(call.span, format!("`{name}` takes {}, got {got}", count_args(params)));
+    /// The arguments of a call bind by name. Each one is `name=value`, its name is a parameter, and no name
+    /// repeats. Every parameter is given, by name or by its place in a positional argument.
+    fn arguments(&mut self, call: &Call, params: &[String], target: &str) {
+        let list = params.join(", ");
+        let mut given: BTreeSet<&str> = BTreeSet::new();
+        for (i, arg) in call.args.iter().enumerate() {
+            let Some(name) = &arg.name else {
+                match params.get(i) {
+                    Some(p) => self.error(arg.span, format!("missing argument `{p}` in call to `{target}`; write `{p}=value`")),
+                    None => self.error(arg.span, format!("unexpected argument in call to `{target}`; parameters are {list}")),
+                }
+                continue;
+            };
+            if !params.contains(&name.value) {
+                self.error(name.span, format!("`{}` is not a parameter of `{target}`; parameters are {list}", name.value));
+            } else if !given.insert(name.value.as_str()) {
+                self.error(name.span, format!("`{}` is given twice in call to `{target}`; give each name once", name.value));
+            }
+        }
+        for (i, p) in params.iter().enumerate() {
+            let positional = call.args.get(i).is_some_and(|a| a.name.is_none());
+            if !given.contains(p.as_str()) && !positional {
+                self.error(call.span, format!("missing argument `{p}` in call to `{target}`; write `{p}=value`"));
+            }
         }
     }
 
@@ -519,19 +539,19 @@ export default function tpl(
         F.get_or_init(|| parse(TPL).0)
     }
 
-    /// Test resolver: `./tpl` is a template, paths with `missing` do not resolve, `./merge` is a function
-    /// with one `string` parameter, and every other path is a function with none.
+    /// Test resolver: `./tpl` is a template with parameters `a` and `b`, paths with `missing` do not resolve,
+    /// `./merge` is a function with one `string` parameter `pr`, and every other path is a function with none.
     fn resolves(path: &str) -> Result<Kind, String> {
         if path == "./tpl" {
-            return Ok(Kind::Template { params: tpl().inputs.len() });
+            return Ok(Kind::Template { params: tpl().inputs.iter().map(|i| i.name.value.clone()).collect() });
         }
         if path.contains("missing") {
             return Err(format!("cannot find function `@{path}`"));
         }
         if path == "./merge" {
-            return Ok(Kind::Function { strings: 1 });
+            return Ok(Kind::Function { strings: vec!["pr".into()] });
         }
-        Ok(Kind::Function { strings: 0 })
+        Ok(Kind::Function { strings: Vec::new() })
     }
 
     fn check_src(src: &str) -> Vec<Diagnostic> {
@@ -902,9 +922,9 @@ export default function f(
   /** C */ c: "x" | "y",
 ) {
   if (c === "x") {
-    return @./tpl("one", `x ${c}`);
+    return @./tpl(a="one", b=`x ${c}`);
   }
-  return @./tpl("two", `y ${c}`);
+  return @./tpl(b=`y ${c}`, a="two");
 }"#));
     }
 
@@ -919,12 +939,12 @@ export default function f(
     }
 
     #[test]
-    fn template_call_arity_is_checked() {
+    fn template_call_missing_argument_is_checked() {
         expect_diag(
             &with(TPL_IMPORT, r#"/** d */
-export default function f() { return @./tpl("only one") }"#),
+export default function f() { return @./tpl(a="only one") }"#),
             Severity::Error,
-            "`@./tpl` takes 2 arguments, got 1",
+            "missing argument `b` in call to `@./tpl`; write `b=value`",
         );
     }
 
@@ -946,26 +966,26 @@ export default async function f() {
     #[test]
     fn nested_template_call_arity_is_checked() {
         expect_diag(
-            &with_pr(r#"return @./tpl(pr, @./tpl("only one"));"#),
+            &with_pr(r#"return @./tpl(a=pr, b=@./tpl(a="only one"));"#),
             Severity::Error,
-            "`@./tpl` takes 2 arguments, got 1",
+            "missing argument `b` in call to `@./tpl`; write `b=value`",
         );
         expect_diag(
-            &with_pr(r#"return @./tpl(delegate("m"), pr);"#),
+            &with_pr(r#"return @./tpl(a=delegate(model="m"), b=pr);"#),
             Severity::Error,
-            "`delegate` takes 2 arguments, got 1",
+            "missing argument `task` in call to `delegate`; write `task=value`",
         );
     }
 
     #[test]
     fn hand_off_cannot_be_an_argument() {
         expect_diag(
-            &with_pr("return @./tpl(pr, @./merge(pr));"),
+            &with_pr("return @./tpl(a=pr, b=@./merge(pr=pr));"),
             Severity::Error,
             "A hand-off cannot be an argument of a call.",
         );
         expect_diag(
-            &with_pr("return delegate(@./merge(pr), \"task\");"),
+            &with_pr("return delegate(model=@./merge(pr=pr), task=\"task\");"),
             Severity::Error,
             "A hand-off cannot be an argument of a call.",
         );
@@ -973,7 +993,7 @@ export default async function f() {
 
     #[test]
     fn std_template_call_inside_a_user_template_call_is_clean() {
-        clean(&with_pr(r#"return @./tpl(delegate("use opus model", pr), "b");"#));
+        clean(&with_pr(r#"return @./tpl(a=delegate(model="use opus model", task=pr), b="b");"#));
     }
 
     #[test]
@@ -1036,7 +1056,7 @@ export default function f(
             &with(TPL_IMPORT, r#"/** d */
 export default function f(
   /** A */ a: boolean,
-) { if (a) { return @./tpl("x", `${a}`) } return "y"  }"#),
+) { if (a) { return @./tpl(a="x", b=`${a}`) } return "y"  }"#),
             Severity::Error,
             "boolean parameter `a` cannot be interpolated",
         );
@@ -1112,8 +1132,8 @@ export default function f(
   /** C */ c: "x" | "y",
 ) {
   if (c === "x") {
-    return delegate("use opus model", `task ${c}`);
-  } return delegate("use haiku model", "code review"); 
+    return delegate(model="use opus model", task=`task ${c}`);
+  } return delegate(task="code review", model="use haiku model"); 
 }"#));
     }
 
@@ -1152,7 +1172,7 @@ export default async function f(
 ) {
   /** Ok? */
   const ok: boolean = await request(`pick ${c}`);
-  if (!ok) { return @./tpl("a", "b") }
+  if (!ok) { return @./tpl(a="a", b="b") }
   return "y"
 }"#);
     }
@@ -1255,7 +1275,7 @@ export default async function f() {
 
     #[test]
     fn string_input_is_passed_to_a_std_template() {
-        clean(&with_pr("return delegate(\"use opus model\", pr);"));
+        clean(&with_pr("return delegate(model=\"use opus model\", task=pr);"));
     }
 
     #[test]
@@ -1278,15 +1298,67 @@ export default async function f() {
     }
 
     #[test]
-    fn hand_off_passes_the_string_inputs() {
-        // `./merge` takes one `string`, so one argument is right.
-        clean(&with_pr("return @./merge(pr);"));
+    fn hand_off_passes_the_string_inputs_by_name() {
+        // `./merge` takes one `string`, `pr`, so one named argument is right.
+        clean(&with_pr("return @./merge(pr=pr);"));
     }
 
     #[test]
-    fn hand_off_with_the_wrong_count_is_an_error() {
+    fn hand_off_without_arguments_is_an_error() {
         expect_diag(&with_pr("return @./merge;"), Severity::Error, "`@./merge` takes 1 argument, got 0");
-        expect_diag(&with_pr("return @./merge(pr, pr);"), Severity::Error, "`@./merge` takes 1 argument, got 2");
+    }
+
+    #[test]
+    fn named_arguments_bind_in_any_order() {
+        clean(&with("", "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./tpl(b=a, a=b);\n}"));
+        clean(&with("", "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./tpl(a=a, b=b);\n}"));
+    }
+
+    #[test]
+    fn positional_argument_is_an_error() {
+        expect_diag(
+            &with_pr("return @./merge(pr);"),
+            Severity::Error,
+            "missing argument `pr` in call to `@./merge`; write `pr=value`",
+        );
+        expect_diag(
+            &with_pr("return delegate(\"use opus model\", pr);"),
+            Severity::Error,
+            "missing argument `model` in call to `delegate`; write `model=value`",
+        );
+    }
+
+    #[test]
+    fn unknown_argument_name_is_an_error() {
+        expect_diag(
+            &with_pr("return @./merge(pr=pr, link=pr);"),
+            Severity::Error,
+            "`link` is not a parameter of `@./merge`; parameters are pr",
+        );
+        expect_diag(
+            &with_pr("return delegate(model=\"m\", tasks=pr);"),
+            Severity::Error,
+            "`tasks` is not a parameter of `delegate`; parameters are model, task",
+        );
+    }
+
+    #[test]
+    fn repeated_argument_name_is_an_error() {
+        expect_diag(
+            &with_pr("return @./merge(pr=pr, pr=pr);"),
+            Severity::Error,
+            "`pr` is given twice in call to `@./merge`; give each name once",
+        );
+    }
+
+    #[test]
+    fn missing_named_argument_is_an_error() {
+        expect_diag(
+            &with(TPL_IMPORT, r#"/** d */
+export default function f() { return @./tpl(b="only two") }"#),
+            Severity::Error,
+            "missing argument `a` in call to `@./tpl`; write `a=value`",
+        );
     }
 
     #[test]
@@ -1302,15 +1374,15 @@ export default async function f() {
 
     #[test]
     fn argument_that_is_not_a_string_input_is_an_error() {
-        expect_diag(&with_pr("return @./merge(c);"), Severity::Error, "`c` is not a string input");
-        expect_diag(&with_pr("return @./merge(zz);"), Severity::Error, "`zz` is not a string input");
-        expect_diag(&with_pr("return delegate(\"m\", c);"), Severity::Error, "`c` is not a string input");
+        expect_diag(&with_pr("return @./merge(pr=c);"), Severity::Error, "`c` is not a string input");
+        expect_diag(&with_pr("return @./merge(pr=zz);"), Severity::Error, "`zz` is not a string input");
+        expect_diag(&with_pr("return delegate(model=\"m\", task=c);"), Severity::Error, "`c` is not a string input");
     }
 
     #[test]
     fn template_call_accepts_a_string_input_as_an_argument() {
         // `./tpl` takes two `string` parameters.
-        clean(&with_pr("return @./tpl(pr, \"b\");"));
+        clean(&with_pr("return @./tpl(a=pr, b=\"b\");"));
     }
 
     #[test]
@@ -1322,7 +1394,7 @@ export default async function f() {
     fn all_string_body_that_is_a_hand_off_is_a_normal_function() {
         // All parameters are `string` but the body is not one template literal, so `b` is an input, not a template parameter.
         expect_diag(
-            "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./merge(a);\n}",
+            "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./merge(pr=a);\n}",
             Severity::Warning,
             "unused parameter `b`",
         );

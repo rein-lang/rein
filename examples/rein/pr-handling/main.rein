@@ -14,12 +14,12 @@ export default function main(
   }
   switch (task) {
     case "review":
-      return @./review(pr);
+      return @./review(pr=pr);
     case "address comments":
-      return @./comments/address(pr);
+      return @./comments/address(pr=pr);
     case "fix ci":
-      return @./ci/fix(pr);
+      return @./ci/fix(pr=pr);
     case "merge":
-      return @./merge(pr);
+      return @./merge(pr=pr);
   }
 }

@@ -1,6 +1,6 @@
 //! Recursive descent parser: tokens to a `Function` syntax tree.
 
-use crate::ast::{Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, ReturnValue, Spanned, Stmt, TemplateLit, Value};
+use crate::ast::{Arg, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, ReturnValue, Spanned, Stmt, TemplateLit, Value};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::doc::parse_doc;
 use crate::lexer::{lex, Tok};
@@ -363,7 +363,8 @@ impl Parser {
         Ok(TemplateLit { pieces, span })
     }
 
-    /// `callee(arg, ...)`. The callee is a std name, or a reference. Each arg is a value (see `call_arg`).
+    /// `callee(name=value, ...)`. The callee is a std name, or a reference. Each arg is `name=value`.
+    /// A positional value parses too, so the checker can report it with the parameter it should name.
     fn call(&mut self) -> Result<Call, Diagnostic> {
         let callee = match self.peek().clone() {
             Tok::Ref(path) => {
@@ -379,7 +380,7 @@ impl Parser {
         self.expect(Tok::LParen, "`(`")?;
         let mut args = Vec::new();
         while *self.peek() != Tok::RParen {
-            args.push(self.call_arg()?);
+            args.push(self.arg()?);
             if *self.peek() != Tok::Comma {
                 break;
             }
@@ -389,8 +390,23 @@ impl Parser {
         Ok(Call { span: callee.span().to(close), callee, args })
     }
 
-    /// An argument of a call: a string, a template literal, a bare name of a `string` parameter, or a call.
-    fn call_arg(&mut self) -> Result<Value, Diagnostic> {
+    /// One argument of a call: `name=value`. A name is an identifier followed by `=`.
+    fn arg(&mut self) -> Result<Arg, Diagnostic> {
+        let name = match self.peek().clone() {
+            Tok::Ident(value) if *self.next_tok() == Tok::Assign => {
+                let span = self.bump();
+                self.bump();
+                Some(Spanned { value, span })
+            }
+            _ => None,
+        };
+        let value = self.arg_value()?;
+        let span = name.as_ref().map_or(value.span(), |n| n.span.to(value.span()));
+        Ok(Arg { name, value, span })
+    }
+
+    /// The value of an argument: a string, a template literal, a bare name of a `string` parameter, or a call.
+    fn arg_value(&mut self) -> Result<Value, Diagnostic> {
         if let Tok::Ident(name) = self.peek().clone() {
             if *self.next_tok() != Tok::LParen {
                 let span = self.bump();
@@ -709,29 +725,43 @@ export default function f(
 export default function f(
   /** C */ c: "x" | "y",
 ) {
-  return @./tpl("a", `b ${c}`);
+  return @./tpl(a="a", b=`b ${c}`);
 }"#);
         let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
         let ReturnValue::Call(call) = &r.value else { panic!("expected call, got {:?}", r.value) };
         assert_eq!(call.callee.key(), "./tpl");
         assert_eq!(call.args.len(), 2);
-        assert!(matches!(&call.args[0], Value::Str(s) if s.value == "a"));
-        assert!(matches!(&call.args[1], Value::Template(_)));
+        assert_eq!(call.args[0].name.as_ref().map(|n| n.value.as_str()), Some("a"));
+        assert!(matches!(&call.args[0].value, Value::Str(s) if s.value == "a"));
+        assert_eq!(call.args[1].name.as_ref().map(|n| n.value.as_str()), Some("b"));
+        assert!(matches!(&call.args[1].value, Value::Template(_)));
+    }
+
+    #[test]
+    fn positional_argument_parses_with_no_name() {
+        let f = ok(r#"/** d */
+export default function f() {
+  return @./tpl("a");
+}"#);
+        let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
+        let ReturnValue::Call(call) = &r.value else { panic!("expected call") };
+        assert!(call.args[0].name.is_none());
+        assert!(matches!(&call.args[0].value, Value::Str(s) if s.value == "a"));
     }
 
     #[test]
     fn call_argument_can_be_a_template_call() {
         let f = ok(r#"/** d */
 export default function f() {
-  return @./tpl(@./inner(delegate("m", "t")), "b");
+  return @./tpl(a=@./inner(delegate(model="m", task="t")), b="b");
 }"#);
         let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
         let ReturnValue::Call(call) = &r.value else { panic!("expected call, got {:?}", r.value) };
         assert_eq!(call.args.len(), 2);
-        let Value::Call(inner) = &call.args[0] else { panic!("expected nested call, got {:?}", call.args[0]) };
+        let Value::Call(inner) = &call.args[0].value else { panic!("expected nested call, got {:?}", call.args[0]) };
         assert_eq!(inner.callee.key(), "./inner");
-        assert!(matches!(&inner.args[0], Value::Call(c) if c.callee.key() == "delegate"));
-        assert!(matches!(&call.args[1], Value::Str(s) if s.value == "b"));
+        assert!(matches!(&inner.args[0].value, Value::Call(c) if c.callee.key() == "delegate"));
+        assert!(matches!(&call.args[1].value, Value::Str(s) if s.value == "b"));
     }
 
     #[test]
@@ -763,7 +793,7 @@ export default async function f() {
         let f = ok(r#"/** d */
 export default async function f() {
   /** Did it work? */
-  const ok: boolean = await request(delegate("m", "t"));
+  const ok: boolean = await request(delegate(model="m", task="t"));
   return "y"
 }"#);
         let Stmt::Request { arg, .. } = &f.body[0] else { panic!("expected request") };
@@ -788,14 +818,14 @@ export default async function f() {
 export default function f(
   /** Link */ pr: string,
 ) {
-  return @./merge(pr, "x", `t ${pr}`);
+  return @./merge(a=pr, b="x", c=`t ${pr}`);
 }"#);
         let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
         let ReturnValue::Call(call) = &r.value else { panic!("expected call") };
         assert_eq!(call.callee.key(), "./merge");
-        assert!(matches!(&call.args[0], Value::Name(n) if n.value == "pr"));
-        assert!(matches!(&call.args[1], Value::Str(_)));
-        assert!(matches!(&call.args[2], Value::Template(_)));
+        assert!(matches!(&call.args[0].value, Value::Name(n) if n.value == "pr"));
+        assert!(matches!(&call.args[1].value, Value::Str(_)));
+        assert!(matches!(&call.args[2].value, Value::Template(_)));
     }
 
     #[test]
@@ -804,12 +834,12 @@ export default function f(
 export default function f(
   /** Link */ pr: string,
 ) {
-  return delegate("use opus model", pr);
+  return delegate(model="use opus model", task=pr);
 }"#);
         let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
         let ReturnValue::Call(call) = &r.value else { panic!("expected call") };
         assert!(matches!(&call.callee, Callee::Std(s) if s.value == "delegate"));
-        assert!(matches!(&call.args[1], Value::Name(n) if n.value == "pr"));
+        assert!(matches!(&call.args[1].value, Value::Name(n) if n.value == "pr"));
     }
 
     #[test]

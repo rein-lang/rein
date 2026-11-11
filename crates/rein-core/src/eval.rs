@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::ast::{Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
+use crate::ast::{Arg, Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
 use crate::check::string_in_condition;
 
 /// Result of a run.
@@ -11,8 +11,8 @@ use crate::check::string_in_condition;
 pub enum Outcome {
     Text(String),
     /// The function to run next, by project path such as `ci/fix`. `args` are the values of its `string`
-    /// parameters, in declaration order. They come from `return @./target(args);`, or are empty.
-    Ref { target: String, args: Vec<String> },
+    /// parameters, by name, as written in `return @./target(name=value);`. They are empty for a plain return.
+    Ref { target: String, args: Vec<(String, String)> },
     NeedInput(String),
     /// The agent must answer `response`, after doing `instruction`.
     Request { instruction: String, response: String },
@@ -85,11 +85,8 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                 ReturnValue::Ref(reference) => Outcome::Ref { target: target(env, &reference.value)?, args: Vec::new() },
                 ReturnValue::Template(lit) => Outcome::Text(expand_template(env, lit)?),
                 ReturnValue::Call(call) => match env.bindings.get(call.callee.key()) {
-                    // A hand-off: the arguments are the values of the target's `string` parameters.
-                    Some(Binding::Function(path)) => {
-                        let args = call.args.iter().map(|a| expand_value(env, a)).collect::<Eval<Vec<String>>>()?;
-                        Outcome::Ref { target: path.clone(), args }
-                    }
+                    // A hand-off: the arguments are the values of the target's `string` parameters, by name.
+                    Some(Binding::Function(path)) => Outcome::Ref { target: path.clone(), args: named_values(env, &call.args)? },
                     _ => Outcome::Text(expand_call(env, call)?),
                 },
             }),
@@ -157,13 +154,23 @@ fn string_input(env: &Env, name: &str) -> Eval<String> {
     }
 }
 
-/// Text of a template call: the template's own literal, with its parameters replaced by the arguments.
+/// The value of each named argument, in the order written. The checker has already rejected a positional one.
+fn named_values(env: &Env, args: &[Arg]) -> Eval<Vec<(String, String)>> {
+    args.iter()
+        .map(|a| match &a.name {
+            Some(name) => Ok((name.value.clone(), expand_value(env, &a.value)?)),
+            None => Err(Stop::Error("an argument needs a name, like `name=value`".to_string())),
+        })
+        .collect()
+}
+
+/// Text of a template call: the template's own literal, with each parameter replaced by the argument of that name.
 fn expand_call(env: &Env, call: &Call) -> Eval<String> {
     let name = call.callee.key();
     let Some(Binding::Template { function, .. }) = env.bindings.get(name) else {
         return Err(Stop::Error(format!("`{name}` is not an imported template")));
     };
-    let args = call.args.iter().map(|a| expand_value(env, a)).collect::<Eval<Vec<String>>>()?;
+    let args = named_values(env, &call.args)?;
     let lit = match function.body.as_slice() {
         [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => lit,
         _ => return Err(Stop::Error(format!("`{name}` is not a template"))),
@@ -173,8 +180,7 @@ fn expand_call(env: &Env, call: &Call) -> Eval<String> {
         match piece {
             Piece::Text(t) => out.push_str(t),
             Piece::Name(n) => {
-                let index = function.inputs.iter().position(|i| i.name.value == n.value);
-                let arg = index.and_then(|i| args.get(i));
+                let arg = args.iter().find(|(key, _)| *key == n.value).map(|(_, value)| value);
                 out.push_str(arg.ok_or_else(|| Stop::Error(format!("unknown parameter `{}`", n.value)))?);
             }
         }
@@ -417,8 +423,8 @@ export default function f(
   /** C */ c: "x" | "y",
 ) {
   if (c === "x") {
-    return delegate("use opus model", `code review ${c}`);
-  } return delegate("use haiku model", "code review the pr"); 
+    return delegate(model="use opus model", task=`code review ${c}`);
+  } return delegate(model="use haiku model", task="code review the pr"); 
 }"#);
         let bindings = BTreeMap::from([std_binding("delegate")]);
         assert_eq!(
@@ -442,7 +448,7 @@ export default function tpl(
 }"#);
         let f = func(r#"/** d */
 export default function f() {
-  return @./tpl("one", "two");
+  return @./tpl(a="one", b="two");
 }"#);
         let bindings = BTreeMap::from([(
             "./tpl".to_string(),
@@ -487,7 +493,7 @@ export default async function f() {
         let f = func(r#"/** d */
 export default async function f() {
   /** Did it work? */
-  const ok: boolean = await request(delegate("use opus model", "code review the pr"));
+  const ok: boolean = await request(delegate(model="use opus model", task="code review the pr"));
   return "y"
 }"#);
         let bindings = BTreeMap::from([std_binding("delegate")]);
@@ -557,12 +563,12 @@ export default async function f(
 export default function f(
   /** Link */ pr: string,
 ) {
-  return @./merge(pr);
+  return @./merge(pr=pr);
 }"#);
         let bindings = BTreeMap::from([("./merge".to_string(), Binding::Function("merge".into()))]);
         assert_eq!(
             run(&f, &inputs(&[("pr", "https://example.com/pr/1")]), &bindings),
-            Ok(Outcome::Ref { target: "merge".into(), args: vec!["https://example.com/pr/1".into()] })
+            Ok(Outcome::Ref { target: "merge".into(), args: vec![("pr".into(), "https://example.com/pr/1".into())] })
         );
     }
 
@@ -577,7 +583,7 @@ export default function f(
 
     #[test]
     fn string_input_is_a_bare_argument_of_a_std_template() {
-        let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  return delegate(\"use opus model\", pr);\n}");
+        let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  return delegate(model=\"use opus model\", task=pr);\n}");
         let bindings = BTreeMap::from([std_binding("delegate")]);
         assert_eq!(
             run(&f, &inputs(&[("pr", "L")]), &bindings),

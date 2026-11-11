@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{walk_stmts, Binding, Callee, Function, ReturnValue, Stmt, Value};
+use crate::ast::{walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Value};
 use crate::check::{check_function, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::parser::parse;
@@ -157,14 +157,14 @@ impl Project {
         })
     }
 
-    /// What a reference written in function `from` names, for the checker. A function reports how many
-    /// `string` parameters it takes, so a hand-off can be checked.
+    /// What a reference written in function `from` names, for the checker. A function reports the names of its
+    /// `string` parameters, and a template the names of all its parameters, so a call can bind them by name.
     fn kind_for(&self, from: &str, key: &str) -> Result<Kind, String> {
         Ok(match self.binding_for(from, key)? {
             Binding::Function(path) => Kind::Function {
-                strings: self.files.get(&path).map_or(0, |sf| sf.function.text_inputs().count()),
+                strings: self.files.get(&path).map_or_else(Vec::new, |sf| param_names(sf.function.text_inputs())),
             },
-            Binding::Template { function, .. } => Kind::Template { params: function.inputs.len() },
+            Binding::Template { function, .. } => Kind::Template { params: param_names(function.inputs.iter()) },
             Binding::Request => Kind::Request,
         })
     }
@@ -287,6 +287,11 @@ fn collect(
         }
     }
     Ok(())
+}
+
+/// The names of some parameters, in order.
+fn param_names<'a>(inputs: impl Iterator<Item = &'a Input>) -> Vec<String> {
+    inputs.map(|i| i.name.value.clone()).collect()
 }
 
 /// `ci/fix.rein` under `root` gives `ci/fix`.
@@ -455,7 +460,7 @@ mod tests {
         let project = Project::from_sources(
             root.clone(),
             vec![
-                (root.join("main.rein"), "/** m */\nexport default function main() { return delegate(@./tpl(\"x\"), \"task\") }\n".to_string()),
+                (root.join("main.rein"), "/** m */\nexport default function main() { return delegate(model=@./tpl(a=\"x\"), task=\"task\") }\n".to_string()),
                 (root.join("tpl.rein"), "/** t */\nexport default function tpl(\n  /** A */ a: string,\n) { return `Hi ${a}` }\n".to_string()),
             ],
         );
@@ -660,7 +665,7 @@ mod tests {
     #[test]
     fn template_called_from_main_is_reachable_and_drawn() {
         let project = project_of(&[
-            ("main", "/** m */\nexport default function main(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return @./tpl(\"a\", \"b\") } return @./tpl(\"c\", \"d\") \n}\n"),
+            ("main", "/** m */\nexport default function main(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return @./tpl(a=\"a\", b=\"b\") } return @./tpl(b=\"d\", a=\"c\") \n}\n"),
             ("tpl", "/** t */\nexport default function tpl(\n  /** A */ a: string,\n  /** B */ b: string,\n) { return `${a} ${b}` }\n"),
         ]);
         let diags = project.check();

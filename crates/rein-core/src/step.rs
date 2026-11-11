@@ -152,7 +152,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     let mut trace = Vec::new();
     let mut current = req.entry.clone();
     // The `string` values of the function being run. The entry gets them from the request; a hand-off
-    // passes them on, bound to the target's `string` parameters in declaration order.
+    // passes them on, bound to the target's `string` parameters by name.
     let mut strings: BTreeMap<String, String> = req.inputs.clone();
     for _ in 0..HOP_LIMIT {
         trace.push(current.clone());
@@ -177,12 +177,19 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                 let Some(next) = project.get(&target) else {
                     return failure(format!("unknown function `{target}`"), None, Vec::new(), answers, trace);
                 };
-                let names: Vec<String> = next.function.text_inputs().map(|i| i.name.value.clone()).collect();
-                if names.len() != args.len() {
-                    let message = format!("`{target}` takes {} arguments, got {}", names.len(), args.len());
-                    return failure(message, None, Vec::new(), answers, trace);
+                let mut given: BTreeMap<String, String> = args.into_iter().collect();
+                let mut bound = BTreeMap::new();
+                for input in next.function.text_inputs() {
+                    let name = &input.name.value;
+                    let Some(value) = given.remove(name) else {
+                        return failure(format!("`{target}` is missing argument `{name}`"), None, Vec::new(), answers, trace);
+                    };
+                    bound.insert(name.clone(), value);
                 }
-                strings = names.into_iter().zip(args).collect();
+                if let Some(extra) = given.keys().next() {
+                    return failure(format!("`{target}` has no parameter `{extra}`"), None, Vec::new(), answers, trace);
+                }
+                strings = bound;
                 current = target;
             }
             Outcome::Text(instruction) => {
@@ -662,7 +669,7 @@ mod tests {
     #[test]
     fn string_parameter_cannot_be_answered() {
         let project = project(&[
-            ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./greet(\"world\");\n}\n"),
+            ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./greet(who=\"world\");\n}\n"),
             ("greet.rein", "/** Greet. */\nexport default function greet(\n  /** Who? */\n  who: string,\n) {\n  return `Hello ${who}`;\n}\n"),
         ]);
         assert_eq!(
@@ -750,7 +757,7 @@ mod tests {
     #[test]
     fn template_call_adds_no_hop_to_the_trace() {
         let project = project(&[
-            ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./tpl(\"Hello\");\n}\n"),
+            ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./tpl(a=\"Hello\");\n}\n"),
             ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n"),
         ]);
         let res = step(&project, &req("main", &[]));
@@ -768,7 +775,7 @@ mod tests {
     #[test]
     fn nested_template_call_adds_no_hop_to_the_trace() {
         let project = project(&[
-            ("main.rein", "/** Entry. */\nexport default function main() {\n  return delegate(@./tpl(\"x\"), \"task\");\n}\n"),
+            ("main.rein", "/** Entry. */\nexport default function main() {\n  return delegate(model=@./tpl(a=\"x\"), task=\"task\");\n}\n"),
             ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n"),
         ]);
         let res = step(&project, &req("main", &[]));
@@ -878,7 +885,7 @@ mod tests {
     /// `main` takes a link as an input and hands it to `merge`, which asks the agent for `ci`.
     fn pr_project() -> Project {
         project(&[
-            ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Draft? */\n  draft: boolean,\n) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return @./merge(pr);\n}\n"),
+            ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Draft? */\n  draft: boolean,\n) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return @./merge(pr=pr);\n}\n"),
             ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}.`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
         ])
     }
@@ -939,7 +946,7 @@ mod tests {
     #[test]
     fn hand_off_arguments_bind_in_declaration_order() {
         let project = project(&[
-            ("main.rein", "/** Entry. */\nexport default function main(\n  /** A */\n  a: string,\n  /** B */\n  b: string,\n) {\n  return @./two(b, a);\n}\n"),
+            ("main.rein", "/** Entry. */\nexport default function main(\n  /** A */\n  a: string,\n  /** B */\n  b: string,\n) {\n  return @./two(y=a, x=b);\n}\n"),
             ("two.rein", "/** Two. */\nexport default function two(\n  /** X */\n  x: string,\n  /** Y */\n  y: string,\n  /** Keep order? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `${x} then ${y}`;\n  }\n  return `${y} then ${x}`;\n}\n"),
         ]);
         let inputs = [("a", "A"), ("b", "B")];

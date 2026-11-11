@@ -197,7 +197,7 @@ pub enum ReturnValue {
     Ref(Spanned<String>),
     /// A template literal, such as `return `Pick ${c}`;`.
     Template(TemplateLit),
-    /// A call of a template, such as `return delegate("a", "b");` or `return @./tpl("a", "b");`.
+    /// A call of a template, such as `return delegate(model="a", task="b");` or `return @./tpl(a="a", b="b");`.
     Call(Call),
 }
 
@@ -226,12 +226,34 @@ pub enum Value {
     Call(Call),
 }
 
+impl Value {
+    pub fn span(&self) -> Span {
+        match self {
+            Value::Str(s) | Value::Name(s) => s.span,
+            Value::Template(lit) => lit.span,
+            Value::Call(call) => call.span,
+        }
+    }
+}
+
+/// One argument of a call: `name=value`. The name is the parameter it binds to. The checker rejects an
+/// argument with no name, so only `name=value` reaches the evaluator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arg {
+    /// `None` only for a positional argument, which the checker reports.
+    pub name: Option<Spanned<String>>,
+    pub value: Value,
+    /// From the name to the end of the value. A positional argument starts at its value.
+    pub span: Span,
+}
+
 /// `callee(args)`: a template call, or a hand-off to a function that has `string` parameters.
-/// The args are strings, template literals, or bare names of the caller's `string` parameters.
+/// Each arg is `name=value`, where the value is a string, a template literal, or a bare name of the caller's
+/// `string` parameter. The order of the args does not matter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub callee: Callee,
-    pub args: Vec<Value>,
+    pub args: Vec<Arg>,
     pub span: Span,
 }
 
@@ -240,7 +262,7 @@ impl Call {
     pub fn calls(&self) -> Vec<&Call> {
         let mut out = vec![self];
         for arg in &self.args {
-            if let Value::Call(inner) = arg {
+            if let Value::Call(inner) = &arg.value {
                 out.extend(inner.calls());
             }
         }

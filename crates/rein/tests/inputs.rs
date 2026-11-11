@@ -355,14 +355,14 @@ fn hand_off_with_too_few_arguments_is_a_check_error() {
 }
 
 #[test]
-fn hand_off_with_too_many_arguments_is_a_check_error() {
+fn hand_off_with_a_repeated_argument_name_is_a_check_error() {
     let flow = Flow::new(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return @./merge(pr, pr);\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return @./merge(pr=pr, pr=pr);\n}\n"),
         ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 1);
-    assert!(stdout(&out).contains("`@./merge` takes 1 argument, got 2"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("`pr` is given twice in call to `@./merge`; give each name once"), "{}", stdout(&out));
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn hand_off_arguments_to_a_function_without_strings_is_a_check_error() {
 #[test]
 fn argument_that_is_not_a_string_input_is_a_check_error() {
     let flow = Flow::new(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** C */\n  ci: \"green\" | \"red\",\n) {\n  return @./merge(ci);\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main(\n  /** C */\n  ci: \"green\" | \"red\",\n) {\n  return @./merge(pr=ci);\n}\n"),
         ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n) {\n  return `Merge ${pr}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
@@ -390,7 +390,7 @@ fn argument_that_is_not_a_string_input_is_a_check_error() {
 #[test]
 fn string_input_is_a_template_argument_and_the_check_is_clean() {
     let flow = Flow::new(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return @./tpl(pr, \"b\");\n  }\n  return \"n\";\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return @./tpl(a=pr, b=\"b\");\n  }\n  return \"n\";\n}\n"),
         ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** A */\n  a: string,\n  /** B */\n  b: string,\n) {\n  return `${a} then ${b}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);

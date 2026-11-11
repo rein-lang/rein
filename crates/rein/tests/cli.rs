@@ -414,3 +414,42 @@ fn docs_cli_names_every_subcommand_and_stays_hidden() {
         assert!(md.contains(&format!("rein {name}")), "docs-cli misses `{name}`");
     }
 }
+
+#[test]
+fn named_arguments_bind_in_any_order() {
+    let root = temp_dir("named");
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./greet(name=\"world\", greeting=\"Hello\");\n}\n").unwrap();
+    fs::write(root.join("greet.rein"), GREET).unwrap();
+
+    let out = rein(&["eval", "main", "--root", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Hello world");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn call_arguments_must_be_named_and_known() {
+    let cases = [
+        ("return @./greet(\"world\", \"Hello\");", 1, "missing argument `greeting` in call to `@./greet`; write `greeting=value`"),
+        ("return @./greet(greeting=\"Hello\", who=\"world\");", 1, "`who` is not a parameter of `@./greet`; parameters are greeting, name"),
+        ("return @./greet(greeting=\"Hi\", greeting=\"Hello\", name=\"world\");", 1, "`greeting` is given twice in call to `@./greet`; give each name once"),
+        ("return @./greet(name=\"world\", greeting=\"Hello\");", 0, "0 errors"),
+    ];
+    for (i, (body, want, message)) in cases.into_iter().enumerate() {
+        let root = temp_dir(&format!("args{i}"));
+        fs::write(root.join("main.rein"), format!("/** Entry. */\nexport default function main() {{\n  {body}\n}}\n")).unwrap();
+        fs::write(root.join("greet.rein"), GREET).unwrap();
+
+        let out = rein(&["check", root.to_str().unwrap()]);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(code(&out), want, "{body}: {stdout}{stderr}");
+        assert!(stdout.contains(message) || stderr.contains(message), "{body}: {stdout}{stderr}");
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+/// A template with two parameters, used by the argument tests above.
+const GREET: &str = "/** Greet. */\nexport default function greet(\n  /** Greeting. */\n  greeting: string,\n  /** Who? */\n  name: string,\n) {\n  return `${greeting} ${name}`;\n}\n";

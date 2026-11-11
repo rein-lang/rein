@@ -17,5 +17,5 @@ export default async function addressComments(
   if (allAnswered) {
     return `Ask the reviewer for a new review of ${pr}. Then stop.`;
   }
-  return askUser(`I cannot answer one or more review comments on ${pr}. Which change do you want?`);
+  return askUser(question=`I cannot answer one or more review comments on ${pr}. Which change do you want?`);
 }

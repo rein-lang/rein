@@ -10,28 +10,28 @@ export default async function review(
   securitySensitive: boolean,
 ) {
   if (ownPr) {
-    return askUser(`This is my own pull request ${pr}. Who reviews it?`);
+    return askUser(question=`This is my own pull request ${pr}. Who reviews it?`);
   }
   if (securitySensitive) {
     /** Did the security review find a problem that must be fixed? */
     const securityProblem: boolean = await request(
-      delegate("use opus model", `review the pull request ${pr} with a security focus and list each problem with file and line`),
+      delegate(model="use opus model", task=`review the pull request ${pr} with a security focus and list each problem with file and line`),
     );
     if (securityProblem) {
-      return @./templates/post_review("request changes", "each security problem, with its file and line", pr);
+      return @./templates/post_review(kind="request changes", body="each security problem, with its file and line", pr=pr);
     }
-    return @./templates/post_review("approve", "the security checks you made", pr);
+    return @./templates/post_review(kind="approve", body="the security checks you made", pr=pr);
   }
   /** What is the result of the code review? */
   const verdict: "clean" | "small problems" | "blocking problems" = await request(
-    delegate("use haiku model", `review the pull request ${pr} and list each problem with file and line`),
+    delegate(model="use haiku model", task=`review the pull request ${pr} and list each problem with file and line`),
   );
   switch (verdict) {
     case "clean":
-      return @./templates/post_review("approve", "one line on what you checked", pr);
+      return @./templates/post_review(kind="approve", body="one line on what you checked", pr=pr);
     case "small problems":
-      return @./templates/post_review("comment", "each small problem, with its file and line", pr);
+      return @./templates/post_review(kind="comment", body="each small problem, with its file and line", pr=pr);
     case "blocking problems":
-      return @./templates/post_review("request changes", "each blocking problem, with its file and line", pr);
+      return @./templates/post_review(kind="request changes", body="each blocking problem, with its file and line", pr=pr);
   }
 }

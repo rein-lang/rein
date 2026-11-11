@@ -11,7 +11,7 @@ export default async function fixCi(
     case "flaky job":
       return `Run the failed job of ${pr} again, one time. If it fails again, start this program again for ${pr} with the cause test or code.`;
     case "outside the pr":
-      return askUser(`CI fails on ${pr} for a reason outside this pull request. Do I wait, or do I fix it in a new pull request?`);
+      return askUser(question=`CI fails on ${pr} for a reason outside this pull request. Do I wait, or do I fix it in a new pull request?`);
     case "test or code": {
       /** Did you push a fix for the failing job? */
       const fixPushed: boolean = await request(
@@ -20,7 +20,7 @@ export default async function fixCi(
       if (fixPushed) {
         return `Wait for CI to finish on ${pr}. Then start this program again with the task merge.`;
       }
-      return askUser(`I cannot fix the failing CI job of ${pr}. What do you want me to try?`);
+      return askUser(question=`I cannot fix the failing CI job of ${pr}. What do you want me to try?`);
     }
   }
 }
