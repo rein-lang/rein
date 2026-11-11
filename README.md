@@ -83,6 +83,7 @@ rein install claude-code --project      # the agent hook: writes .claude/setting
 cd examples
 rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin
+rein graph support-ticket               # its decision flow as Mermaid (--format dot|json, -o graph.svg)
 rein serve --mcp                        # the MCP host for agents (see docs/interface.md)
 ```
 
