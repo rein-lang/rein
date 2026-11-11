@@ -379,7 +379,7 @@ impl Parser {
         self.expect(Tok::LParen, "`(`")?;
         let mut args = Vec::new();
         while *self.peek() != Tok::RParen {
-            args.push(self.text_arg()?);
+            args.push(self.call_arg()?);
             if *self.peek() != Tok::Comma {
                 break;
             }
@@ -387,6 +387,18 @@ impl Parser {
         }
         let close = self.expect(Tok::RParen, "`)`")?;
         Ok(Call { span: callee.span().to(close), callee, args })
+    }
+
+    /// An argument of a call: a string, a template literal, or a bare name of a `string` parameter.
+    /// A name followed by `(` is a call, which is not allowed here.
+    fn call_arg(&mut self) -> Result<Value, Diagnostic> {
+        if let Tok::Ident(name) = self.peek().clone() {
+            if *self.next_tok() != Tok::LParen {
+                let span = self.bump();
+                return Ok(Value::Name(Spanned { value: name, span }));
+            }
+        }
+        self.text_arg()
     }
 
     /// A string or a template literal, as an argument.
@@ -763,5 +775,41 @@ export default async function f() {
     fn only_request_can_be_awaited() {
         let msg = one_error("/** d */\nexport default async function f() {\n  /** Q */\n  const x: boolean = await fetch(\"a\");\n  return \"y\"\n}");
         assert!(msg.contains("only `request` can be awaited"), "{msg}");
+    }
+
+    #[test]
+    fn call_arguments_can_be_bare_names() {
+        let f = ok(r#"/** d */
+export default function f(
+  /** Link */ pr: string,
+) {
+  return @./merge(pr, "x", `t ${pr}`);
+}"#);
+        let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
+        let ReturnValue::Call(call) = &r.value else { panic!("expected call") };
+        assert_eq!(call.callee.key(), "./merge");
+        assert!(matches!(&call.args[0], Value::Name(n) if n.value == "pr"));
+        assert!(matches!(&call.args[1], Value::Str(_)));
+        assert!(matches!(&call.args[2], Value::Template(_)));
+    }
+
+    #[test]
+    fn bare_name_can_be_a_std_call_argument() {
+        let f = ok(r#"/** d */
+export default function f(
+  /** Link */ pr: string,
+) {
+  return delegate("use opus model", pr);
+}"#);
+        let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
+        let ReturnValue::Call(call) = &r.value else { panic!("expected call") };
+        assert!(matches!(&call.callee, Callee::Std(s) if s.value == "delegate"));
+        assert!(matches!(&call.args[1], Value::Name(n) if n.value == "pr"));
+    }
+
+    #[test]
+    fn bare_name_is_not_a_request_value() {
+        let msg = one_error("/** d */\nexport default async function f(\n  /** Link */ pr: string,\n) {\n  /** Ok? */\n  const ok: boolean = await request(pr);\n  return \"y\"\n}");
+        assert!(msg.contains("expected a string or a template literal"), "{msg}");
     }
 }

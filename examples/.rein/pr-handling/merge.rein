@@ -1,0 +1,32 @@
+/**
+ * Decide whether a pull request can merge now.
+ */
+export default function merge(
+  /** The link of the pull request to merge. */
+  pr: string,
+  /** What is the CI status of the PR? */
+  ci: "green" | "red" | "pending",
+  /** Does the PR conflict with its base branch? */
+  conflicts: boolean,
+  /** What is the review state of the PR? */
+  review: "approved" | "changes requested" | "no review",
+) {
+  switch (ci) {
+    case "red":
+      return @./ci/fix(pr);
+    case "pending":
+      return `Wait for CI to finish on ${pr}. Then start this program again.`;
+    case "green":
+      if (conflicts) {
+        return `Rebase ${pr} on its base. Push. Then start this program again.`;
+      }
+      switch (review) {
+        case "approved":
+          return `Merge the pull request ${pr}. Then delete its branch.`;
+        case "changes requested":
+          return @./comments/address(pr);
+        case "no review":
+          return @./review(pr);
+      }
+  }
+}

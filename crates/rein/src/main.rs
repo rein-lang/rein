@@ -61,6 +61,9 @@ enum Command {
         /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
         #[arg(long = "answer", value_name = "KEY=VALUE")]
         answer: Vec<String>,
+        /// Value of a `string` parameter of the entry function, as name=value. Repeat for each input.
+        #[arg(long = "input", value_name = "NAME=VALUE")]
+        input: Vec<String>,
         /// Read the whole request as JSON from stdin. Output is always JSON.
         #[arg(long)]
         stdin: bool,
@@ -126,8 +129,8 @@ fn main() -> ExitCode {
     let code = match Cli::parse().command {
         Command::Check { path } => cli::check(&path),
         Command::Run { function, root, set, json } => cli::run(&function, root, &set, json),
-        Command::Step { entry, root, flow, answer, stdin, json } => {
-            cli::step(entry, root, flow, &answer, stdin, json)
+        Command::Step { entry, root, flow, answer, input, stdin, json } => {
+            cli::step(entry, root, flow, &answer, &input, stdin, json)
         }
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { root } => cli::graph(root),
