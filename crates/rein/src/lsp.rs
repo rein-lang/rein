@@ -4,24 +4,27 @@
 //! Every request rebuilds the project from disk plus the open buffers. That is slow on big
 //! projects, which is fine for the proof of concept.
 
+mod call_hierarchy;
 mod code_lens;
 mod completion;
 mod definition;
 mod diagnostics;
+mod document_symbols;
 mod hover;
 mod occurrences;
 mod references;
 mod sync;
 mod text;
 mod workspace;
+mod workspace_symbols;
 
 use std::collections::BTreeSet;
 use std::error::Error;
 
 use lsp_server::{Connection, ErrorCode, Message, Request, Response};
 use lsp_types::{
-    CodeLensOptions, CompletionOptions, HoverProviderCapability, OneOf, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind,
+    CallHierarchyServerCapability, CodeLensOptions, CompletionOptions, HoverProviderCapability, InitializeParams,
+    OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -42,8 +45,9 @@ pub fn serve() -> u8 {
 
 fn run() -> BoxResult<()> {
     let (connection, io_threads) = Connection::stdio();
-    connection.initialize(serde_json::to_value(capabilities())?)?;
-    main_loop(&connection, &mut State::default())?;
+    let init = connection.initialize(serde_json::to_value(capabilities())?)?;
+    let init: InitializeParams = serde_json::from_value(init).unwrap_or_default();
+    main_loop(&connection, &mut State::new(&init))?;
     // The writer thread ends only when every sender is gone, so drop the connection first.
     drop(connection);
     io_threads.join()?;
@@ -57,6 +61,9 @@ fn capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         code_lens_provider: Some(CodeLensOptions { resolve_provider: Some(false) }),
+        call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![" ".into(), "\"".into(), "'".into(), "/".into(), ".".into()]),
             ..Default::default()
@@ -96,6 +103,11 @@ fn handle_request(state: &State, req: Request) -> Response {
         "textDocument/completion" => reply(req, |p| Ok(completion::completion(state, &p))),
         "textDocument/references" => reply(req, |p| Ok(references::references(state, &p))),
         "textDocument/codeLens" => reply(req, |p| Ok(code_lens::code_lens(state, &p))),
+        "textDocument/prepareCallHierarchy" => reply(req, |p| Ok(call_hierarchy::prepare(state, &p))),
+        "callHierarchy/incomingCalls" => reply(req, |p| Ok(call_hierarchy::incoming(state, &p))),
+        "callHierarchy/outgoingCalls" => reply(req, |p| Ok(call_hierarchy::outgoing(state, &p))),
+        "textDocument/documentSymbol" => reply(req, |p| Ok(document_symbols::document_symbols(state, &p))),
+        "workspace/symbol" => reply(req, |p| Ok(workspace_symbols::workspace_symbols(state, &p))),
         other => Response::new_err(req.id, ErrorCode::MethodNotFound as i32, format!("method not found: {other}")),
     }
 }

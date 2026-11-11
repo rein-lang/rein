@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use lsp_types::{Location, Url};
+use lsp_types::{InitializeParams, Location, Url};
 use rein_core::diagnostic::Span;
 use rein_core::project::Project;
 
@@ -17,6 +17,24 @@ pub type Docs = HashMap<Url, String>;
 #[derive(Default)]
 pub struct State {
     pub docs: Docs,
+    /// Workspace folders from `initialize`. Workspace symbols search the programs under them.
+    pub folders: Vec<PathBuf>,
+}
+
+impl State {
+    pub fn new(init: &InitializeParams) -> Self {
+        #[allow(deprecated)] // Older clients send only `rootUri`.
+        let root = init.root_uri.iter();
+        let folders = init
+            .workspace_folders
+            .iter()
+            .flatten()
+            .map(|f| &f.uri)
+            .chain(root)
+            .filter_map(|u| fs::canonicalize(u.to_file_path().ok()?).ok())
+            .collect();
+        Self { docs: Docs::new(), folders }
+    }
 }
 
 /// Project under `root`: files on disk, with open buffers replacing their disk copies.

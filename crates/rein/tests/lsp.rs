@@ -622,3 +622,111 @@ fn hover_shows_function_docs_and_callee_parameters() {
 
     server.shutdown();
 }
+
+/// The names and reference spans of call hierarchy calls, under key `item` ("from" or "to").
+fn calls_of(root: &Path, result: &Value, item: &str) -> Vec<(String, Vec<Spot>)> {
+    result
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let uri = c[item]["uri"].clone();
+            let ranges = c["fromRanges"].as_array().unwrap();
+            let spots = ranges.iter().map(|r| spot_of(root, &json!({"uri": uri, "range": r}))).collect();
+            (c[item]["name"].as_str().unwrap().to_string(), spots)
+        })
+        .collect()
+}
+
+#[test]
+fn call_hierarchy_lists_incoming_and_outgoing_calls() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let escalate = open_file(&mut server, &root, "escalate.rein");
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let items = server.request(2, "textDocument/prepareCallHierarchy", at(&escalate, 3, 26));
+    let item = items["result"][0].clone();
+    assert_eq!(item["name"], "escalate");
+    assert_eq!(item["detail"], "Hand the ticket to a human support engineer.");
+    assert_eq!(spot_of(&root, &json!({"uri": item["uri"], "range": item["selectionRange"]})), spot("escalate.rein", 3, 24, 3, 32));
+
+    let incoming = server.request(3, "callHierarchy/incomingCalls", json!({"item": item}));
+    assert_eq!(
+        calls_of(&root, &incoming["result"], "from"),
+        vec![
+            ("answer/faq".to_string(), vec![spot("answer/faq.rein", 8, 11, 8, 23), spot("answer/faq.rein", 17, 9, 17, 21)]),
+            ("billing/refund".to_string(), vec![spot("billing/refund.rein", 8, 11, 8, 23)]),
+            ("main".to_string(), vec![spot("main.rein", 10, 11, 10, 22), spot("main.rein", 16, 13, 16, 24)]),
+        ],
+        "{incoming}"
+    );
+
+    let items = server.request(4, "textDocument/prepareCallHierarchy", at(&main, 3, 25));
+    let outgoing = server.request(5, "callHierarchy/outgoingCalls", json!({"item": items["result"][0]}));
+    let names: Vec<String> = calls_of(&root, &outgoing["result"], "to").into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["answer/faq", "billing/refund", "escalate"], "{outgoing}");
+    // Outgoing ranges are in the caller's file.
+    let ranges = &outgoing["result"][2]["fromRanges"];
+    assert_eq!(ranges[0], json!({"start": {"line": 10, "character": 11}, "end": {"line": 10, "character": 22}}));
+    assert_eq!(ranges[1], json!({"start": {"line": 16, "character": 13}, "end": {"line": 16, "character": 24}}));
+
+    server.shutdown();
+}
+
+#[test]
+fn document_symbols_outline_the_function_and_its_names() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let faq = open_file(&mut server, &root, "answer/faq.rein");
+
+    let symbols = server.request(2, "textDocument/documentSymbol", json!({"textDocument": {"uri": faq}}));
+    let function = &symbols["result"][0];
+    assert_eq!(function["name"], "answer/faq");
+    assert_eq!(function["kind"], 12);
+    assert_eq!(spot_of(&root, &json!({"uri": faq, "range": function["selectionRange"]})), spot("answer/faq.rein", 3, 30, 3, 39));
+    let children: Vec<(String, String, Spot)> = function["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let at = spot_of(&root, &json!({"uri": faq, "range": c["selectionRange"]}));
+            (c["name"].as_str().unwrap().to_string(), c["detail"].as_str().unwrap().to_string(), at)
+        })
+        .collect();
+    assert_eq!(
+        children,
+        vec![
+            ("articleFound".to_string(), "boolean".to_string(), spot("answer/faq.rein", 5, 2, 5, 14)),
+            ("solved".to_string(), "boolean".to_string(), spot("answer/faq.rein", 11, 8, 11, 14)),
+        ]
+    );
+
+    server.shutdown();
+}
+
+#[test]
+fn workspace_symbols_search_every_program() {
+    let examples = example("");
+    let mut server = Server::start();
+    let folders = json!([{"uri": format!("file://{}", examples.display()), "name": "examples"}]);
+    let init = server.request(1, "initialize", json!({"capabilities": {}, "processId": null, "workspaceFolders": folders}));
+    assert!(init["result"]["capabilities"]["workspaceSymbolProvider"].as_bool().unwrap());
+    server.notify("initialized", json!({}));
+
+    let found = server.request(2, "workspace/symbol", json!({"query": "refund"}));
+    let found = found["result"].as_array().unwrap();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["name"], "billing/refund");
+    assert_eq!(found[0]["containerName"], "support-ticket");
+    let root = example("support-ticket");
+    assert_eq!(spot_of(&root, &found[0]["location"]), spot("billing/refund.rein", 3, 24, 3, 30));
+
+    // An empty query lists every function of the four example programs.
+    let all = server.request(3, "workspace/symbol", json!({"query": ""}));
+    assert_eq!(all["result"].as_array().unwrap().len(), 20, "{all}");
+
+    server.shutdown();
+}
