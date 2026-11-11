@@ -164,6 +164,32 @@ fn eval_refuses_function_with_errors() {
 }
 
 #[test]
+fn undocumented_function_does_not_run() {
+    let root = temp_dir("nodoc");
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./bare;\n}\n").unwrap();
+    fs::write(root.join("bare.rein"), "// A line comment is not a doc comment.\nexport default function bare() {\n  return \"x\";\n}\n").unwrap();
+    let message = "missing doc comment on `bare`; put /** description */ right before `export default function`";
+
+    let out = rein(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains(&format!("bare.rein:1:1: error: {message}")), "{stdout}");
+
+    let out = rein(&["eval", "bare", "--root", root.to_str().unwrap(), "--json"]);
+    assert_eq!(code(&out), 1);
+    assert_eq!(json(&out)["kind"], "error");
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
+    assert_eq!(code(&out), 1);
+    let v = json(&out);
+    assert_eq!(v["kind"], "error");
+    assert_eq!(v["diagnostics"][0]["file"], "bare.rein");
+    assert_eq!(v["diagnostics"][0]["message"], message);
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn missing_main_is_a_project_error() {
     let root = temp_dir("nomain");
     fs::write(root.join("other.rein"), "/** Other. */\nexport default function other() {\n  return \"x\";\n}\n").unwrap();

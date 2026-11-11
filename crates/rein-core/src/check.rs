@@ -45,7 +45,7 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
             ),
         );
     }
-    c.doc();
+    c.doc(name);
     c.params();
     if let Some(lit) = f.template_literal() {
         c.template(lit);
@@ -186,14 +186,18 @@ impl<'a> Checker<'a> {
     }
 
     /// Rules for the function's doc block: its presence, the description, and its tags.
-    fn doc(&mut self) {
+    /// Every function must say what it decides; there is no flag to skip this.
+    fn doc(&mut self, name: &str) {
         let f = self.f;
         let Some(doc) = &f.doc else {
-            self.error(Span::default(), "missing doc comment; put /** description */ right before `export default function`");
+            self.error(
+                Span::default(),
+                format!("missing doc comment on `{name}`; put /** description */ right before `export default function`"),
+            );
             return;
         };
         if f.description.as_ref().is_none_or(|d| d.value.trim().is_empty()) {
-            self.error(doc.span, "empty description; write the function description in the doc comment");
+            self.error(doc.span, format!("empty description on `{name}`; write the function description in the doc comment"));
         }
         self.tags(doc);
     }
@@ -561,14 +565,27 @@ export default function tpl(
         expect_diag(
             "export default function f() { return \"x\" }",
             Severity::Error,
-            "missing doc comment; put /** description */ right before `export default function`",
+            "missing doc comment on `test`; put /** description */ right before `export default function`",
+        );
+        // A plain line comment is not a doc comment.
+        expect_diag(
+            "// Says x.\nexport default function f() { return \"x\" }",
+            Severity::Error,
+            "missing doc comment on `test`",
         );
     }
 
     #[test]
     fn empty_description() {
         expect_diag("/**/\nexport default function f() { return \"x\" }", Severity::Error, "empty description");
-        expect_diag("/**   */\nexport default function f() { return \"x\" }", Severity::Error, "empty description");
+        expect_diag("/**   */\nexport default function f() { return \"x\" }", Severity::Error, "empty description on `test`");
+        // Tags alone leave the description empty.
+        expect_diag("/** @since 1 */\nexport default function f() { return \"x\" }", Severity::Error, "empty description on `test`");
+    }
+
+    #[test]
+    fn documented_function_is_clean() {
+        clean("/** Say x. */\nexport default function f() { return \"x\" }");
     }
 
     #[test]
