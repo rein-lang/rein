@@ -1,0 +1,64 @@
+//! Quick fixes for some diagnostics: add a missing doc comment, and name a positional argument.
+
+use std::collections::HashMap;
+
+use lsp_types::{
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse, Diagnostic, Range,
+    TextEdit, WorkspaceEdit,
+};
+use rein_core::ast::Function;
+use rein_core::lexer::{lex, Tok};
+
+use super::occurrences::calls;
+use super::text::{offset, position};
+use super::workspace::{locate, State};
+
+pub fn code_actions(state: &State, p: &CodeActionParams) -> Option<CodeActionResponse> {
+    let (project, name) = locate(&state.docs, &p.text_document.uri)?;
+    let sf = project.get(&name)?;
+    let actions = p
+        .context
+        .diagnostics
+        .iter()
+        .filter_map(|d| {
+            let (title, edit) = fix(&sf.text, &sf.function, d)?;
+            let changes = HashMap::from([(p.text_document.uri.clone(), vec![edit])]);
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title,
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![d.clone()]),
+                edit: Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+                is_preferred: Some(true),
+                ..Default::default()
+            }))
+        })
+        .collect();
+    Some(actions)
+}
+
+/// The fix for one diagnostic, found by its message: a title and one text edit.
+fn fix(text: &str, f: &Function, d: &Diagnostic) -> Option<(String, TextEdit)> {
+    let insert = |at: usize, new_text: &str| TextEdit {
+        range: Range::new(position(text, at), position(text, at)),
+        new_text: new_text.to_string(),
+    };
+    let msg = d.message.as_str();
+    if msg.starts_with("missing doc comment on ") {
+        let (_, export) = lex(text).ok()?.into_iter().find(|(t, _)| *t == Tok::Export)?;
+        let doc = "/**\n * TODO: say what this function decides.\n */\n";
+        return Some(("Add a doc comment".to_string(), insert(export.start, doc)));
+    }
+    // The name the message is about, between its first pair of backticks.
+    let named = msg.split('`').nth(1)?;
+    if msg.starts_with("parameter `") && msg.contains("needs a doc comment") {
+        let input = f.input(named).filter(|i| i.doc.is_none())?;
+        let doc = "/** TODO: ask the question. */ ";
+        return Some((format!("Add a doc comment to `{named}`"), insert(input.name.span.start, doc)));
+    }
+    if msg.starts_with("missing argument `") {
+        let start = offset(text, d.range.start);
+        let positional = calls(f).into_iter().flat_map(|c| &c.args).any(|a| a.name.is_none() && a.span.start == start);
+        return positional.then(|| (format!("Name the argument `{named}=`"), insert(start, &format!("{named}="))));
+    }
+    None
+}

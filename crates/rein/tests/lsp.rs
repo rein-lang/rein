@@ -918,3 +918,52 @@ fn signature_help_shows_the_callee_parameters() {
 
     server.shutdown();
 }
+
+/// The quick fix for the first diagnostic of `uri` that contains `part`: its title and its one edit.
+fn quick_fix(server: &mut Server, id: i64, uri: &str, part: &str) -> (String, Value) {
+    let diags = server.wait_diagnostics(uri, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    let params = json!({"textDocument": {"uri": uri}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(id, "textDocument/codeAction", params);
+    let action = &actions["result"][0];
+    assert_eq!(action["kind"], "quickfix", "{actions}");
+    let edits = action["edit"]["changes"][uri].as_array().unwrap();
+    assert_eq!(edits.len(), 1, "{actions}");
+    (action["title"].as_str().unwrap().to_string(), edits[0].clone())
+}
+
+fn insert_at(line: u64, character: u64, text: &str) -> Value {
+    let at = json!({"line": line, "character": character});
+    json!({"range": {"start": at, "end": at}, "newText": text})
+}
+
+#[test]
+fn quick_fixes_add_doc_comments_and_name_arguments() {
+    let root = temp_project("fixes");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let undocumented = uri_of(&root, "undocumented.rein");
+    server.open(&undocumented, "export default function undocumented() {\n  return \"x\";\n}\n");
+    let (title, edit) = quick_fix(&mut server, 2, &undocumented, "missing doc comment");
+    assert_eq!(title, "Add a doc comment");
+    assert_eq!(edit, insert_at(0, 0, "/**\n * TODO: say what this function decides.\n */\n"));
+
+    let param = uri_of(&root, "param.rein");
+    server.open(
+        &param,
+        "/** P. */\nexport default function param(\n  c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return \"a\";\n  }\n  return \"b\";\n}\n",
+    );
+    let (title, edit) = quick_fix(&mut server, 3, &param, "parameter `c` needs a doc comment");
+    assert_eq!(title, "Add a doc comment to `c`");
+    assert_eq!(edit, insert_at(2, 2, "/** TODO: ask the question. */ "));
+
+    let positional = uri_of(&root, "positional.rein");
+    server.open(&positional, "/** P. */\nexport default function positional() {\n  return delegate(\"a\", task=\"b\");\n}\n");
+    let (title, edit) = quick_fix(&mut server, 4, &positional, "missing argument `model`");
+    assert_eq!(title, "Name the argument `model=`");
+    assert_eq!(edit, insert_at(2, 18, "model="));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
