@@ -5,5 +5,5 @@ members = ["crates/rein-core", "crates/rein"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
