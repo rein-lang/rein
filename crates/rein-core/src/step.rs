@@ -748,6 +748,24 @@ mod tests {
     }
 
     #[test]
+    fn template_call_adds_no_hop_to_the_trace() {
+        let project = project(&[
+            ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./tpl(\"Hello\");\n}\n"),
+            ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n"),
+        ]);
+        let res = step(&project, &req("main", &[]));
+        assert_eq!(
+            res,
+            StepResponse::Done {
+                version: 1,
+                instruction: "Hi Hello".into(),
+                answers: answers(&[]),
+                trace: trace(&["main"]),
+            }
+        );
+    }
+
+    #[test]
     fn project_with_errors_is_refused() {
         let project = project(&[(
             "main.rein",
