@@ -111,16 +111,6 @@ fn describe_prints_schema() {
 }
 
 #[test]
-fn graph_draws_main_as_entry() {
-    let out = rein(&["graph", "--root", "examples/rein/merge-pr"]);
-    assert_eq!(code(&out), 0);
-    let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("[\"main\"])"), "{text}");
-    assert!(text.contains("[\"merge_pr\"]"), "{text}");
-    assert!(text.contains("[\"ci/fix\"]"), "{text}");
-}
-
-#[test]
 fn check_reports_errors_in_broken_project() {
     let root = temp_dir("broken");
     fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./bad;\n}\n").unwrap();
@@ -282,38 +272,6 @@ fn check_symlinked_file_is_checked_in_the_project_of_the_link() {
 
     fs::remove_dir_all(&a).unwrap();
     fs::remove_dir_all(&b).unwrap();
-}
-
-#[test]
-fn graph_ids_are_unique_and_labels_are_escaped() {
-    let root = temp_dir("graph");
-    fs::create_dir_all(root.join("ci")).unwrap();
-    fs::write(
-        root.join("main.rein"),
-        "/** Entry. */\nexport default function main() {\n  return @./ci/fix;\n}\n",
-    )
-    .unwrap();
-    fs::write(root.join("ci/fix.rein"), "/** F. */\nexport default function fix() {\n  return \"f\";\n}\n").unwrap();
-    fs::write(root.join("ci__fix.rein"), "/** C. */\nexport default function ci__fix() {\n  return \"c\";\n}\n").unwrap();
-    fs::write(root.join("my task.rein"), "/** M. */\nexport default function m() {\n  return \"m\";\n}\n").unwrap();
-
-    let out = rein(&["graph", "--root", root.to_str().unwrap()]);
-    assert_eq!(code(&out), 0);
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    for label in ["[\"ci/fix\"]", "[\"ci__fix\"]", "[\"my task\"]", "([\"main\"])"] {
-        assert!(text.contains(label), "{text}");
-    }
-    let ids: Vec<String> = text
-        .lines()
-        .filter(|l| l.contains("[\"") && !l.contains("-->"))
-        .map(|l| l.trim().split(['[', '(']).next().unwrap().to_string())
-        .collect();
-    assert_eq!(ids.len(), 4, "{text}");
-    let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
-    assert_eq!(unique.len(), ids.len(), "{text}");
-    assert!(ids.iter().all(|id| id.chars().all(|c| c.is_ascii_alphanumeric())), "{text}");
-
-    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]

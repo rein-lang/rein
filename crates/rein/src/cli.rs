@@ -1,4 +1,4 @@
-//! Command bodies for `check`, `eval`, `step`, `describe` and `graph`. The live `rein run` is in `live_run`.
+//! Command bodies for `check`, `eval`, `step` and `describe`. The live `rein run` is in `live_run`. `rein graph` is in `graph`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -272,33 +272,6 @@ pub fn describe(function: &str, root: Option<PathBuf>) -> u8 {
         "inputs": inputs_json(&sf.function),
     });
     println!("{}", serde_json::to_string_pretty(&schema).unwrap_or_default());
-    OK
-}
-
-pub fn graph(root: Option<PathBuf>) -> u8 {
-    let project = match load(root) {
-        Ok(p) => p,
-        Err(msg) => return fail(false, &msg),
-    };
-    let mut lines = vec!["flowchart TD".to_string()];
-    // Ids are positional, so no two names can collide. The name is the label.
-    let ids: BTreeMap<&str, String> = project.files.keys().enumerate().map(|(i, n)| (n.as_str(), format!("n{i}"))).collect();
-    // The entry point is drawn as a stadium, so it stands out.
-    for (name, id) in &ids {
-        let label = name.replace('"', "#quot;");
-        if *name == ENTRY {
-            lines.push(format!("    {id}([\"{label}\"])"));
-        } else {
-            lines.push(format!("    {id}[\"{label}\"]"));
-        }
-    }
-    lines.extend(
-        project
-            .references()
-            .iter()
-            .map(|(from, to)| format!("    {} --> {}", ids[from.as_str()], ids[to.as_str()])),
-    );
-    println!("{}", lines.join("\n"));
     OK
 }
 

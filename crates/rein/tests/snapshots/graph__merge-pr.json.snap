@@ -1,0 +1,243 @@
+---
+source: crates/rein/tests/graph.rs
+expression: text
+---
+{
+  "version": 1,
+  "view": "flow",
+  "entry": "main",
+  "nodes": [
+    {
+      "id": "f0",
+      "kind": "function",
+      "function": "ci/fix",
+      "label": "ci/fix"
+    },
+    {
+      "id": "f0_0",
+      "kind": "question",
+      "function": "ci/fix",
+      "label": "Did you push a fix for the failing job?\nfixPushed: boolean",
+      "name": "fixPushed",
+      "type": "boolean"
+    },
+    {
+      "id": "f0_1",
+      "kind": "done",
+      "function": "ci/fix",
+      "label": "Wait for CI to finish. Then start this program again with the task merge."
+    },
+    {
+      "id": "f0_2",
+      "kind": "done",
+      "function": "ci/fix",
+      "label": "Read the CI log. Fix the failing test or code. Push the fix. Then run ci/fix again."
+    },
+    {
+      "id": "f1",
+      "kind": "function",
+      "function": "main",
+      "label": "main",
+      "entry": true
+    },
+    {
+      "id": "f1_0",
+      "kind": "question",
+      "function": "main",
+      "label": "Which task does the agent do?\ntask: \"merge\" | \"security review\"",
+      "name": "task",
+      "type": "\"merge\" | \"security review\""
+    },
+    {
+      "id": "f2",
+      "kind": "function",
+      "function": "merge_pr",
+      "label": "merge_pr"
+    },
+    {
+      "id": "f2_0",
+      "kind": "question",
+      "function": "merge_pr",
+      "label": "Does the PR change only documentation files?\ndocsOnly: boolean",
+      "name": "docsOnly",
+      "type": "boolean"
+    },
+    {
+      "id": "f2_1",
+      "kind": "done",
+      "function": "merge_pr",
+      "label": "approved"
+    },
+    {
+      "id": "f2_2",
+      "kind": "question",
+      "function": "merge_pr",
+      "label": "What is the CI status of the PR?\nci: \"green\" | \"red\" | \"pending\"",
+      "name": "ci",
+      "type": "\"green\" | \"red\" | \"pending\""
+    },
+    {
+      "id": "f2_3",
+      "kind": "done",
+      "function": "merge_pr",
+      "label": "wait for CI, then run merge_pr again"
+    },
+    {
+      "id": "f3",
+      "kind": "function",
+      "function": "review_code",
+      "label": "review_code"
+    },
+    {
+      "id": "f3_0",
+      "kind": "question",
+      "function": "review_code",
+      "label": "Does the PR change authentication, payments, or permissions code?\nsecuritySensitive: boolean",
+      "name": "securitySensitive",
+      "type": "boolean"
+    },
+    {
+      "id": "f3_1",
+      "kind": "delegate",
+      "function": "review_code",
+      "label": "delegate(model=\"use opus model\", task=\"code review the pr with a security focus\")"
+    },
+    {
+      "id": "f3_2",
+      "kind": "delegate",
+      "function": "review_code",
+      "label": "delegate(model=\"use haiku model\", task=\"code review the pr\")"
+    },
+    {
+      "id": "f4",
+      "kind": "function",
+      "function": "security/review",
+      "label": "security/review"
+    },
+    {
+      "id": "f4_0",
+      "kind": "question",
+      "function": "security/review",
+      "label": "Does the PR add or change a secret, token, or key?\nsecretsAdded: boolean",
+      "name": "secretsAdded",
+      "type": "boolean"
+    },
+    {
+      "id": "f4_1",
+      "kind": "done",
+      "function": "security/review",
+      "label": "Stop. Remove the secret from the diff. Rotate the secret. Then run merge_pr again."
+    },
+    {
+      "id": "f4_2",
+      "kind": "done",
+      "function": "security/review",
+      "label": "Check the auth and permission changes. Ask the security owner to approve. Then run merge_pr again."
+    }
+  ],
+  "edges": [
+    {
+      "from": "f0",
+      "to": "f0_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f0_0",
+      "to": "f0_1",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f0_0",
+      "to": "f0_2",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f1",
+      "to": "f1_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f1_0",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "merge"
+    },
+    {
+      "from": "f1_0",
+      "to": "f4",
+      "kind": "handoff",
+      "label": "security review"
+    },
+    {
+      "from": "f2",
+      "to": "f2_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f2_0",
+      "to": "f2_1",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f2_0",
+      "to": "f2_2",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f2_2",
+      "to": "f3",
+      "kind": "handoff",
+      "label": "green"
+    },
+    {
+      "from": "f2_2",
+      "to": "f0",
+      "kind": "handoff",
+      "label": "red"
+    },
+    {
+      "from": "f2_2",
+      "to": "f2_3",
+      "kind": "flow",
+      "label": "pending"
+    },
+    {
+      "from": "f3",
+      "to": "f3_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f3_0",
+      "to": "f3_1",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f3_0",
+      "to": "f3_2",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f4",
+      "to": "f4_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f4_0",
+      "to": "f4_1",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f4_0",
+      "to": "f4_2",
+      "kind": "flow",
+      "label": "no"
+    }
+  ]
+}

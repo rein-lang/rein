@@ -1,0 +1,215 @@
+---
+source: crates/rein/tests/graph.rs
+expression: text
+---
+{
+  "version": 1,
+  "view": "flow",
+  "entry": "main",
+  "nodes": [
+    {
+      "id": "f0",
+      "kind": "function",
+      "function": "answer/faq",
+      "label": "answer/faq"
+    },
+    {
+      "id": "f0_0",
+      "kind": "question",
+      "function": "answer/faq",
+      "label": "Did you find a help article that answers the question?\narticleFound: boolean",
+      "name": "articleFound",
+      "type": "boolean"
+    },
+    {
+      "id": "f0_1",
+      "kind": "request",
+      "function": "answer/faq",
+      "label": "request: \"Reply with the help article link and ask the customer if it solved the problem.\""
+    },
+    {
+      "id": "f0_2",
+      "kind": "question",
+      "function": "answer/faq",
+      "label": "Did the customer confirm the article solved the problem?\nsolved: boolean",
+      "name": "solved",
+      "type": "boolean"
+    },
+    {
+      "id": "f0_3",
+      "kind": "done",
+      "function": "answer/faq",
+      "label": "Close the ticket as solved."
+    },
+    {
+      "id": "f1",
+      "kind": "function",
+      "function": "billing/refund",
+      "label": "billing/refund"
+    },
+    {
+      "id": "f1_0",
+      "kind": "question",
+      "function": "billing/refund",
+      "label": "Is the requested refund above the agent's limit?\nrefundOverLimit: boolean",
+      "name": "refundOverLimit",
+      "type": "boolean"
+    },
+    {
+      "id": "f1_1",
+      "kind": "done",
+      "function": "billing/refund",
+      "label": "@../templates/tell_customer(opening=\"Refund the amount the customer asked for and confirm it in the ticket.\", nextStep=\"Then tell the customer the refund takes 5 business days.\")"
+    },
+    {
+      "id": "f2",
+      "kind": "function",
+      "function": "escalate",
+      "label": "escalate"
+    },
+    {
+      "id": "f2_0",
+      "kind": "done",
+      "function": "escalate",
+      "label": "Assign the ticket to the tier 2 queue. Tell the customer a person will reply within one business day. Do not promise a refund or a fix."
+    },
+    {
+      "id": "f3",
+      "kind": "function",
+      "function": "main",
+      "label": "main",
+      "entry": true
+    },
+    {
+      "id": "f3_0",
+      "kind": "question",
+      "function": "main",
+      "label": "Is the customer on the VIP plan?\nvip: boolean",
+      "name": "vip",
+      "type": "boolean"
+    },
+    {
+      "id": "f3_1",
+      "kind": "question",
+      "function": "main",
+      "label": "What category best fits the ticket?\ncategory: \"billing\" | \"account\" | \"how_to\"",
+      "name": "category",
+      "type": "\"billing\" | \"account\" | \"how_to\""
+    },
+    {
+      "id": "f4",
+      "kind": "function",
+      "function": "templates/tell_customer",
+      "label": "templates/tell_customer(opening, nextStep)"
+    },
+    {
+      "id": "f4_0",
+      "kind": "done",
+      "function": "templates/tell_customer",
+      "label": "${opening} ${nextStep}"
+    }
+  ],
+  "edges": [
+    {
+      "from": "f0",
+      "to": "f0_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f0_0",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "no"
+    },
+    {
+      "from": "f0_0",
+      "to": "f0_1",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f0_1",
+      "to": "f0_2",
+      "kind": "flow"
+    },
+    {
+      "from": "f0_2",
+      "to": "f0_3",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f0_2",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "no"
+    },
+    {
+      "from": "f1",
+      "to": "f1_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f1_0",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "yes"
+    },
+    {
+      "from": "f1_0",
+      "to": "f1_1",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f1_1",
+      "to": "f4",
+      "kind": "template"
+    },
+    {
+      "from": "f2",
+      "to": "f2_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f3",
+      "to": "f3_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f3_0",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "yes"
+    },
+    {
+      "from": "f3_0",
+      "to": "f3_1",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f3_1",
+      "to": "f1",
+      "kind": "handoff",
+      "label": "billing"
+    },
+    {
+      "from": "f3_1",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "account"
+    },
+    {
+      "from": "f3_1",
+      "to": "f0",
+      "kind": "handoff",
+      "label": "how_to"
+    },
+    {
+      "from": "f4",
+      "to": "f4_0",
+      "kind": "flow"
+    }
+  ]
+}

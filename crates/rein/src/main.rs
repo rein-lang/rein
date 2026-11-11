@@ -1,6 +1,7 @@
 //! `rein` command line: checks, runs and describes Rein projects, and serves the language server.
 
 mod cli;
+mod graph;
 mod hook;
 mod install;
 mod live_run;
@@ -101,11 +102,23 @@ enum Command {
         #[arg(long)]
         root: Option<PathBuf>,
     },
-    /// Print the reference graph as a Mermaid flowchart.
+    /// Print the program graph: functions, questions, branches, outcomes, and hand-offs.
     Graph {
+        /// Program to draw: a `.rein` file, or a name (see `rein list`). Default: the project around the current directory.
+        #[arg(conflicts_with = "root")]
+        program: Option<String>,
         /// Project root. Default: the nearest directory with main.rein.
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Draw only the references: one node per function, one edge per reference.
+        #[arg(long)]
+        refs: bool,
+        /// Output format.
+        #[arg(long, value_enum, default_value = "mermaid")]
+        format: graph::GraphFormat,
+        /// Write to FILE instead of stdout. A `.svg` or `.png` FILE is rendered from DOT by Graphviz `dot`.
+        #[arg(long, short, value_name = "FILE")]
+        output: Option<PathBuf>,
     },
     /// List the programs visible from here: name, scope, path, description, and first question.
     #[command(alias = "flows")]
@@ -167,7 +180,7 @@ fn main() -> ExitCode {
             cli::step(entry, root, flow.or(program), &answer, &input, stdin, json)
         }
         Command::Describe { function, root } => cli::describe(&function, root),
-        Command::Graph { root } => cli::graph(root),
+        Command::Graph { program, root, refs, format, output } => graph::run(program, root, refs, format, output.as_deref()),
         Command::List { json } => programs::list(json),
         Command::Show { name } => programs::show(&name),
         Command::Serve { mcp: true } => mcp::serve(),

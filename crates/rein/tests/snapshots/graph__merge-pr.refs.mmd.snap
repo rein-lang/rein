@@ -1,0 +1,14 @@
+---
+source: crates/rein/tests/graph.rs
+expression: "stdout(&rein(&[\"graph\", \"merge-pr\", \"--refs\"]))"
+---
+flowchart TD
+    f0[["ci/fix"]]
+    f1(["main"])
+    f2[["merge_pr"]]
+    f3[["review_code"]]
+    f4[["security/review"]]
+    f1 --> f2
+    f1 --> f4
+    f2 --> f0
+    f2 --> f3
