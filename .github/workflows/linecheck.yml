@@ -14,4 +14,4 @@ jobs:
       # Enforces the per-file line limits in linecheck.yml.
       - uses: tupe12334/linecheck@v1.2.2
         with:
-          version: "1.2.2"
+          version: "1.2.1" # latest on crates.io; v1.2.2 tag is not published there
