@@ -363,7 +363,7 @@ impl Parser {
         Ok(TemplateLit { pieces, span })
     }
 
-    /// `callee(arg, ...)`. The callee is a std name, or a reference. Each arg is a string or a template literal.
+    /// `callee(arg, ...)`. The callee is a std name, or a reference. Each arg is a value (see `call_arg`).
     fn call(&mut self) -> Result<Call, Diagnostic> {
         let callee = match self.peek().clone() {
             Tok::Ref(path) => {
@@ -389,8 +389,7 @@ impl Parser {
         Ok(Call { span: callee.span().to(close), callee, args })
     }
 
-    /// An argument of a call: a string, a template literal, or a bare name of a `string` parameter.
-    /// A name followed by `(` is a call, which is not allowed here.
+    /// An argument of a call: a string, a template literal, a bare name of a `string` parameter, or a call.
     fn call_arg(&mut self) -> Result<Value, Diagnostic> {
         if let Tok::Ident(name) = self.peek().clone() {
             if *self.next_tok() != Tok::LParen {
@@ -398,7 +397,7 @@ impl Parser {
                 return Ok(Value::Name(Spanned { value: name, span }));
             }
         }
-        self.text_arg()
+        self.value()
     }
 
     /// A string or a template literal, as an argument.
@@ -721,12 +720,18 @@ export default function f(
     }
 
     #[test]
-    fn call_arguments_cannot_be_calls() {
-        let msg = one_error(r#"/** d */
+    fn call_argument_can_be_a_template_call() {
+        let f = ok(r#"/** d */
 export default function f() {
-  return @./tpl(other("x"));
+  return @./tpl(@./inner(delegate("m", "t")), "b");
 }"#);
-        assert!(msg.contains("expected a string or a template literal"), "{msg}");
+        let Stmt::Return(r) = &f.body[0] else { panic!("expected return") };
+        let ReturnValue::Call(call) = &r.value else { panic!("expected call, got {:?}", r.value) };
+        assert_eq!(call.args.len(), 2);
+        let Value::Call(inner) = &call.args[0] else { panic!("expected nested call, got {:?}", call.args[0]) };
+        assert_eq!(inner.callee.key(), "./inner");
+        assert!(matches!(&inner.args[0], Value::Call(c) if c.callee.key() == "delegate"));
+        assert!(matches!(&call.args[1], Value::Str(s) if s.value == "b"));
     }
 
     #[test]

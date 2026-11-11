@@ -311,15 +311,13 @@ fn keys(f: &Function) -> BTreeSet<String> {
             ReturnValue::Ref(reference) => {
                 out.insert(reference.value.clone());
             }
-            ReturnValue::Call(call) => {
-                out.insert(call.callee.key().to_string());
-            }
+            ReturnValue::Call(call) => out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string())),
             ReturnValue::Text(_) | ReturnValue::Template(_) => {}
         },
         Stmt::Request { callee, arg, .. } => {
             out.insert(callee.value.clone());
             if let Value::Call(call) = arg {
-                out.insert(call.callee.key().to_string());
+                out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string()));
             }
         }
         _ => {}
@@ -341,10 +339,12 @@ fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<(Str
         match s {
             Stmt::Return(r) => match &r.value {
                 ReturnValue::Ref(reference) => push(&reference.value),
-                ReturnValue::Call(call) if callee_is_ref(call) => push(call.callee.key()),
+                ReturnValue::Call(call) => call.calls().into_iter().filter(|c| callee_is_ref(c)).for_each(|c| push(c.callee.key())),
                 _ => {}
             },
-            Stmt::Request { arg: Value::Call(call), .. } if callee_is_ref(call) => push(call.callee.key()),
+            Stmt::Request { arg: Value::Call(call), .. } => {
+                call.calls().into_iter().filter(|c| callee_is_ref(c)).for_each(|c| push(c.callee.key()));
+            }
             _ => {}
         }
     });
@@ -447,6 +447,21 @@ mod tests {
             ],
         );
         project.check().remove("f").unwrap()
+    }
+
+    #[test]
+    fn template_only_used_in_a_nested_call_is_bound_and_reachable() {
+        let root = PathBuf::from("/proj");
+        let project = Project::from_sources(
+            root.clone(),
+            vec![
+                (root.join("main.rein"), "/** m */\nexport default function main() { return delegate(@./tpl(\"x\"), \"task\") }\n".to_string()),
+                (root.join("tpl.rein"), "/** t */\nexport default function tpl(\n  /** A */ a: string,\n) { return `Hi ${a}` }\n".to_string()),
+            ],
+        );
+        assert!(project.bindings("main").contains_key("./tpl"));
+        let diags = project.check();
+        assert!(!has(&diags["tpl"], Severity::Warning, "not reachable"), "{:?}", diags["tpl"]);
     }
 
     #[test]

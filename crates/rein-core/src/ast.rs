@@ -235,6 +235,19 @@ pub struct Call {
     pub span: Span,
 }
 
+impl Call {
+    /// This call, then every call nested in its arguments, at any depth.
+    pub fn calls(&self) -> Vec<&Call> {
+        let mut out = vec![self];
+        for arg in &self.args {
+            if let Value::Call(inner) = arg {
+                out.extend(inner.calls());
+            }
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     /// A boolean parameter used bare.

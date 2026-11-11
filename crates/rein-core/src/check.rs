@@ -360,7 +360,7 @@ impl<'a> Checker<'a> {
             Callee::Ref(path) => match (self.resolve)(&path.value) {
                 Err(msg) => self.error(path.span, msg),
                 Ok(Kind::Function { .. }) if !hand_off => {
-                    self.error(path.span, "only templates can be called; return the function to hand off");
+                    self.error(path.span, "A hand-off cannot be an argument of a call.");
                 }
                 Ok(Kind::Function { strings: 0 }) => {
                     self.error(call.span, format!("`@{}` takes no arguments; return it without a call", path.value));
@@ -929,8 +929,8 @@ export default function f() { return @./tpl("only one") }"#),
     }
 
     #[test]
-    fn only_templates_can_be_called() {
-        // A function is handed off by `return`. Inside `request(...)`, only a template can be called.
+    fn hand_off_cannot_be_a_request_argument() {
+        // A function is handed off by `return`. Inside `request(...)`, a call argument cannot be a hand-off.
         expect_diag(
             r#"/** d */
 export default async function f() {
@@ -939,8 +939,41 @@ export default async function f() {
   return "y"
 }"#,
             Severity::Error,
-            "only templates can be called; return the function to hand off",
+            "A hand-off cannot be an argument of a call.",
         );
+    }
+
+    #[test]
+    fn nested_template_call_arity_is_checked() {
+        expect_diag(
+            &with_pr(r#"return @./tpl(pr, @./tpl("only one"));"#),
+            Severity::Error,
+            "`@./tpl` takes 2 arguments, got 1",
+        );
+        expect_diag(
+            &with_pr(r#"return @./tpl(delegate("m"), pr);"#),
+            Severity::Error,
+            "`delegate` takes 2 arguments, got 1",
+        );
+    }
+
+    #[test]
+    fn hand_off_cannot_be_an_argument() {
+        expect_diag(
+            &with_pr("return @./tpl(pr, @./merge(pr));"),
+            Severity::Error,
+            "A hand-off cannot be an argument of a call.",
+        );
+        expect_diag(
+            &with_pr("return delegate(@./merge(pr), \"task\");"),
+            Severity::Error,
+            "A hand-off cannot be an argument of a call.",
+        );
+    }
+
+    #[test]
+    fn std_template_call_inside_a_user_template_call_is_clean() {
+        clean(&with_pr(r#"return @./tpl(delegate("use opus model", pr), "b");"#));
     }
 
     #[test]
