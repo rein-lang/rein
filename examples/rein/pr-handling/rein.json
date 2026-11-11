@@ -1,0 +1,5 @@
+{
+  "name": "pr-handling",
+  "description": "Decide the next step for a pull request: review it, fix it, or merge it.",
+  "entry": "main.rein"
+}

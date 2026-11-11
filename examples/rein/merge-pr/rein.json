@@ -1,0 +1,5 @@
+{
+  "name": "merge-pr",
+  "description": "Decide the next step for a pull request task.",
+  "entry": "main.rein"
+}

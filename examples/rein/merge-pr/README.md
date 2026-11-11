@@ -10,22 +10,17 @@ An agent flow that decides whether a pull request can merge.
 | `merge_pr.rein` | `merge_pr` | Checks docs-only changes and CI status. |
 | `review_code.rein` | `review_code` | Code review step after green CI. Delegates the review to a subagent, on a stronger model when the PR is security-sensitive. |
 | `security/review.rein` | `security/review` | Checks for secrets and auth changes. Reached from `main` for a security review task. |
-| `ci/fix.rein` | `ci/fix` | Fix a red CI run, then return to `merge_pr`. |
+| `ci/fix.rein` | `ci/fix` | Fix a red CI run. Then the agent starts this program again. |
 
 ## Run it
 
 ```sh
-cargo run -p rein -- check examples/.rein/merge-pr
-cargo run -p rein -- run --root examples/.rein/merge-pr
+cargo run -p rein -- check examples/rein/merge-pr
+cargo run -p rein -- run --root examples/rein/merge-pr
 ```
 
-## Intentional cycle
+## Retry without a cycle
 
-`merge_pr` references `ci/fix`, and `ci/fix` references back to `merge_pr`:
-
-```text
-merge_pr -> ci/fix -> merge_pr
-```
-
-This loop is on purpose. Rein has no loops yet, so the cycle is the retry.
-`rein check` reports it as a reference cycle warning. The warning is expected for this example.
+`merge_pr` references `ci/fix`. `ci/fix` does not reference back. Rein has no loops yet, so the retry ends the run.
+After a fix is pushed, `ci/fix` returns the text "start this program again with the task merge".
+The agent then starts the program again, and `merge_pr` checks the pull request again.
