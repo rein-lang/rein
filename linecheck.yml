@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/tupe12334/linecheck/main/schema/linecheck.schema.json
+#
+# Per-file line-count limits, enforced in CI by .github/workflows/linecheck.yml.
+# Target is the --default preset (warn 200 / error 400). Some existing
+# Rust files already exceed 400 lines, so the Rust rule starts warn-only.
+# Add `error: 400` to it once those files are split below that limit.
+
+rules:
+  - pattern: "**/*.rs"
+    warn: 200
+    warn_message: "Getting long. Consider splitting into submodules."
+  - pattern: "**/*.ts"
+    warn: 200
+    error: 400
+  - pattern: "**/*.tsx"
+    warn: 200
+    error: 400
+  - pattern: "**/*.js"
+    warn: 200
+    error: 400
+  - pattern: "**/*.mjs"
+    warn: 200
+    error: 400
+  - pattern: "**/*.astro"
+    warn: 200
+    error: 400
+  - pattern: "**/*.rein"
+    warn: 200
+    error: 400
+
+exclude:
+  - "**/Cargo.lock"
+  - "**/pnpm-lock.yaml"
+  - "**/*.snap"
+  - "**/*.json"
+  - "**/*.md"
+  - "**/*.webp"
+  - "**/node_modules/**"
+  - "**/target/**"
+  - "**/dist/**"
