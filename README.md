@@ -100,8 +100,16 @@ Run the editor tests:
 
 ```sh
 cd editors/vscode
-npm install
-npm test
+pnpm install
+pnpm test
+```
+
+Run the docs site locally:
+
+```sh
+cd website/docs
+pnpm install
+pnpm run docs:dev
 ```
 
 ## Repository layout

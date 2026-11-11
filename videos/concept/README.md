@@ -14,7 +14,7 @@ Owned path: `videos/concept/`. Narration text: `script.md` and `narration/beats.
 Requires Node 24 and ffmpeg/ffprobe on PATH. The narration step needs a Python that has `kokoro_onnx` and `soundfile`.
 
 ```bash
-npm install
+pnpm install
 ```
 
 Kokoro files are read from the existing local install. Nothing is copied into this repo.
@@ -36,7 +36,7 @@ This runs, in order:
 
 1. `scripts/tts.py`: synthesizes `public/audio/beat-N.wav` from `narration/beats.json`, pads and normalizes each clip, and writes `src/timing.json`.
 2. `scripts/stills.mjs`: writes `out/stills/beat-N.png`.
-3. `npx remotion render`: writes `out/rein-concept.mp4`.
+3. `pnpm exec remotion render`: writes `out/rein-concept.mp4`.
 4. `ffprobe`: prints duration and stream info.
 
 Each beat lasts exactly as long as its narration clip. Editing a line in `narration/beats.json` and re-running `render.sh` updates timing and captions. Visual beats are timed as fractions of their beat length, so re-check the stills after a wording change.
