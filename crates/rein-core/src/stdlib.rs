@@ -51,6 +51,11 @@ pub fn item(name: &str) -> Result<Binding<'static>, String> {
     }
 }
 
+/// The source text of a std template. None for `request`, which is built in, and for unknown names.
+pub fn source(name: &str) -> Option<&'static str> {
+    TEMPLATES.iter().find(|(n, _)| *n == name).map(|(_, src)| *src)
+}
+
 /// The text of `request`, for hover.
 pub fn request_doc() -> &'static str {
     REQUEST_DOC

@@ -1,0 +1,72 @@
+//! The open buffers, and the projects built from them and the files on disk. Paths, URIs and locations.
+
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use lsp_types::{Location, Url};
+use rein_core::diagnostic::Span;
+use rein_core::project::Project;
+
+use super::text::range;
+
+/// Open editor buffers by document URI. They replace the files on disk.
+pub type Docs = HashMap<Url, String>;
+
+/// What the server keeps between messages.
+#[derive(Default)]
+pub struct State {
+    pub docs: Docs,
+}
+
+/// Project under `root`: files on disk, with open buffers replacing their disk copies.
+/// A buffer in a nested project is left out, as its file is left out of this one.
+pub fn build_project(docs: &Docs, root: &Path) -> Project {
+    let mut by_path: BTreeMap<PathBuf, String> = BTreeMap::new();
+    if let Ok(disk) = Project::load(root) {
+        by_path.extend(disk.files.into_values().map(|sf| (sf.path, sf.text)));
+    }
+    by_path.extend(docs.iter().filter_map(|(uri, text)| {
+        let path = doc_path(uri)?;
+        (Project::find_root(&path) == root).then(|| (path, text.clone()))
+    }));
+    Project::from_sources(root.to_path_buf(), by_path.into_iter().collect())
+}
+
+/// The project of `uri` and the function name of that file.
+pub fn locate(docs: &Docs, uri: &Url) -> Option<(Project, String)> {
+    let path = doc_path(uri)?;
+    let project = build_project(docs, &Project::find_root(&path));
+    let name = project.name_for(&path)?;
+    project.get(&name)?;
+    Some((project, name))
+}
+
+/// Where `span` is in the file of function `name`.
+pub fn location(docs: &Docs, project: &Project, name: &str, span: Span) -> Option<Location> {
+    let sf = project.get(name)?;
+    Some(Location::new(uri_for(docs, &sf.path)?, range(&sf.text, span)))
+}
+
+/// The URI the client uses for `path`. For an open document, that is the URI the client sent.
+pub fn uri_for(docs: &Docs, path: &Path) -> Option<Url> {
+    docs.keys()
+        .find(|u| doc_path(u).as_deref() == Some(path))
+        .cloned()
+        .or_else(|| Url::from_file_path(path).ok())
+}
+
+pub fn doc_path(uri: &Url) -> Option<PathBuf> {
+    uri.to_file_path().ok().map(canonical)
+}
+
+/// Resolves symlinks in the directory part, so a file that does not exist yet still matches
+/// the canonical project root.
+pub fn canonical(path: PathBuf) -> PathBuf {
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+        if let Ok(dir) = fs::canonicalize(dir) {
+            return dir.join(name);
+        }
+    }
+    path
+}

@@ -433,3 +433,192 @@ fn hover_and_completion_know_the_std_library() {
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
 }
+
+/// The real example program `examples/rein/<name>`, as a canonical path.
+fn example(name: &str) -> PathBuf {
+    fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rein").join(name)).unwrap()
+}
+
+/// Opens `file` of the project at `root` with its text on disk. Returns its URI.
+fn open_file(server: &mut Server, root: &Path, file: &str) -> String {
+    let uri = uri_of(root, file);
+    server.open(&uri, &fs::read_to_string(root.join(file)).unwrap());
+    uri
+}
+
+type Spot = (String, u64, u64, u64, u64);
+
+fn spot(file: &str, start_line: u64, start_col: u64, end_line: u64, end_col: u64) -> Spot {
+    (file.to_string(), start_line, start_col, end_line, end_col)
+}
+
+/// One location as (file under `root`, start line, start column, end line, end column).
+fn spot_of(root: &Path, location: &Value) -> Spot {
+    let prefix = format!("file://{}/", root.display());
+    let r = &location["range"];
+    let n = |v: &Value| v.as_u64().unwrap();
+    (
+        location["uri"].as_str().unwrap().strip_prefix(&prefix).unwrap().to_string(),
+        n(&r["start"]["line"]),
+        n(&r["start"]["character"]),
+        n(&r["end"]["line"]),
+        n(&r["end"]["character"]),
+    )
+}
+
+/// Each location of a list, sorted.
+fn spots(root: &Path, locations: &Value) -> Vec<Spot> {
+    let mut out: Vec<Spot> = locations.as_array().unwrap().iter().map(|l| spot_of(root, l)).collect();
+    out.sort();
+    out
+}
+
+fn at(uri: &str, line: u64, character: u64) -> Value {
+    json!({"textDocument": {"uri": uri}, "position": {"line": line, "character": character}})
+}
+
+/// Every `@./escalate` in examples/rein/support-ticket.
+fn escalate_calls() -> Vec<Spot> {
+    vec![
+        spot("answer/faq.rein", 8, 11, 8, 23),
+        spot("answer/faq.rein", 17, 9, 17, 21),
+        spot("billing/refund.rein", 8, 11, 8, 23),
+        spot("main.rein", 10, 11, 10, 22),
+        spot("main.rein", 16, 13, 16, 24),
+    ]
+}
+
+#[test]
+fn references_list_every_call_of_a_function() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let escalate = open_file(&mut server, &root, "escalate.rein");
+    let main = open_file(&mut server, &root, "main.rein");
+
+    // From the function's own name, from anywhere in its file, and from a reference to it.
+    for (id, uri, line, character) in [(2, &escalate, 3, 26), (3, &escalate, 4, 20), (4, &main, 10, 15)] {
+        let mut params = at(uri, line, character);
+        params["context"] = json!({"includeDeclaration": false});
+        let refs = server.request(id, "textDocument/references", params);
+        assert_eq!(spots(&root, &refs["result"]), escalate_calls(), "{refs}");
+    }
+
+    // With the declaration, the function's own name is in the list too.
+    let mut params = at(&main, 10, 15);
+    params["context"] = json!({"includeDeclaration": true});
+    let refs = server.request(5, "textDocument/references", params);
+    let mut expected = escalate_calls();
+    expected.push(spot("escalate.rein", 3, 24, 3, 32));
+    expected.sort();
+    assert_eq!(spots(&root, &refs["result"]), expected, "{refs}");
+
+    server.shutdown();
+}
+
+#[test]
+fn references_of_a_parameter_include_named_arguments() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let refund = open_file(&mut server, &root, "billing/refund.rein");
+
+    // From `opening=` in the call: the argument, the declaration, and the `${opening}` use.
+    let mut params = at(&refund, 10, 40);
+    params["context"] = json!({"includeDeclaration": true});
+    let refs = server.request(2, "textDocument/references", params);
+    assert_eq!(
+        spots(&root, &refs["result"]),
+        vec![
+            spot("billing/refund.rein", 10, 37, 10, 44),
+            spot("templates/tell_customer.rein", 5, 2, 5, 9),
+            spot("templates/tell_customer.rein", 9, 12, 9, 19),
+        ],
+        "{refs}"
+    );
+
+    server.shutdown();
+}
+
+#[test]
+fn code_lens_counts_references_and_carries_them() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let escalate = open_file(&mut server, &root, "escalate.rein");
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let lenses = server.request(2, "textDocument/codeLens", json!({"textDocument": {"uri": escalate}}));
+    let lenses = lenses["result"].as_array().unwrap();
+    assert_eq!(lenses.len(), 1, "{lenses:?}");
+    let lens = &lenses[0];
+    assert_eq!(lens["range"], json!({"start": {"line": 3, "character": 24}, "end": {"line": 3, "character": 32}}));
+    assert_eq!(lens["command"]["title"], "5 references");
+    assert_eq!(lens["command"]["command"], "rein.showReferences");
+    let args = &lens["command"]["arguments"];
+    assert_eq!(args[0], escalate);
+    assert_eq!(args[1], json!({"line": 3, "character": 24}));
+    assert_eq!(spots(&root, &args[2]), escalate_calls());
+
+    let lenses = server.request(3, "textDocument/codeLens", json!({"textDocument": {"uri": main}}));
+    assert_eq!(lenses["result"][0]["command"]["title"], "0 references", "{lenses}");
+
+    server.shutdown();
+}
+
+#[test]
+fn definition_goes_to_functions_parameters_and_std() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let refund = open_file(&mut server, &root, "billing/refund.rein");
+
+    // A reference goes to the name of the function it names.
+    let def = server.request(2, "textDocument/definition", at(&refund, 10, 20));
+    assert_eq!(spot_of(&root, &def["result"]), spot("templates/tell_customer.rein", 3, 24, 3, 36), "{def}");
+    // `name=` in a call goes to that parameter of the callee.
+    let def = server.request(3, "textDocument/definition", at(&refund, 10, 40));
+    assert_eq!(spot_of(&root, &def["result"]), spot("templates/tell_customer.rein", 5, 2, 5, 9), "{def}");
+    // A parameter used in the body goes to its declaration.
+    let def = server.request(4, "textDocument/definition", at(&refund, 7, 8));
+    assert_eq!(spot_of(&root, &def["result"]), spot("billing/refund.rein", 5, 2, 5, 17), "{def}");
+
+    // A std template goes to its source. `request` is built in and has none.
+    let tmp = temp_project("stddef");
+    let start = uri_of(&tmp, "start.rein");
+    server.open(
+        &start,
+        "/** Start. */\nexport default async function start() {\n  /** Ok? */\n  const ok: boolean = await request(\"a\");\n  return delegate(model=\"a\", task=\"b\");\n}\n",
+    );
+    let def = server.request(5, "textDocument/definition", at(&start, 4, 12));
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/rein-std/delegate.rein"), "{def}");
+    assert_eq!(def["result"]["range"], json!({"start": {"line": 3, "character": 24}, "end": {"line": 3, "character": 32}}));
+    let def = server.request(6, "textDocument/definition", at(&start, 3, 30));
+    assert!(def["result"].is_null(), "{def}");
+
+    server.shutdown();
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+fn hover_shows_function_docs_and_callee_parameters() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let escalate = open_file(&mut server, &root, "escalate.rein");
+    let refund = open_file(&mut server, &root, "billing/refund.rein");
+
+    // On the function's own name: its doc comment.
+    let hover = server.request(2, "textDocument/hover", at(&escalate, 3, 26));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("Hand the ticket to a human support engineer."), "{text}");
+    assert_eq!(hover["result"]["range"], json!({"start": {"line": 3, "character": 24}, "end": {"line": 3, "character": 32}}));
+
+    // On `opening=` in a call: the callee's parameter type and question.
+    let hover = server.request(3, "textDocument/hover", at(&refund, 10, 40));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("opening: string"), "{text}");
+    assert!(text.contains("The first part of the sentence, such as the action taken."), "{text}");
+
+    server.shutdown();
+}
