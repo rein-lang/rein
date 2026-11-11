@@ -730,3 +730,123 @@ fn workspace_symbols_search_every_program() {
 
     server.shutdown();
 }
+
+/// Starts a server whose client can rename files in a workspace edit.
+fn start_with_file_renames() -> Server {
+    let mut server = Server::start();
+    let caps = json!({"workspace": {"workspaceEdit": {"documentChanges": true, "resourceOperations": ["create", "rename", "delete"]}}});
+    let init = server.request(1, "initialize", json!({"capabilities": caps, "processId": null, "rootUri": null}));
+    assert!(init["result"]["capabilities"]["renameProvider"]["prepareProvider"].as_bool().unwrap());
+    server.notify("initialized", json!({}));
+    server
+}
+
+/// Each text edit of a workspace edit as (location, new text), sorted, and the file renames as (old, new).
+type EditSummary = (Vec<(Spot, String)>, Vec<(String, String)>);
+
+fn edits_of(root: &Path, edit: &Value) -> EditSummary {
+    let mut texts = Vec::new();
+    let mut renames = Vec::new();
+    let prefix = format!("file://{}/", root.display());
+    let file = |v: &Value| v.as_str().unwrap().strip_prefix(&prefix).unwrap().to_string();
+    for change in edit["documentChanges"].as_array().unwrap() {
+        if change["kind"] == "rename" {
+            renames.push((file(&change["oldUri"]), file(&change["newUri"])));
+            continue;
+        }
+        for e in change["edits"].as_array().unwrap() {
+            let location = json!({"uri": change["textDocument"]["uri"], "range": e["range"]});
+            texts.push((spot_of(root, &location), e["newText"].as_str().unwrap().to_string()));
+        }
+    }
+    texts.sort();
+    (texts, renames)
+}
+
+#[test]
+fn rename_a_parameter_updates_named_arguments() {
+    let root = example("support-ticket");
+    let mut server = start_with_file_renames();
+    let refund = open_file(&mut server, &root, "billing/refund.rein");
+
+    let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 10, 40));
+    assert_eq!(prepared["result"]["placeholder"], "opening");
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 10, "character": 37}, "end": {"line": 10, "character": 44}}));
+
+    let mut params = at(&refund, 10, 40);
+    params["newName"] = json!("lead");
+    let edit = server.request(3, "textDocument/rename", params);
+    let lead = |s: Spot| (s, "lead".to_string());
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                lead(spot("billing/refund.rein", 10, 37, 10, 44)),
+                lead(spot("templates/tell_customer.rein", 5, 2, 5, 9)),
+                lead(spot("templates/tell_customer.rein", 9, 12, 9, 19)),
+            ],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    // A name that is not an identifier fails the request.
+    let mut params = at(&refund, 10, 40);
+    params["newName"] = json!("2x");
+    let failed = server.request(4, "textDocument/rename", params);
+    assert_eq!(failed["error"]["code"], -32803, "{failed}");
+
+    server.shutdown();
+}
+
+#[test]
+fn rename_a_function_renames_its_file_and_references() {
+    let root = example("support-ticket");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    // On a reference, only the file name part is renamed.
+    let prepared = server.request(2, "textDocument/prepareRename", at(&main, 10, 15));
+    assert_eq!(prepared["result"]["placeholder"], "escalate");
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 10, "character": 14}, "end": {"line": 10, "character": 22}}));
+
+    let mut params = at(&main, 10, 15);
+    params["newName"] = json!("handoff");
+    let edit = server.request(3, "textDocument/rename", params);
+    let handoff = |s: Spot| (s, "handoff".to_string());
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                handoff(spot("answer/faq.rein", 8, 15, 8, 23)),
+                handoff(spot("answer/faq.rein", 17, 13, 17, 21)),
+                handoff(spot("billing/refund.rein", 8, 15, 8, 23)),
+                handoff(spot("escalate.rein", 3, 24, 3, 32)),
+                handoff(spot("main.rein", 10, 14, 10, 22)),
+                handoff(spot("main.rein", 16, 16, 16, 24)),
+            ],
+            vec![("escalate.rein".to_string(), "handoff.rein".to_string())]
+        ),
+        "{edit}"
+    );
+    // The file rename comes after every text edit, so the edits apply to the old file names.
+    let changes = edit["result"]["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.last().unwrap()["kind"], "rename");
+
+    server.shutdown();
+}
+
+#[test]
+fn rename_a_function_needs_a_client_that_renames_files() {
+    let root = example("support-ticket");
+    let mut server = Server::start();
+    initialize(&mut server);
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 10, 15);
+    params["newName"] = json!("handoff");
+    let failed = server.request(2, "textDocument/rename", params);
+    assert_eq!(failed["error"]["message"], "this editor cannot rename files, so a function cannot be renamed", "{failed}");
+
+    server.shutdown();
+}

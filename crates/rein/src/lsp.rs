@@ -13,6 +13,7 @@ mod document_symbols;
 mod hover;
 mod occurrences;
 mod references;
+mod rename;
 mod sync;
 mod text;
 mod workspace;
@@ -24,7 +25,7 @@ use std::error::Error;
 use lsp_server::{Connection, ErrorCode, Message, Request, Response};
 use lsp_types::{
     CallHierarchyServerCapability, CodeLensOptions, CompletionOptions, HoverProviderCapability, InitializeParams,
-    OneOf, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    OneOf, RenameOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -64,6 +65,10 @@ fn capabilities() -> ServerCapabilities {
         call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![" ".into(), "\"".into(), "'".into(), "/".into(), ".".into()]),
             ..Default::default()
@@ -108,6 +113,8 @@ fn handle_request(state: &State, req: Request) -> Response {
         "callHierarchy/outgoingCalls" => reply(req, |p| Ok(call_hierarchy::outgoing(state, &p))),
         "textDocument/documentSymbol" => reply(req, |p| Ok(document_symbols::document_symbols(state, &p))),
         "workspace/symbol" => reply(req, |p| Ok(workspace_symbols::workspace_symbols(state, &p))),
+        "textDocument/prepareRename" => reply(req, |p| rename::prepare(state, &p)),
+        "textDocument/rename" => reply(req, |p| rename::rename(state, &p)),
         other => Response::new_err(req.id, ErrorCode::MethodNotFound as i32, format!("method not found: {other}")),
     }
 }

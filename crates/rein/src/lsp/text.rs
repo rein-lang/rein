@@ -79,6 +79,12 @@ pub fn is_path_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '.'
 }
 
+/// A name a parameter or file can take: a letter or `_`, then letters, digits or `_`.
+pub fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(is_token_char)
+}
+
 /// The import path from function `from` to function `to`, without `.rein`. Such as `./x` or `../x`.
 pub fn relative_import(from: &str, to: &str) -> String {
     let from_dir: Vec<&str> = from.split('/').collect();

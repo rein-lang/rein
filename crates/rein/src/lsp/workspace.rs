@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use lsp_types::{InitializeParams, Location, Url};
+use lsp_types::{InitializeParams, Location, ResourceOperationKind, Url};
 use rein_core::diagnostic::Span;
 use rein_core::project::Project;
 
@@ -19,6 +19,8 @@ pub struct State {
     pub docs: Docs,
     /// Workspace folders from `initialize`. Workspace symbols search the programs under them.
     pub folders: Vec<PathBuf>,
+    /// The client applies file renames in a workspace edit, so a function can be renamed.
+    pub renames_files: bool,
 }
 
 impl State {
@@ -33,7 +35,14 @@ impl State {
             .chain(root)
             .filter_map(|u| fs::canonicalize(u.to_file_path().ok()?).ok())
             .collect();
-        Self { docs: Docs::new(), folders }
+        let renames_files = init
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.workspace_edit.as_ref())
+            .and_then(|e| e.resource_operations.as_ref())
+            .is_some_and(|ops| ops.contains(&ResourceOperationKind::Rename));
+        Self { docs: Docs::new(), folders, renames_files }
     }
 }
 
