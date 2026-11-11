@@ -8,7 +8,7 @@ Rein mimics TypeScript syntax and types, except `@` references. There are no imp
 
 ## Sample
 
-`examples/.rein/merge-pr/merge_pr.rein`:
+`examples/rein/merge-pr/merge_pr.rein`:
 
 ```ts
 // merge_pr.rein
@@ -44,15 +44,14 @@ flowchart TD
     D -- "green" --> E["review_code"]
     D -- "red" --> F["ci/fix"]
     D -- "pending" --> G["wait for CI"]
-    F -- "fix pushed" --> A
 ```
 
 ## How an agent uses it
 
-The agent steps the flow with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/.rein/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
+The agent steps the flow with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/rein/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
 
 ```text
-$ cd examples/.rein/support-ticket
+$ cd examples/rein/support-ticket
 $ rein step --json
 {"kind":"question","version":1,"key":"main.vip","function":"main","name":"vip","type":"boolean","options":null,"description":"Is the customer on the VIP plan?","answers":{},"trace":["main"]}
 # exit 2
@@ -74,7 +73,7 @@ $ rein step --json --answer main.vip=no --answer main.category=how_to --answer a
 # exit 0
 ```
 
-A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein run` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](docs/spec.md#11-stepping-agent-interface).
+A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein eval` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](docs/spec.md#11-stepping-agent-interface).
 
 ## Quickstart
 
@@ -82,19 +81,20 @@ A call follows each reference in the same call. The `trace` lists the functions 
 cargo install --path crates/rein        # puts `rein` on PATH
 rein install claude-code --project      # the agent hook: writes .claude/settings.json
 cd examples
-rein flows                              # the flows visible from here
-rein step --flow support-ticket --json  # step one flow by name
+rein list                               # the programs visible from here
+rein run support-ticket                 # run one program by name, answer on stdin
+rein serve --mcp                        # the MCP host for agents (see docs/interface.md)
 ```
 
-A flow is a folder with a `main.rein`, under a scoped `.rein/` folder: `repo/.rein/<flow>/` (project), `~/.rein/<flow>/` (user), or `/etc/rein/<flow>/` (system). The closest scope wins a name clash. See [spec.md section 1a](docs/spec.md#1a-flows-and-scopes).
+A program is a visible folder with a `rein.json` manifest and a `main.rein`: `repo/rein/<program>/` (project), `~/.config/rein/programs/<program>/` (user, filled by `rein install <path>`), or `/etc/rein/<program>/` (system). The closest scope wins a name clash. See [spec.md section 1a](docs/spec.md#1a-flows-and-scopes).
 
 Check an example:
 
 ```sh
-cargo run -p rein -- check examples/.rein/merge-pr
+cargo run -p rein -- check examples/rein/merge-pr
 ```
 
-Examples: [merge-pr](examples/.rein/merge-pr), [incident-triage](examples/.rein/incident-triage), [support-ticket](examples/.rein/support-ticket).
+Examples: [merge-pr](examples/rein/merge-pr), [incident-triage](examples/rein/incident-triage), [support-ticket](examples/rein/support-ticket), [pr-handling](examples/rein/pr-handling).
 
 Run the editor tests:
 
@@ -118,3 +118,4 @@ npm test
 
 - [Language reference](docs/spec.md): syntax, rules, evaluation, CLI.
 - [Decisions](docs/decisions.md): owner facts, PoC choices, open questions.
+- [Agent interface](docs/interface.md): programs as named apps, the MCP host, and `rein run`.
