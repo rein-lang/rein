@@ -13,3 +13,7 @@ lsp-server = "0.7"
 lsp-types = "0.95"
 clap-markdown = "0.1.5"
 polyhook = "0.2.0"
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "transport-io", "macros"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
+serde = { version = "1.0.229", features = ["derive"] }
+schemars = "1"

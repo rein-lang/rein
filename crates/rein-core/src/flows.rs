@@ -1,9 +1,10 @@
-//! Flow discovery: scoped `.rein/` folders, each holding one flow per subfolder.
+//! Program discovery: scoped program folders, each holding one program per subfolder.
 //!
-//! A flow is a directory that holds `main.rein`. Flows live in three scopes, like `.claude`:
-//! project (`.rein/` in the working directory or any ancestor), user (`<home>/.rein/`), and system
-//! (each directory in the system list, such as `/etc/rein/`). On a name clash the closest scope wins:
-//! project, then user, then system. Inside the project scope, the nearest `.rein/` wins.
+//! A program is a directory with a `rein.json` manifest or a `main.rein`. Programs live in three
+//! scopes: project (a visible `rein/` folder in the working directory or any ancestor), user (the
+//! user programs folder, `~/.config/rein/programs`), and system (each directory in the system list,
+//! such as `/etc/rein/`). On a name clash the closest scope wins: project, then user, then system.
+//! Inside the project scope, the nearest folder wins.
 //!
 //! Discovery takes its inputs as arguments and reads no environment variables, so tests can pass
 //! temp directories.
@@ -11,13 +12,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+
 use crate::parser::parse;
 
 /// The file that marks a flow root and holds its entry function.
 pub const MAIN_FILE: &str = "main.rein";
 
-/// The folder name of the scoped flow folder.
-pub const FLOW_DIR: &str = ".rein";
+/// The program manifest: `{"name": "...", "description": "...", "entry": "main.rein"}`. Each field is optional.
+pub const MANIFEST: &str = "rein.json";
+
+/// The folder name of the project scope folder.
+pub const FLOW_DIR: &str = "rein";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Scope {
@@ -39,22 +45,24 @@ impl Scope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Flow {
-    /// The folder name, such as `merge-pr`.
+    /// The manifest name, else the folder name, such as `merge-pr`.
     pub name: String,
     pub scope: Scope,
     /// The flow root: the folder that holds `main.rein`.
     pub root: PathBuf,
     /// The doc comment of `main.rein`, flattened to its first paragraph. Empty when there is none.
     pub description: String,
+    /// The entry function path: the manifest `entry` without `.rein`. Default `main`.
+    pub entry: String,
     /// The scope of the flow that wins this name, when this one is shadowed.
     pub shadowed_by: Option<Scope>,
 }
 
 /// Every flow visible from `cwd`, in precedence order, with shadowed flows marked.
 ///
-/// `cwd` must be absolute. `user_dir` is the user scope folder, normally `~/.rein`. It is not also a
+/// `cwd` must be absolute. `user_dir` is the user scope folder, normally `~/.config/rein/programs`. It is not also a
 /// project scope when it is an ancestor of `cwd`. `system_dirs` are checked in order; the first one
-/// wins a clash. A folder under a scoped `.rein/` that has no `main.rein` is not a flow and is skipped.
+/// wins a clash. A folder under a scoped `rein/` that has no `main.rein` is not a flow and is skipped.
 pub fn discover(cwd: &Path, user_dir: Option<&Path>, system_dirs: &[PathBuf]) -> Vec<Flow> {
     let mut found = Vec::new();
     for dir in cwd.ancestors() {
@@ -96,29 +104,47 @@ pub fn agent_context(flows: &[Flow]) -> String {
     }
     lines.push("How to use a flow:".to_string());
     lines.push(
-        "When a task matches a flow, run `rein step --flow <name> --json` and follow it until kind=done: answer each question with --answer <key>=<value> (or send the returned `answers` back via --stdin, with \"flow\" set and your new answer added); for kind=request, do the instruction first, then answer.".to_string(),
+        "When a task matches a flow, start it with the rein MCP tools (rein_start, then rein_answer until kind=done). Without them, run `rein step --flow <name> --json` and follow it until kind=done: answer each question with --answer <key>=<value> (or send the returned `answers` back via --stdin, with \"flow\" set and your new answer added); for kind=request, do the instruction first, then answer.".to_string(),
     );
     lines.join("\n")
 }
 
-/// Flows directly under `folder`: each subfolder that holds `main.rein`. Sorted by name.
+/// Programs directly under `folder`, sorted by name.
 fn flows_in(folder: &Path, scope: Scope) -> Vec<Flow> {
     let Ok(entries) = fs::read_dir(folder) else { return Vec::new() };
     let mut flows: Vec<Flow> = entries
         .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join(MAIN_FILE).is_file())
-        .filter_map(|root| {
-            let name = root.file_name()?.to_str()?.to_string();
-            if name.starts_with('.') {
-                return None;
-            }
-            let description = description_of(&root.join(MAIN_FILE));
-            Some(Flow { name, scope, root, description, shadowed_by: None })
-        })
+        .filter_map(|e| program(e.path(), scope))
         .collect();
     flows.sort_by(|a, b| a.name.cmp(&b.name));
     flows
+}
+
+#[derive(Default, Deserialize)]
+struct Manifest {
+    name: Option<String>,
+    description: Option<String>,
+    entry: Option<String>,
+}
+
+/// The program in `root`: a folder with a manifest or a `main.rein`. `None` for any other folder,
+/// and for a hidden one.
+pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
+    let folder = root.file_name()?.to_str()?.to_string();
+    let has_manifest = root.join(MANIFEST).is_file();
+    if folder.starts_with('.') || !root.is_dir() || !(has_manifest || root.join(MAIN_FILE).is_file()) {
+        return None;
+    }
+    // ponytail: a manifest that does not parse falls back to the defaults; `rein check` could report it.
+    let manifest: Manifest = fs::read_to_string(root.join(MANIFEST))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let entry_file = manifest.entry.unwrap_or_else(|| MAIN_FILE.to_string());
+    let entry = entry_file.strip_suffix(".rein").unwrap_or(&entry_file).to_string();
+    let description = manifest.description.unwrap_or_else(|| description_of(&root.join(&entry_file)));
+    let name = manifest.name.unwrap_or(folder);
+    Some(Flow { name, scope, root, description, entry, shadowed_by: None })
 }
 
 /// First paragraph of the doc comment of the file, with its whitespace collapsed to single spaces.
@@ -184,8 +210,8 @@ mod tests {
         let home = temp_dir("home");
         let sys = temp_dir("sys");
         let repo = temp_dir("repo");
-        write(&repo, ".rein/deploy/main.rein", &flow_text("project deploy"));
-        write(&home, ".rein/deploy/main.rein", &flow_text("user deploy"));
+        write(&repo, "rein/deploy/main.rein", &flow_text("project deploy"));
+        write(&home, "rein/deploy/main.rein", &flow_text("user deploy"));
         write(&sys, "deploy/main.rein", &flow_text("system deploy"));
 
         let flows = discover(&repo, Some(&home.join(FLOW_DIR)), std::slice::from_ref(&sys));
@@ -202,7 +228,7 @@ mod tests {
         let home = temp_dir("home2");
         let sys = temp_dir("sys2");
         let repo = temp_dir("repo2");
-        write(&home, ".rein/gate/main.rein", &flow_text("user gate"));
+        write(&home, "rein/gate/main.rein", &flow_text("user gate"));
         write(&sys, "gate/main.rein", &flow_text("system gate"));
         let flows = discover(&repo, Some(&home.join(FLOW_DIR)), std::slice::from_ref(&sys));
         assert_eq!(resolve(&flows, "gate").unwrap().scope, Scope::User);
@@ -212,13 +238,13 @@ mod tests {
     #[test]
     fn nearest_rein_wins_for_nested_repos() {
         let repo = temp_dir("nested");
-        write(&repo, ".rein/review/main.rein", &flow_text("outer review"));
-        write(&repo, "service/.rein/review/main.rein", &flow_text("inner review"));
+        write(&repo, "rein/review/main.rein", &flow_text("outer review"));
+        write(&repo, "service/rein/review/main.rein", &flow_text("inner review"));
         let cwd = repo.join("service");
         let flows = discover(&cwd, None, &[]);
         let winner = resolve(&flows, "review").unwrap();
         assert_eq!(winner.description, "inner review");
-        assert_eq!(winner.root, cwd.join(".rein/review"));
+        assert_eq!(winner.root, cwd.join("rein/review"));
         let outer = flows.iter().find(|f| f.description == "outer review").unwrap();
         assert_eq!(outer.shadowed_by, Some(Scope::Project));
     }
@@ -226,7 +252,7 @@ mod tests {
     #[test]
     fn user_scope_under_home_is_not_also_a_project_scope() {
         let home = temp_dir("home3");
-        write(&home, ".rein/mine/main.rein", &flow_text("mine"));
+        write(&home, "rein/mine/main.rein", &flow_text("mine"));
         let cwd = home.join("code/app");
         fs::create_dir_all(&cwd).unwrap();
         let flows = discover(&cwd, Some(&home.join(FLOW_DIR)), &[]);
@@ -236,8 +262,8 @@ mod tests {
     #[test]
     fn folder_without_main_is_not_a_flow() {
         let repo = temp_dir("nomain");
-        write(&repo, ".rein/broken/other.rein", &flow_text("no entry"));
-        write(&repo, ".rein/ok/main.rein", &flow_text("has entry"));
+        write(&repo, "rein/broken/other.rein", &flow_text("no entry"));
+        write(&repo, "rein/ok/main.rein", &flow_text("has entry"));
         let flows = discover(&repo, None, &[]);
         assert_eq!(names(&flows), vec![("ok".to_string(), Scope::Project, None)]);
     }
@@ -247,7 +273,7 @@ mod tests {
         let repo = temp_dir("desc");
         write(
             &repo,
-            ".rein/merge-pr/main.rein",
+            "rein/merge-pr/main.rein",
             "/**\n * Decide whether a pull request\n * can be merged.\n *\n * @x later text\n */\nexport default function main() {\n  return \"ok\";\n}\n",
         );
         let flows = discover(&repo, None, &[]);
@@ -258,9 +284,9 @@ mod tests {
     fn agent_context_lists_visible_flows_only() {
         let home = temp_dir("home4");
         let repo = temp_dir("repo4");
-        write(&repo, ".rein/merge-pr/main.rein", &flow_text("Decide a merge."));
-        write(&home, ".rein/merge-pr/main.rein", &flow_text("Shadowed copy."));
-        write(&home, ".rein/triage/main.rein", &flow_text("Triage an incident."));
+        write(&repo, "rein/merge-pr/main.rein", &flow_text("Decide a merge."));
+        write(&home, "rein/merge-pr/main.rein", &flow_text("Shadowed copy."));
+        write(&home, "rein/triage/main.rein", &flow_text("Triage an incident."));
         let flows = discover(&repo, Some(&home.join(FLOW_DIR)), &[]);
         let text = agent_context(&flows);
         assert!(text.contains("- merge-pr (project): Decide a merge."), "{text}");
@@ -274,5 +300,19 @@ mod tests {
     fn agent_context_is_empty_without_flows() {
         let repo = temp_dir("empty");
         assert_eq!(agent_context(&discover(&repo, None, &[])), "");
+    }
+
+    #[test]
+    fn visible_rein_folder_with_manifest_is_a_program() {
+        let repo = temp_dir("manifest");
+        write(&repo, "rein/app/rein.json", r#"{"name": "renamed", "description": "From the manifest.", "entry": "start.rein"}"#);
+        write(&repo, "rein/app/start.rein", &flow_text("From the doc comment."));
+        write(&repo, "rein/not-a-program/notes.txt", "no manifest, no main.rein");
+        let flows = discover(&repo, None, &[]);
+        assert_eq!(flows.len(), 1, "{flows:?}");
+        let app = resolve(&flows, "renamed").unwrap();
+        assert_eq!(app.scope, Scope::Project);
+        assert_eq!(app.description, "From the manifest.");
+        assert_eq!(app.entry, "start");
     }
 }

@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/.rein/support-ticket")
+        .join("../../examples/rein/support-ticket")
         .canonicalize()
         .unwrap()
 }
@@ -241,8 +241,30 @@ fn stdin_cannot_be_combined_with_answer_flags() {
 }
 
 #[test]
-fn run_help_points_agents_at_step() {
-    let out = rein(&["run", "--help"], None);
+fn eval_help_points_agents_at_step() {
+    let out = rein(&["eval", "--help"], None);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("rein step"), "{text}");
+}
+
+#[test]
+fn run_json_lines_walks_to_done_and_survives_a_bad_answer() {
+    let root = example();
+    let mut lines = vec![json!({"value": "maybe"}).to_string()];
+    for key in ["main.vip", "main.category", "answer/faq.articleFound", "answer/faq.solved"] {
+        lines.push(json!({"key": key, "value": answer_for(key)}).to_string());
+    }
+    let input = lines.join("\n") + "\n";
+    let out = rein(&["run", "--root", root.to_str().unwrap(), "--json"], Some(&input));
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stdout));
+    let replies: Vec<Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let kinds: Vec<&str> = replies.iter().map(|v| v["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["question", "error", "question", "question", "question", "request", "done"]);
+    assert_eq!(replies[2]["key"], "main.vip", "the run asks the same key again after a bad answer");
+    let last = replies.last().unwrap();
+    assert_eq!(last["instruction"], "Close the ticket as solved.");
+    assert_eq!(last["trace"], json!(["main", "answer/faq"]));
 }

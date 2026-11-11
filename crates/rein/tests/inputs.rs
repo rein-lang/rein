@@ -1,4 +1,4 @@
-//! Program inputs through the built CLI: `rein step --input`, `rein run --set` for a `string` parameter,
+//! Program inputs through the built CLI: `rein step --input`, `rein eval --set` for a `string` parameter,
 //! the checker's errors and warnings for `string` inputs, and a full walk of the pr-handling example.
 
 use std::fs;
@@ -16,7 +16,7 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/.rein/pr-handling")
+        .join("../../examples/rein/pr-handling")
         .canonicalize()
         .unwrap()
 }
@@ -271,23 +271,23 @@ fn stdin_cannot_be_combined_with_input_flags() {
 }
 
 #[test]
-fn rein_run_set_gives_a_string_parameter_its_value() {
+fn rein_eval_set_gives_a_string_parameter_its_value() {
     let flow = Flow::new(&[(
         "main.rein",
         "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Link ${pr}`;\n  }\n  return \"none\";\n}\n",
     )]);
-    let out = rein(&["run", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
     assert_eq!(stdout(&out).trim(), format!("Link {LINK}"));
 }
 
 #[test]
-fn rein_run_asks_for_a_missing_string_value() {
+fn rein_eval_asks_for_a_missing_string_value() {
     let flow = Flow::new(&[(
         "main.rein",
         "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Link ${pr}`;\n  }\n  return \"none\";\n}\n",
     )]);
-    let out = rein(&["run", "main", "--root", flow.path(), "--set", "ok=yes"], None);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "ok=yes"], None);
     assert_eq!(code(&out), 2);
     let text = stdout(&out);
     assert!(text.contains("need input pr: string - The link."), "{text}");
@@ -301,7 +301,7 @@ fn all_string_body_that_is_not_one_template_literal_runs_as_a_function() {
         "main.rein",
         "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return \"done\";\n}\n",
     )]);
-    let out = rein(&["run", "main", "--root", flow.path()], None);
+    let out = rein(&["eval", "main", "--root", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
     assert_eq!(stdout(&out).trim(), "done");
 }
@@ -315,7 +315,7 @@ fn all_string_template_run_by_itself_is_still_an_error() {
         "tpl.rein",
         "/** Template. */\nexport default function tpl(\n  /** A */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n",
     )]);
-    let out = rein(&["run", "tpl", "--root", flow.path()], None);
+    let out = rein(&["eval", "tpl", "--root", flow.path()], None);
     assert_eq!(code(&out), 1);
     assert!(stderr(&out).contains("templates are called from functions, not run"), "{}", stderr(&out));
 }
@@ -396,7 +396,7 @@ fn string_input_is_a_template_argument_and_the_check_is_clean() {
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
     assert!(stderr(&out).contains("0 errors, 0 warnings"), "{}", stderr(&out));
-    let run = rein(&["run", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
+    let run = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
     assert_eq!(code(&run), 0, "{}{}", stdout(&run), stderr(&run));
     assert_eq!(stdout(&run).trim(), format!("{LINK} then b"));
 }

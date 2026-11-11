@@ -1,4 +1,4 @@
-//! Command bodies for `check`, `run`, `step`, `describe` and `graph`.
+//! Command bodies for `check`, `eval`, `step`, `describe` and `graph`. The live `rein run` is in `live_run`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -54,7 +54,7 @@ pub fn check(given: &Path) -> u8 {
     }
 }
 
-pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -> u8 {
+pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -> u8 {
     let project = match load(root) {
         Ok(p) => p,
         Err(msg) => return fail(json, &msg),
@@ -102,25 +102,44 @@ pub fn run(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) -
 
 /// Steps the whole flow once. The request comes from flags, or from stdin as JSON. This is only an adapter:
 /// `rein_core::step::step` decides everything. A flow name, from `--flow` or the stdin `flow` field, is
-/// resolved through the scoped `.rein/` folders.
+/// resolved through the scoped `rein/` folders.
 pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool, json: bool) -> u8 {
     let response = match build_request(entry, answers, inputs, from_stdin) {
         Err(message) => invalid_request(message),
         Ok(request) => {
             let flow = flow.or_else(|| request.flow.clone());
-            let loaded = match (root, flow) {
-                (Some(_), Some(_)) => Err("--flow and --root are mutually exclusive".to_string()),
-                (Some(root), None) => load(Some(root)),
-                (None, Some(name)) => scopes::flow_root(&name).and_then(|root| load(Some(root))),
-                (None, None) => load(None),
-            };
-            match loaded {
-                Ok(project) => step_flow(&project, &request),
+            match load_flow(root, flow) {
+                Ok((project, entry)) => {
+                    let mut request = request;
+                    if request.entry == ENTRY {
+                        request.entry = entry;
+                    }
+                    step_flow(&project, &request)
+                }
                 Err(message) => invalid_request(message),
             }
         }
     };
     print_step(&response, json || from_stdin);
+    exit_code(&response)
+}
+
+/// The project and its entry function for `--root DIR`, a program name, or the nearest root from
+/// here. The entry comes from the program manifest, else `main`.
+pub(crate) fn load_flow(root: Option<PathBuf>, flow: Option<String>) -> Result<(Project, String), String> {
+    match (root, flow) {
+        (Some(_), Some(_)) => Err("--flow and --root are mutually exclusive".to_string()),
+        (Some(root), None) => Ok((load(Some(root))?, ENTRY.to_string())),
+        (None, Some(name)) => {
+            let found = scopes::find(&name)?;
+            Ok((load(Some(found.root))?, found.entry))
+        }
+        (None, None) => Ok((load(None)?, ENTRY.to_string())),
+    }
+}
+
+/// The exit code of a step response (spec section 11).
+pub(crate) fn exit_code(response: &StepResponse) -> u8 {
     match response {
         StepResponse::Done { .. } => OK,
         StepResponse::Question { .. } => NEED_INPUT,
@@ -161,27 +180,13 @@ fn build_request(entry: Option<String>, answers: &[String], inputs: &[String], f
     })
 }
 
-/// `rein flows`: every flow visible from here. Shadowed flows are listed and marked.
-pub fn flows(as_json: bool) -> u8 {
-    let found = scopes::discover_here();
-    if as_json {
-        let list: Vec<Value> = found.iter().map(flow_json).collect();
-        print_json(Value::Array(list));
-        return OK;
-    }
-    for f in &found {
-        let shadow = f.shadowed_by.map_or(String::new(), |by| format!(" (shadowed by {})", by.label()));
-        println!("{}\t{}\t{}\t{}{shadow}", f.name, f.scope.label(), f.root.display(), f.description);
-    }
-    OK
-}
-
-fn flow_json(f: &rein_core::flows::Flow) -> Value {
+pub(crate) fn flow_json(f: &rein_core::flows::Flow) -> Value {
     json!({
         "name": f.name,
         "scope": f.scope.label(),
         "path": f.root.display().to_string(),
         "description": f.description,
+        "entry": f.entry,
         "shadowed": f.shadowed_by.is_some(),
         "shadowed_by": f.shadowed_by.map(|s| s.label()),
     })
@@ -203,7 +208,7 @@ pub fn agent_context(as_json: bool) -> u8 {
     OK
 }
 
-fn print_step(response: &StepResponse, as_json: bool) {
+pub(crate) fn print_step(response: &StepResponse, as_json: bool) {
     if as_json {
         println!("{}", serde_json::to_string(response).unwrap_or_default());
         return;
@@ -246,7 +251,7 @@ fn print_answers(answers: &BTreeMap<String, String>) {
 }
 
 /// The type as TypeScript writes it: `boolean`, or the union such as `"green" | "red"`.
-fn shown_type(kind: &str, options: &Option<Vec<String>>) -> String {
+pub(crate) fn shown_type(kind: &str, options: &Option<Vec<String>>) -> String {
     match options {
         Some(list) => list.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(" | "),
         None => kind.to_string(),

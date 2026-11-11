@@ -3,10 +3,13 @@
 mod cli;
 mod hook;
 mod install;
+mod live_run;
 mod lsp;
+mod mcp;
+mod programs;
 mod scopes;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -32,8 +35,23 @@ enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Evaluate one function. Agents should use `rein step`; `run` is the single-function debug command.
+    /// Run a flow as a live process. Writes one step per line, reads one answer per line on stdin.
     Run {
+        /// Program to run, by name (see `rein list`).
+        #[arg(conflicts_with = "root")]
+        flow: Option<String>,
+        /// Project root. Default: the nearest directory with main.rein.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Function to start from, as its path under the root without `.rein`. Default: `main`.
+        #[arg(long)]
+        entry: Option<String>,
+        /// Speak JSON Lines: one step object out, one `{"key","value"}` answer in, per line.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Evaluate one function, for debugging. Agents use `rein run` or `rein step`.
+    Eval {
         /// Function name, as its path under the root without `.rein`. Default: `main`.
         #[arg(default_value = "main")]
         function: String,
@@ -55,7 +73,7 @@ enum Command {
         /// Project root. Default: the nearest directory with main.rein.
         #[arg(long, conflicts_with = "flow")]
         root: Option<PathBuf>,
-        /// Flow to step, by name, from the scoped `.rein/` folders (see `rein flows`).
+        /// Flow to step, by name, from the scoped `rein/` folders (see `rein list`).
         #[arg(long, conflicts_with = "root")]
         flow: Option<String>,
         /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
@@ -86,11 +104,23 @@ enum Command {
         #[arg(long)]
         root: Option<PathBuf>,
     },
-    /// List the flows visible from here, by scope, with shadowed ones marked.
-    Flows {
+    /// List the programs visible from here: name, scope, path, description, and first question.
+    #[command(alias = "flows")]
+    List {
         /// Print the list as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Print a program's source: its manifest and every .rein file.
+    Show {
+        /// Program name (see `rein list`).
+        name: String,
+    },
+    /// Serve the agent interface. Holds live runs in memory.
+    Serve {
+        /// Speak MCP on stdio. The only transport today.
+        #[arg(long)]
+        mcp: bool,
     },
     /// Print the block an agent needs to use the visible flows.
     AgentContext {
@@ -104,9 +134,9 @@ enum Command {
         #[arg(long)]
         caller: Option<String>,
     },
-    /// Write a tool's hook config so it runs `rein hook`. Only `claude-code` is supported.
+    /// Register a program folder in the user programs folder, or write a tool's hook config (`claude-code`).
     Install {
-        /// The agent tool, such as `claude-code`.
+        /// A program folder to register, or the agent tool, such as `claude-code`.
         tool: String,
         /// Write to the project's settings (`.claude/settings.json`). Default.
         #[arg(long, conflicts_with = "user")]
@@ -128,18 +158,29 @@ enum Command {
 fn main() -> ExitCode {
     let code = match Cli::parse().command {
         Command::Check { path } => cli::check(&path),
-        Command::Run { function, root, set, json } => cli::run(&function, root, &set, json),
+        Command::Run { flow, root, entry, json } => live_run::run(flow, root, entry, json),
+        Command::Eval { function, root, set, json } => cli::eval(&function, root, &set, json),
         Command::Step { entry, root, flow, answer, input, stdin, json } => {
             cli::step(entry, root, flow, &answer, &input, stdin, json)
         }
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { root } => cli::graph(root),
-        Command::Flows { json } => cli::flows(json),
+        Command::List { json } => programs::list(json),
+        Command::Show { name } => programs::show(&name),
+        Command::Serve { mcp: true } => mcp::serve(),
+        Command::Serve { mcp: false } => {
+            eprintln!("error: only `rein serve --mcp` is supported");
+            1
+        }
         Command::AgentContext { format } => cli::agent_context(matches!(format, Format::Json)),
         Command::Hook { caller } => hook::run(caller.as_deref()),
         Command::Install { tool, project: _, user, dry_run } => {
-            let target = if user { install::Target::User } else { install::Target::Project };
-            install::run(&tool, target, dry_run)
+            if Path::new(&tool).is_dir() {
+                programs::install(Path::new(&tool))
+            } else {
+                let target = if user { install::Target::User } else { install::Target::Project };
+                install::run(&tool, target, dry_run)
+            }
         }
         Command::Lsp => lsp::serve(),
         Command::DocsCli => {

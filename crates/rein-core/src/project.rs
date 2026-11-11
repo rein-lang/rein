@@ -31,7 +31,7 @@ pub struct Project {
 
 impl Project {
     /// Nearest ancestor of `start` (or its parent, if `start` is a file) that
-    /// holds a `main.rein`. A flow folder in `.rein/<flow>/` is such a directory. Falls back to the start directory.
+    /// holds a `main.rein`. A flow folder in `rein/<flow>/` is such a directory. Falls back to the start directory.
     /// The walk uses the absolute path, not the symlink target, so a linked file belongs to the
     /// project that holds the link.
     pub fn find_root(start: &Path) -> PathBuf {

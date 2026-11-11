@@ -31,7 +31,7 @@ fn flow_text(desc: &str) -> String {
     format!("/** {desc} */\nexport default function main() {{\n  return \"ok\";\n}}\n")
 }
 
-/// Sandbox: a home with its own `.rein`, an empty system list, and a private TMPDIR.
+/// Sandbox: a home with its own user programs folder, an empty system list, and a private TMPDIR.
 struct Sandbox {
     home: PathBuf,
     tmp: PathBuf,
@@ -48,7 +48,7 @@ impl Sandbox {
     }
 
     fn user_flows(&self) -> PathBuf {
-        self.home.join(".rein")
+        self.home.join(".config/rein/programs")
     }
 
     fn command(&self, cwd: &Path, args: &[&str]) -> Command {
@@ -99,7 +99,7 @@ fn json_out(out: &Output) -> Value {
 fn repo_with_flow(sb: &Sandbox, tag: &str) -> PathBuf {
     let repo = temp_dir(tag);
     let _ = sb;
-    write(&repo, ".rein/merge-pr/main.rein", &flow_text("Decide a merge."));
+    write(&repo, "rein/merge-pr/main.rein", &flow_text("Decide a merge."));
     repo
 }
 
@@ -156,7 +156,7 @@ fn step_with_unknown_flow_is_an_error_that_names_it() {
     assert_eq!(code(&out), 1);
     let v = json_out(&out);
     assert_eq!(v["kind"], "error");
-    assert!(v["message"].as_str().unwrap().contains("unknown flow `nope`"), "{v}");
+    assert!(v["message"].as_str().unwrap().contains("unknown program `nope`"), "{v}");
 }
 
 #[test]
