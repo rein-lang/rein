@@ -102,6 +102,47 @@ Each choice can change. The reason is one line.
 - Each program that a hand-off from the root can reach, through any number of programs, must be installed and have the named function before the first step. Otherwise `rein check`, `rein step`, `rein run` and the MCP start refuse to run, and name the missing program and how to install it. There is no flag. Why: an agent learns of a missing program before it does any work, and as strict as possible means one rule with no opt-out.
 - Programs reached through other programs are found through the root project's scopes, not through the called program's own installs. Why: one lookup for every program, the same as `rein list`. A program that pnpm installed only as a dependency of another package is not visible, so install it in a scope to call it.
 
+## Naming
+
+Anyone can build and share a program, so two authors can pick the same name. The rules below keep names short in code and still tell authors apart.
+
+### Program names
+
+- A program name is kebab-case, 1 to 3 words: a noun phrase that leads with the object, such as `pr-handling`, `product-fit`, `next-pr` or `self-improve`. Why: a hand-off reads as "hand the agent to `pr-handling`", and `rein list` groups programs by their object.
+- A program name has no `rein-` prefix and no author. Why: every call already starts with `@`, so `@rein-pr-handling` says Rein twice; the author lives in the source, not in the name.
+- Avoid a verb-first name (`handle-pr`) and a one-word name that is too wide (`pr`). Why: a verb-first name sorts by verb, and a wide name collides at once.
+
+### Identity and local names (proposed)
+
+- The identity of a program is `<owner>/<repo>` on GitHub, such as `tupe12334/rein-product-fit`. Why: GitHub makes it unique for free, so no registry is needed.
+- In code, a program is called by a short local name: `return @product-fit;`. The grammar does not change, and a `.rein` file never holds an owner or an npm scope. Why: `@a/b/c` could be program `a/b` or program `a` with function `b/c`; and an owner in code would mean editing every call after a fork or a move.
+- The caller binds each local name to an identity, as a pnpm alias in its `package.json` `dependencies`: `"product-fit": "github:tupe12334/rein-product-fit"`. The key is the local name. A program that calls another program has a `package.json`. Why: `rein install` already runs pnpm, so pnpm fetches it and `pnpm-lock.yaml` pins it, and the caller, not the author, owns the name.
+- Inside an installed program, a call to a local name that its `package.json` does not bind is an error: `` `@x` is not bound; add "x" to dependencies ``. In the project you develop, it is a warning, and the call falls back to the scopes. This replaces the rule that programs reached through other programs are found through the root project's scopes. Why: with many authors, a lookup per machine can call another author's program without a word.
+- In one run, one local name has one identity. Two bindings of the same local name to different identities in one run is a `rein check` error that names both. Why: both would write the same answer keys, such as `@product-fit/main.task`.
+- `rein install` gives a program its default local name: the package name without its `@scope/`. If that name is taken in the scope, the install stops and names the fix: `` `pr-handling` is already bob/rein-pr-handling; install with --as alice-pr-handling ``. Nothing is replaced in silence. `rein list` shows the name, the source and the version.
+- An install without an owner, such as `rein install pr-handling`, is an error that asks for the owner. Why: there is no index yet, so a bare name has no single meaning.
+
+### Repos and packages
+
+- A program repo is `<owner>/rein-<name>`, such as `tupe12334/rein-pr-handling`. Programs of the `rein-lang` organization drop the prefix: `rein-lang/pr-handling`. Why: the prefix makes a program easy to find in a shared GitHub account; the organization already says Rein.
+- A repo that holds a tool, not a program, names its kind: `vscode-rein`.
+- Each program repo has the GitHub topic `rein-program`. Why: search can find programs by topic, not by guessing from names.
+- A program has one canonical repo. A copy is archived with a link to it.
+- The `package.json` `name` is the program name, with `"private": true`. If a program is ever published to npm, it is `@<owner>/<name>`, and its default local name is the part after the scope.
+
+### Function and file names
+
+- A path segment is snake_case. A folder is a subject, and a leaf file is an imperative verb: `ci/fix`, `comments/address`, `check_approval`. Why: the path reads as a sentence, and one rule is easy to guess.
+- A template is a noun for the text it gives: `review_comment`. A struct is a singular noun: `message.struct.rein`.
+- No folder groups files by kind, such as `templates/`. A file that several functions use sits at their shared level. Why: a folder is a subject, and the single-caller rule already places each file.
+- Keep paths shallow. Depth comes from the single-caller rule, so it is advice, not a limit.
+
+### Renames and public surface
+
+- The public surface of a program is its entry and its top-level files. A file in a folder is private. A call from another program into a private file is a warning (proposed). Why: the single-caller rule already moves helpers into folders, so the folders are the export list.
+- Renaming a program breaks no caller. The caller owns the local name, and GitHub redirects a moved repo. There is no rename alias in the language. Why: the binding already solves it.
+- A breaking change is a new major version: a change to the program name, the entry's `string` parameters, or the public answer keys.
+
 ## Struct answers
 
 - An answer is a struct, never a free string. Only a `request` answer can be a struct, and its fields are `boolean`, a union, or `string`. Why: a struct names and documents every value, and the runtime validates it, so the agent cannot send loose text. A bare `string` answer is a checker error.
@@ -119,3 +160,6 @@ Each choice can change. The reason is one line.
 - Loops and retries. Today a retry is a reference cycle.
 - Side effects inside functions. Today a return value is text for the agent to act on, and a request is the only step that waits for the agent.
 - Who answers inputs: agent judgment, or deterministic tools.
+- Field and parameter names: camelCase, as today (`productFitGood`), or snake_case, as paths are? camelCase marks where the path ends in `ci/fix.nextStep`; snake_case is one style fewer.
+- Once an index of programs exists, does a `rein-lang` program win a bare `rein install <name>`, or is `rein-lang` one owner like any other?
+- Is per-program binding (Naming, Identity and local names) worth the change to how programs reached through other programs are found?
