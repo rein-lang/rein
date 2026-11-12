@@ -379,9 +379,6 @@ fn error_diagnostics(project: &Project, entry: &str) -> Vec<StepDiagnostic> {
             message: d.message,
         });
     }
-    for d in project.lock_diagnostics().iter().filter(|d| d.severity == Severity::Error) {
-        out.push(StepDiagnostic { file: crate::lock::LOCK_FILE.to_string(), line: 1, column: 1, message: d.message.clone() });
-    }
     out
 }
 

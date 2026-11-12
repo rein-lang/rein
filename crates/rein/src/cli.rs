@@ -330,8 +330,6 @@ fn rows(project: &Project, scope: &Path) -> Vec<Row> {
     if scope == project.root {
         let file = display_path(&project.marker_path());
         rows.extend(project.project_diagnostics().iter().map(|d| row(&file, 0, 0, d)));
-        let lock = display_path(&project.root.join(rein_core::lock::LOCK_FILE));
-        rows.extend(project.lock_diagnostics().iter().map(|d| row(&lock, 0, 0, d)));
     }
     // A bad manifest applies to every file, so it shows for any scope.
     let manifest = display_path(&project.root.join(rein_core::flows::MANIFEST));
