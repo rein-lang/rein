@@ -98,13 +98,7 @@ cargo run -p rein -- check examples/rein/merge-pr
 
 Examples: [merge-pr](examples/rein/merge-pr), [incident-triage](examples/rein/incident-triage), [support-ticket](examples/rein/support-ticket), [pr-handling](examples/rein/pr-handling).
 
-Run the editor tests:
-
-```sh
-cd editors/vscode
-pnpm install
-pnpm test
-```
+The VS Code extension lives in [rein-lang/vscode-rein](https://github.com/rein-lang/vscode-rein). Its tests run there with `pnpm test`.
 
 Run the docs site locally:
 
@@ -120,7 +114,7 @@ pnpm run docs:dev
 | --- | --- |
 | `crates/rein-core` | Lexer, parser, checker, evaluator, and the std library (`std/`). |
 | `crates/rein` | CLI and language server. |
-| `editors/vscode` | VS Code extension. A thin JS client for the language server, a Rein grammar, snippets, and tests. |
+| [rein-lang/vscode-rein](https://github.com/rein-lang/vscode-rein) | VS Code extension, in its own repo. A thin JS client for the language server, a Rein grammar, snippets, and tests. |
 | `examples` | Example projects. |
 | `docs` | Language reference and decisions. |
 
