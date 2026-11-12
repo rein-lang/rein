@@ -18,6 +18,7 @@
   .control small { display: block; color: #666; }
   .control.set label::after { content: " (set)"; color: #16a34a; font-weight: 400; }
   .control.focus { outline: 2px solid #d97706; outline-offset: 4px; }
+  .control.needed input { border: 2px solid #d97706; background: #fffbeb; }
   input[type=text], select { width: 100%; font: inherit; padding: 4px 6px; }
   button { font: inherit; margin: 2px 4px 2px 0; }
   button[aria-pressed=true] { background: #16a34a; color: #fff; border-color: #16a34a; }
@@ -39,7 +40,7 @@
 </style>
 </head>
 <body>
-<header><h1>rein debug <code id="entry"></code></h1><button id="back" type="button">Back</button><button id="reset" type="button">Reset</button></header>
+<header><h1>rein debug</h1><label>Entry <select id="entry"></select></label><button id="back" type="button">Back</button><button id="reset" type="button">Reset</button></header>
 <main>
 <aside id="controls" aria-label="Inputs and answers"></aside>
 <section>
@@ -52,8 +53,8 @@
 import mermaid from "__MERMAID__";
 mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
 const initial = __INITIAL__;
-const state = { entry: initial.entry, inputs: { ...initial.inputs }, answers: { ...initial.answers }, order: Object.keys(initial.answers) };
-let schema = { inputs: [], answers: [] };
+const state = { entry: initial.entry, inputs: { ...initial.inputs }, answers: { ...initial.answers }, order: Object.keys(initial.answers), placeholders: [] };
+let schema = { functions: [], inputs: {}, answers: [] };
 let renders = 0;
 let pending = 0;
 const $ = (id) => document.getElementById(id);
@@ -106,10 +107,14 @@ function control(item, value, onChange) {
 function drawControls() {
   const box = $("controls");
   box.replaceChildren();
-  if (schema.inputs.length) box.append(el("h2", {}, "Inputs"));
-  for (const i of schema.inputs) {
-    const item = { key: i.name, type: "string", description: i.description };
-    box.append(control(item, state.inputs[i.name], (v) => setInput(i.name, v)));
+  const inputs = schema.inputs[state.entry] || [];
+  if (inputs.length) box.append(el("h2", {}, "Inputs"));
+  for (const i of inputs) {
+    const unset = state.placeholders.includes(i.name);
+    const note = unset ? " (unset: the flow shows <" + i.name + ">)" : "";
+    const c = control({ key: i.name, type: "string", description: i.description + note }, state.inputs[i.name], (v) => setInput(i.name, v));
+    if (unset) c.classList.add("needed");
+    box.append(c);
   }
   box.append(el("h2", {}, "Answers"));
   for (const a of schema.answers) box.append(control(a, state.answers[a.key], (v) => setAnswer(a.key, v)));
@@ -150,6 +155,8 @@ function drawStep(step) {
     parts.push(el("pre", {}, step.message), ...(step.diagnostics || []).map((d) => el("div", {}, `${d.file}:${d.line}:${d.column}: ${d.message}`)));
   }
   if (step.trace && step.trace.length) parts.push(el("div", { class: "trace" }, "trace: " + step.trace.join(" -> ")));
+  const unset = state.placeholders;
+  if (unset.length) parts.push(el("div", { class: "trace" }, "input needed: " + unset.join(", ") + " (shown as " + unset.map((p) => "<" + p + ">").join(", ") + ")"));
   box.replaceChildren(...parts);
 }
 
@@ -169,6 +176,7 @@ async function walk() {
   const body = JSON.stringify({ entry: state.entry, inputs: state.inputs, answers: state.answers });
   const out = await (await fetch("/walk", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
   if (ticket !== pending) return;
+  state.placeholders = out.placeholders || [];
   drawControls();
   drawStep(out.step);
   await drawDiagram(out.mermaid, out.keys);
@@ -177,8 +185,11 @@ async function walk() {
 
 $("back").addEventListener("click", () => { const key = state.order.at(-1); if (key) setAnswer(key, ""); });
 $("reset").addEventListener("click", () => { state.inputs = { ...initial.inputs }; state.answers = {}; state.order = []; walk(); });
-$("entry").textContent = state.entry;
 schema = await (await fetch("/schema")).json();
+const pick = $("entry");
+pick.append(...schema.functions.map((f) => el("option", { value: f }, f)));
+pick.value = state.entry;
+pick.addEventListener("change", () => { state.entry = pick.value; state.inputs = {}; walk(); });
 walk();
 </script>
 </body>

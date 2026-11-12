@@ -133,7 +133,7 @@ impl Server {
         match (method, path) {
             ("GET", "/") => ("200 OK", "text/html", page(&self.first)),
             ("GET", "/schema") => ("200 OK", "application/json", schema(&self.project, &self.first.entry).to_string()),
-            ("POST", "/walk") => ("200 OK", "application/json", walk(&self.project, body).to_string()),
+            ("POST", "/walk") => ("200 OK", "application/json", walk(&self.project, &self.first.entry, body).to_string()),
             _ => ("404 Not Found", "text/plain", "not found\n".to_string()),
         }
     }
@@ -145,20 +145,20 @@ fn page(first: &StepRequest) -> String {
     include_str!("debug_page.html").replace("__MERMAID__", graph_cmd::MERMAID).replace("__INITIAL__", &initial)
 }
 
-/// The controls of the page: the entry's `string` inputs, and every key the flow can ask for, with its type.
+/// The controls of the page: the functions an entry can be, the `string` inputs of each, and every key the flow
+/// can ask for, with its type. `entry` is the one the page starts with.
 fn schema(project: &Project, entry: &str) -> Value {
-    let inputs: Vec<Value> = project
-        .get(entry)
-        .map(|sf| {
-            sf.function.text_inputs().map(|i| json!({"name": i.name.value, "description": i.description.value})).collect()
-        })
-        .unwrap_or_default();
+    let (mut functions, mut inputs) = (Vec::new(), serde_json::Map::new());
     let mut answers: Vec<Value> = Vec::new();
     for (name, sf) in project.functions() {
         let f = &sf.function;
         if f.is_template() {
             continue;
         }
+        functions.push(name.clone());
+        let texts: Vec<Value> =
+            f.text_inputs().map(|i| json!({"name": i.name.value, "description": i.description.value})).collect();
+        inputs.insert(name.clone(), json!(texts));
         let mut asked: Vec<&Input> = f.inputs.iter().filter(|i| i.ty != InputType::Text).collect();
         walk_stmts(&f.body, &mut |s| {
             if let Stmt::Request { response, .. } = s {
@@ -178,15 +178,33 @@ fn schema(project: &Project, entry: &str) -> Value {
             answers.push(json!({"key": key, "type": ty, "options": options, "fields": fields, "description": i.description.value}));
         }
     }
-    json!({"entry": entry, "inputs": inputs, "answers": answers})
+    json!({"entry": entry, "functions": functions, "inputs": inputs, "answers": answers})
 }
 
-/// The answer to `POST /walk`: the real step response, the graph with the walk marked as Mermaid text, and the
-/// answer key of each question node, so a click on one can focus its control.
-fn walk(project: &Project, body: &str) -> Value {
+/// The answer to `POST /walk`: the real step response, the graph with the walk marked as Mermaid text, the answer
+/// key of each question node (so a click on one can focus its control), and the `string` inputs left unset.
+/// An unset input is walked as the placeholder `<name>`, so the page always has a step to show. `entry` is the
+/// default entry.
+fn walk(project: &Project, entry: &str, body: &str) -> Value {
+    let mut placeholders = Vec::new();
     let (entry, response) = match serde_json::from_str::<StepRequest>(body) {
-        Ok(request) => (request.entry.clone(), step(project, &request)),
-        Err(e) => (ENTRY.to_string(), invalid_request(format!("invalid request JSON: {e}"))),
+        Ok(mut request) => {
+            // As `rein step`: the default entry is the program's.
+            if request.entry == ENTRY {
+                request.entry = entry.to_string();
+            }
+            if let Some(sf) = project.get(&request.entry) {
+                for i in sf.function.text_inputs() {
+                    let name = &i.name.value;
+                    if request.inputs.get(name).is_none_or(|v| v.is_empty()) {
+                        request.inputs.insert(name.clone(), format!("<{name}>"));
+                        placeholders.push(name.clone());
+                    }
+                }
+            }
+            (request.entry.clone(), step(project, &request))
+        }
+        Err(e) => (entry.to_string(), invalid_request(format!("invalid request JSON: {e}"))),
     };
     let g = graph::walk(project, &entry, &response);
     let keys: serde_json::Map<String, Value> = g
@@ -195,7 +213,8 @@ fn walk(project: &Project, body: &str) -> Value {
         .filter(|n| n.kind == NodeKind::Question)
         .filter_map(|n| Some((n.id.clone(), json!(format!("{}.{}", n.function, n.name.as_ref()?)))))
         .collect();
-    json!({"step": response, "mermaid": graph::mermaid(&g), "path": g.path, "current": g.current, "keys": keys})
+    let mermaid = graph::mermaid(&g);
+    json!({"step": response, "mermaid": mermaid, "path": g.path, "current": g.current, "keys": keys, "placeholders": placeholders})
 }
 
 #[cfg(test)]
