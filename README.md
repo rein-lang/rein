@@ -130,7 +130,7 @@ pnpm run docs:dev
 - [Decisions](docs/decisions.md): owner facts, PoC choices, open questions.
 - [Agent interface](docs/interface.md): programs as named apps, the MCP host, and `rein run`.
 
-Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook checks the example pages are generated.
+Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook checks the example pages are generated. `website/docs/reference/cli.md` is generated from `rein docs-cli`: do not edit it, and refresh it with `sh website/docs/scripts/generate-cli.sh`.
 
 ## License
 
