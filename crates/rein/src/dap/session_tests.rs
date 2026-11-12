@@ -133,6 +133,24 @@ fn stop_on_entry_stops_before_the_first_question() {
 }
 
 #[test]
+fn run_without_debugging_asks_but_never_stops() {
+    let mut session = started(json!({"noDebug": true}));
+    let line = line_with("main.rein", "switch (task)");
+    let source = json!({"path": example("main.rein")});
+    session.handle(&request(
+        "setBreakpoints",
+        json!({"source": source, "breakpoints": [{"line": line}]}),
+    ));
+    let out = session.handle(&request("configurationDone", json!({})));
+    assert_eq!(asked(&out), "main.draft");
+    assert!(events(&out, "stopped").is_empty(), "{out:?}");
+
+    let out = answer(&mut session, "main.draft", "no");
+    assert_eq!(asked(&out), "main.task");
+    assert!(events(&out, "stopped").is_empty(), "{out:?}");
+}
+
+#[test]
 fn breakpoint_on_a_question_stops_before_it_is_asked() {
     let mut session = started(json!({}));
     let line = line_with("main.rein", "switch (task)");

@@ -81,6 +81,8 @@ pub struct Session {
     inputs: BTreeMap<String, String>,
     answers: Answers,
     stop_on_entry: bool,
+    /// Run without the debugger: no breakpoints and no stops. Questions are still asked.
+    no_debug: bool,
     breakpoints: BTreeMap<PathBuf, BTreeSet<usize>>,
     waiting: Option<Waiting>,
     frames: Vec<Frame>,
@@ -193,6 +195,10 @@ impl Session {
         self.answers = pairs(args.get("answers"));
         self.stop_on_entry = args
             .get("stopOnEntry")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        self.no_debug = args
+            .get("noDebug")
             .and_then(Value::as_bool)
             .unwrap_or(false);
         self.project = Some(Rc::new(project));
@@ -381,7 +387,7 @@ impl Session {
             .and_then(|f| project.get(f))
             .map(|sf| sf.path.clone())
             .unwrap_or_default();
-        let hit = !skip && self.hit(project, &at.trace, &file, at.line);
+        let hit = !skip && !self.no_debug && self.hit(project, &at.trace, &file, at.line);
         self.frames = frames(project, &at.trace, at.line);
         self.current = current(&at.body, &file, at.line);
         self.seen = at.trace.len();
@@ -435,6 +441,10 @@ impl Session {
     }
 
     fn stop(&mut self, reason: &str) {
+        // ponytail: with no_debug the client gets no stopped event, so VS Code shows the program as running.
+        if self.no_debug {
+            return;
+        }
         let event = self.sender.event(
             "stopped",
             json!({"reason": reason, "threadId": THREAD, "allThreadsStopped": true}),
