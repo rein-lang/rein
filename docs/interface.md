@@ -1,6 +1,7 @@
 # Agent interface
 
 Status: proof of concept. The MCP host, `rein run`, `rein list` and `rein show` are built. Harness enforcement is a proposal.
+Proposed, not built: one run over each item of a list sent as JSON, in [iter.md](iter.md).
 
 A Rein program is a running app. The agent finds it by name, starts it, and answers it step by step. The program keeps its state while it runs. The agent does not resend earlier answers.
 

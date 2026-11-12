@@ -79,6 +79,7 @@ Each choice can change. The reason is one line.
 
 - Bundle tool: compiles a program into one self-contained `.rein` file, so an agent can load one file and run it as a full program.
 - Research an agent-agnostic tool that installs agent hooks. Why: each agent keeps its hook config in its own format and place, so Rein should not own a per-agent installer.
+- `iter`: run one function over each item of a JSON list, one item at a time. Proposal: [iter.md](iter.md). Why: the agent sends a list once, and the program keeps the order and the answers.
 
 ## Open questions
 
