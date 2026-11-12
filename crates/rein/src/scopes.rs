@@ -49,13 +49,22 @@ pub fn system_dirs() -> Vec<PathBuf> {
 /// Every flow visible from the current directory.
 pub fn discover_here() -> Vec<Flow> {
     let cwd = std::path::absolute(Path::new(".")).unwrap_or_else(|_| PathBuf::from("."));
-    flows::discover(&cwd, user_dir().as_deref(), &system_dirs())
+    discover_from(&cwd)
+}
+
+/// Every flow visible from `cwd`. The language server passes the project root, not its own working directory.
+pub fn discover_from(cwd: &Path) -> Vec<Flow> {
+    flows::discover(cwd, user_dir().as_deref(), &system_dirs())
 }
 
 /// The visible program called `name`.
 pub fn find(name: &str) -> Result<Flow, String> {
-    let all = discover_here();
-    match flows::resolve(&all, name) {
+    find_in(&discover_here(), name)
+}
+
+/// The program called `name` among `all`, as [`find`] picks it.
+pub fn find_in(all: &[Flow], name: &str) -> Result<Flow, String> {
+    match flows::resolve(all, name) {
         Some(flow) => Ok(flow.clone()),
         None => Err(format!("unknown program `{name}`; run `rein list` to list programs")),
     }
