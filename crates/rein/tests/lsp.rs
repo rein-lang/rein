@@ -1395,6 +1395,68 @@ fn rename_a_function_to_a_name_that_differs_only_in_case() {
 }
 
 #[test]
+fn rename_refuses_a_case_only_rename_of_a_function_with_a_folder() {
+    // Decided from the names and the folder on disk, so this runs on any file system.
+    let root = folder_project("rename-case-folder");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("A");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edit["error"]["message"],
+        "a rename that only changes case cannot move the folder `a/`; rename it in two steps through another name",
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_hard_link_of_the_source() {
+    let root = fs::canonicalize(temp_project("rename-hard-link")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    fs::hard_link(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+    // Nothing moved: both names still exist.
+    assert!(root.join("a.rein").exists() && root.join("c.rein").exists());
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_symlink_to_the_source() {
+    let root = fs::canonicalize(temp_project("rename-symlink-dest")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    std::os::unix::fs::symlink(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn rename_moves_the_editor_leftovers_of_the_folder_with_it() {
     let root = folder_project("rename-leftovers");
     fs::write(root.join("a/.DS_Store"), "").unwrap();
