@@ -1064,9 +1064,11 @@ fn rename_refuses_to_move_through_a_symlinked_folder() {
 }
 
 #[test]
-fn rename_refuses_to_move_a_file_with_a_broken_reference() {
-    let root = folder_project("rename-broken-ref");
-    // `a/b` refers to `../nope`, which does not exist. Moved to `c/b`, the text would point at another function.
+fn rename_keeps_a_broken_reference_that_keeps_its_meaning() {
+    let root = folder_project("rename-broken-same-meaning");
+    // `a` drafts `@./todo`, and `a/b` refers to `@../nope`. Neither exists, and neither names a function after the
+    // rename to `c`: `todo` and `nope` are at the root in both places.
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return @./todo;\n}\n").unwrap();
     fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../nope;\n}\n").unwrap();
     let mut server = start_with_file_renames();
     let main = open_file(&mut server, &root, "main.rein");
@@ -1074,8 +1076,77 @@ fn rename_refuses_to_move_a_file_with_a_broken_reference() {
     let mut params = at(&main, 2, 12);
     params["newName"] = json!("c");
     let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_broken_reference_that_would_resolve_after_the_move() {
+    let root = folder_project("rename-broken-ref");
+    // `a/b` refers to `../c`, which does not exist yet. Renaming `a` to `c` creates `c.rein`, and from `c/b` the
+    // same text names it.
+    fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../c;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
     let message = edit["error"]["message"].as_str().unwrap_or_default();
-    assert!(message.contains("`@../nope` in `a/b` does not resolve"), "{edit}");
+    assert!(
+        message.contains("`@../c` in `a/b` does not resolve, but after the move it would resolve to `c`"),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_moves_the_editor_leftovers_of_the_folder_with_it() {
+    let root = folder_project("rename-leftovers");
+    fs::write(root.join("a/.DS_Store"), "").unwrap();
+    fs::write(root.join("a/Thumbs.db"), "").unwrap();
+    fs::write(root.join("a/b.rein~"), "").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("a.rein", 2, 9, 2, 15), "@./c/b".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+                ("a/.DS_Store".to_string(), "c/.DS_Store".to_string()),
+                ("a/Thumbs.db".to_string(), "c/Thumbs.db".to_string()),
+                ("a/b.rein~".to_string(), "c/b.rein~".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
