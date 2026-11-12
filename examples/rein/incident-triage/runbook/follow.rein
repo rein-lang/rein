@@ -8,7 +8,7 @@ export default async function followRunbook() {
     report whether it cleared.`,
   );
   if (fixed) {
-    return "Close the alert. Write a one-line note with the steps you ran.";
+    return `Close the alert. Write a one-line note with the steps you ran.`;
   }
   return @../page_human;
 }

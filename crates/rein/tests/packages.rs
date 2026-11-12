@@ -67,9 +67,9 @@ fn write(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
 }
 
-const ENTRY: &str = "/** A program. */\nexport default function main() {\n  return \"ok\";\n}\n";
+const ENTRY: &str = "/** A program. */\nexport default function main() {\n  return `ok`;\n}\n";
 
-const ENTRY_WITH_QUESTION: &str = "/**\n * Plain tool.\n */\nexport default function main(\n  /** Is it urgent? */\n  urgent: boolean,\n) {\n  if (urgent) {\n    return \"yes\";\n  }\n  return \"no\";\n}\n";
+const ENTRY_WITH_QUESTION: &str = "/**\n * Plain tool.\n */\nexport default function main(\n  /** Is it urgent? */\n  urgent: boolean,\n) {\n  if (urgent) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
 
 /// Lays out one package the way pnpm does under `<base>/npm`: the files under `node_modules/.pnpm/<store>/node_modules/
 /// <name>`, and a symlink at `node_modules/<link>`. An npm alias has `link` different from `name`.

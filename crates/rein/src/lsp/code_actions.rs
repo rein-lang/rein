@@ -43,6 +43,19 @@ fn fix(text: &str, f: &Function, d: &Diagnostic) -> Option<(String, TextEdit)> {
         new_text: new_text.to_string(),
     };
     let msg = d.message.as_str();
+    // Swap the quote kind. ponytail: only plain text converts; text with a quote, a backtick, `$` or `\` keeps
+    // its form, and the author fixes it by hand.
+    let swap = |open: &str, close: &str| -> Option<TextEdit> {
+        let (start, end) = (offset(text, d.range.start), offset(text, d.range.end));
+        let inner = text.get(start + 1..end.checked_sub(1)?)?;
+        (!inner.contains(['"', '\'', '`', '$', '\\', '\n'])).then(|| TextEdit { range: d.range, new_text: format!("{open}{inner}{close}") })
+    };
+    if msg == rein_core::check::TEXT_QUOTES {
+        return swap("`", "`").map(|e| ("Use backticks for text".to_string(), e));
+    }
+    if msg.starts_with("a tag uses quotes: ") {
+        return swap("\"", "\"").map(|e| ("Use quotes for a tag".to_string(), e));
+    }
     if msg.starts_with("missing doc comment on ") {
         let (_, export) = lex(text).ok()?.into_iter().find(|(t, _)| *t == Tok::Export)?;
         let doc = "/**\n * TODO: say what this function decides.\n */\n";

@@ -28,7 +28,7 @@ fn write(base: &Path, rel: &str, text: &str) {
 }
 
 fn flow_text(desc: &str) -> String {
-    format!("/** {desc} */\nexport default function main() {{\n  return \"ok\";\n}}\n")
+    format!("/** {desc} */\nexport default function main() {{\n  return `ok`;\n}}\n")
 }
 
 /// Sandbox: a home with its own user programs folder, an empty system list, and a private TMPDIR.
@@ -304,12 +304,12 @@ fn write_file_program(base: &Path) -> PathBuf {
     write(
         base,
         "x/review.rein",
-        "/**\n * Review a failing change.\n */\nexport default function review(\n  /** Is CI green? */\n  green: boolean,\n) {\n  if (green) {\n    return \"approved\";\n  }\n  return @./ci/fix;\n}\n",
+        "/**\n * Review a failing change.\n */\nexport default function review(\n  /** Is CI green? */\n  green: boolean,\n) {\n  if (green) {\n    return `approved`;\n  }\n  return @./ci/fix;\n}\n",
     );
     write(
         base,
         "x/ci/fix.rein",
-        "/**\n * Fix the failing CI.\n */\nexport default function fix(\n  /** Is the fix pushed? */\n  pushed: boolean,\n) {\n  if (pushed) {\n    return \"rerun CI\";\n  }\n  return \"push the fix\";\n}\n",
+        "/**\n * Fix the failing CI.\n */\nexport default function fix(\n  /** Is the fix pushed? */\n  pushed: boolean,\n) {\n  if (pushed) {\n    return `rerun CI`;\n  }\n  return `push the fix`;\n}\n",
     );
     base.join("x/review.rein")
 }

@@ -78,7 +78,42 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
             }
         }
     }
+    c.out.extend(quoted_text(&f.body));
     c.out
+}
+
+/// The error on a quoted string where Rein wants text. Text uses backticks, so it can span lines and hold
+/// `${name}`.
+pub const TEXT_QUOTES: &str = "text uses backticks: write `...` instead of \"...\"";
+
+/// An error for each quoted string in a text position: a return value, a call argument at any depth, or the
+/// argument of `request`.
+fn quoted_text(stmts: &[Stmt]) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    crate::ast::walk_stmts(stmts, &mut |s| match s {
+        Stmt::Return(r) => match &r.value {
+            ReturnValue::Text(s) => out.push(Diagnostic::error(s.span, TEXT_QUOTES)),
+            ReturnValue::Call(call) => call_quoted_text(call, &mut out),
+            ReturnValue::Ref(_) | ReturnValue::Template(_) => {}
+        },
+        Stmt::Request { arg, .. } => value_quoted_text(arg, &mut out),
+        Stmt::If { .. } | Stmt::Switch { .. } => {}
+    });
+    out
+}
+
+fn value_quoted_text(v: &Value, out: &mut Vec<Diagnostic>) {
+    match v {
+        Value::Str(s) => out.push(Diagnostic::error(s.span, TEXT_QUOTES)),
+        Value::Call(call) => call_quoted_text(call, out),
+        Value::Template(_) | Value::Name(_) => {}
+    }
+}
+
+fn call_quoted_text(call: &Call, out: &mut Vec<Diagnostic>) {
+    for arg in &call.args {
+        value_quoted_text(&arg.value, out);
+    }
 }
 
 /// The line limit of a function when `rein.json` sets none.

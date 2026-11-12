@@ -48,16 +48,16 @@ fn trace(names: &[&str]) -> Vec<String> {
 /// `main` asks for `vip`, then hands off to `escalate` or returns text.
 fn vip_project() -> Project {
     project(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Is the customer on the VIP plan? */\n  vip: boolean,\n) {\n  if (vip) {\n    return @./escalate;\n  }\n  return \"Answer the ticket.\";\n}\n"),
-        ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return \"Assign the ticket to tier 2.\";\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Is the customer on the VIP plan? */\n  vip: boolean,\n) {\n  if (vip) {\n    return @./escalate;\n  }\n  return `Answer the ticket.`;\n}\n"),
+        ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return `Assign the ticket to tier 2.`;\n}\n"),
     ])
 }
 
 /// `main` picks a path. `merge` goes to `merge_pr`, which asks two questions.
 fn merge_project() -> Project {
     project(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Which path? */\n  path: \"merge\" | \"review\",\n) {\n  switch (path) {\n    case \"merge\":\n      return @./merge_pr;\n    case \"review\":\n      return \"Review the code.\";\n  }\n}\n"),
-        ("merge_pr.rein", "interface Input {\n  /** Does the PR change only docs? */\n  docsOnly: boolean;\n  /** What is the CI status? */\n  ci: \"green\" | \"red\";\n}\n/** Merge a PR. */\nexport default function mergePr({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return \"approved\";\n  }\n  switch (ci) {\n    case \"green\":\n      return \"merge it\";\n    case \"red\":\n      return \"wait for CI\";\n  }\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Which path? */\n  path: \"merge\" | \"review\",\n) {\n  switch (path) {\n    case \"merge\":\n      return @./merge_pr;\n    case \"review\":\n      return `Review the code.`;\n  }\n}\n"),
+        ("merge_pr.rein", "interface Input {\n  /** Does the PR change only docs? */\n  docsOnly: boolean;\n  /** What is the CI status? */\n  ci: \"green\" | \"red\";\n}\n/** Merge a PR. */\nexport default function mergePr({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return `approved`;\n  }\n  switch (ci) {\n    case \"green\":\n      return `merge it`;\n    case \"red\":\n      return `wait for CI`;\n  }\n}\n"),
     ])
 }
 
@@ -65,8 +65,8 @@ fn merge_project() -> Project {
 fn faq_project() -> Project {
     project(&[
         ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./answer/faq;\n}\n"),
-        ("answer/faq.rein", "/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  articleFound: boolean,\n) {\n  if (!articleFound) {\n    return @../escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\n    \"Send the article and ask if it solved the problem.\",\n  );\n  if (solved) {\n    return \"Close the ticket as solved.\";\n  }\n  return @../escalate;\n}\n"),
-        ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return \"Assign the ticket to tier 2.\";\n}\n"),
+        ("answer/faq.rein", "/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  articleFound: boolean,\n) {\n  if (!articleFound) {\n    return @../escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\n    `Send the article and ask if it solved the problem.`,\n  );\n  if (solved) {\n    return `Close the ticket as solved.`;\n  }\n  return @../escalate;\n}\n"),
+        ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return `Assign the ticket to tier 2.`;\n}\n"),
     ])
 }
 
@@ -277,7 +277,7 @@ fn invalid_union_value_lists_the_accepted_values() {
 #[test]
 fn string_parameter_cannot_be_answered() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./greet(who=\"world\");\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./greet(who=`world`);\n}\n"),
         ("greet.rein", "/** Greet. */\nexport default function greet(\n  /** Who? */\n  who: string,\n) {\n  return `Hello ${who}`;\n}\n"),
     ]);
     assert_eq!(
@@ -299,8 +299,8 @@ fn string_parameter_cannot_be_answered() {
 #[test]
 fn same_parameter_name_in_two_functions_gets_separate_keys() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  if (ci === \"green\") {\n    return @./merge_pr;\n  }\n  return \"Wait.\";\n}\n"),
-        ("merge_pr.rein", "/** Merge. */\nexport default function mergePr(\n  /** CI for the merge? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${ci}`;\n    case \"red\":\n      return \"Stop.\";\n  }\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main(\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  if (ci === \"green\") {\n    return @./merge_pr;\n  }\n  return `Wait.`;\n}\n"),
+        ("merge_pr.rein", "/** Merge. */\nexport default function mergePr(\n  /** CI for the merge? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${ci}`;\n    case \"red\":\n      return `Stop.`;\n  }\n}\n"),
     ]);
     // The answer to main.ci does not answer merge_pr.ci.
     let res = step(&project, &req("main", &[("main.ci", "green")]));
@@ -352,7 +352,7 @@ fn reference_cycle_hits_the_hop_limit() {
 #[test]
 fn template_as_entry_is_an_error() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return \"x\";\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return `x`;\n}\n"),
         ("greet.rein", "/** Greet. */\nexport default function greet(\n  /** Who? */\n  who: string,\n) {\n  return `Hello ${who}`;\n}\n"),
     ]);
     let res = step(&project, &req("greet", &[]));
@@ -365,7 +365,7 @@ fn template_as_entry_is_an_error() {
 #[test]
 fn template_call_adds_no_hop_to_the_trace() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./tpl(a=\"Hello\");\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./tpl(a=`Hello`);\n}\n"),
         ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n"),
     ]);
     let res = step(&project, &req("main", &[]));
@@ -383,7 +383,7 @@ fn template_call_adds_no_hop_to_the_trace() {
 #[test]
 fn nested_template_call_adds_no_hop_to_the_trace() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return delegate(model=@./tpl(a=\"x\"), task=\"task\");\n}\n"),
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return delegate(model=@./tpl(a=`x`), task=`task`);\n}\n"),
         ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n"),
     ]);
     let res = step(&project, &req("main", &[]));
@@ -494,7 +494,7 @@ fn project_and_protocol_types_are_send_and_sync() {
 fn pr_project() -> Project {
     project(&[
         ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Draft? */\n  draft: boolean;\n}\n/** Entry. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return @./merge(pr=pr);\n}\n"),
-        ("merge.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n/** Merge. */\nexport default function merge({ pr, ci }: Input) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}.`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
+        ("merge.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n/** Merge. */\nexport default function merge({ pr, ci }: Input) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}.`;\n    case \"red\":\n      return `Wait.`;\n  }\n}\n"),
     ])
 }
 

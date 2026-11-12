@@ -22,7 +22,7 @@ fn one(body: &str, params: &str) -> Project {
 #[test]
 fn negation_swaps_yes_and_no() {
     let p = one(
-        "  if (!ready) {\n    return \"wait\";\n  }\n  return \"go\";",
+        "  if (!ready) {\n    return `wait`;\n  }\n  return `go`;",
         "  /** Ready? */\n  ready: boolean,\n",
     );
     let g = flow(&p, "main");
@@ -46,7 +46,7 @@ fn negation_swaps_yes_and_no() {
 #[test]
 fn compare_labels_the_other_members() {
     let p = one(
-        "  if (c !== \"x\") {\n    return \"a\";\n  }\n  return \"b\";",
+        "  if (c !== \"x\") {\n    return `a`;\n  }\n  return `b`;",
         "  /** C? */\n  c: \"x\" | \"y\" | \"z\",\n",
     );
     let g = flow(&p, "main");
@@ -57,7 +57,7 @@ fn compare_labels_the_other_members() {
 #[test]
 fn compound_condition_is_one_condition_node() {
     let p = one(
-        "  if (a && (b || !a)) {\n    return \"one\";\n  }\n  return \"two\";",
+        "  if (a && (b || !a)) {\n    return `one`;\n  }\n  return `two`;",
         "  /** A? */\n  a: boolean,\n  /** B? */\n  b: boolean,\n",
     );
     let g = flow(&p, "main");

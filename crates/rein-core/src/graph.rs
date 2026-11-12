@@ -259,7 +259,7 @@ impl<'a> Builder<'a> {
     fn ret(&mut self, value: &ReturnValue, from: From) {
         match value {
             ReturnValue::Text(text) => {
-                self.step_to(from, NodeKind::Done, text.clone());
+                self.step_to(from, NodeKind::Done, text.value.clone());
             }
             ReturnValue::Template(lit) => {
                 self.step_to(from, NodeKind::Done, template_text(&lit.pieces));

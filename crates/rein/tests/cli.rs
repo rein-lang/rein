@@ -131,7 +131,7 @@ fn check_reports_errors_in_broken_project() {
 fn check_applies_the_function_line_limit() {
     // 41 lines: the header, 38 comment lines, the return and the closing brace.
     let root = temp_dir("lines");
-    let text = format!("/** Entry. */\nexport default function main() {{\n{}  return \"done\";\n}}\n", "  // a step\n".repeat(38));
+    let text = format!("/** Entry. */\nexport default function main() {{\n{}  return `done`;\n}}\n", "  // a step\n".repeat(38));
     fs::write(root.join("main.rein"), &text).unwrap();
     let main = root.join("main.rein");
 
@@ -161,7 +161,7 @@ fn check_applies_the_function_line_limit() {
 fn check_applies_the_line_length_limit() {
     // Line 3 is `  return "` + 69 letters + `";`: 81 characters.
     let root = temp_dir("width");
-    let text = format!("/** Entry. */\nexport default function main() {{\n  return \"{}\";\n}}\n", "a".repeat(69));
+    let text = format!("/** Entry. */\nexport default function main() {{\n  return `{}`;\n}}\n", "a".repeat(69));
     fs::write(root.join("main.rein"), &text).unwrap();
 
     let out = rein(&["check", root.to_str().unwrap()]);
@@ -205,7 +205,7 @@ fn syntax_error_is_reported_with_its_position() {
 #[test]
 fn eval_refuses_function_with_errors() {
     let root = temp_dir("refuse");
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return `ok`;\n}\n").unwrap();
     fs::write(root.join("bad.rein"), "/** x */\nexport default function bad() {\n  return @./gone;\n}\n").unwrap();
 
     let out = rein(&["eval", "bad", "--root", root.to_str().unwrap(), "--json"]);
@@ -219,7 +219,7 @@ fn eval_refuses_function_with_errors() {
 fn undocumented_function_does_not_run() {
     let root = temp_dir("nodoc");
     fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./bare;\n}\n").unwrap();
-    fs::write(root.join("bare.rein"), "// A line comment is not a doc comment.\nexport default function bare() {\n  return \"x\";\n}\n").unwrap();
+    fs::write(root.join("bare.rein"), "// A line comment is not a doc comment.\nexport default function bare() {\n  return `x`;\n}\n").unwrap();
     let message = "missing doc comment on `bare`; put /** description */ right before `export default function`";
 
     let out = rein(&["check", root.to_str().unwrap()]);
@@ -244,7 +244,7 @@ fn undocumented_function_does_not_run() {
 #[test]
 fn missing_main_is_a_project_error() {
     let root = temp_dir("nomain");
-    fs::write(root.join("other.rein"), "/** Other. */\nexport default function other() {\n  return \"x\";\n}\n").unwrap();
+    fs::write(root.join("other.rein"), "/** Other. */\nexport default function other() {\n  return `x`;\n}\n").unwrap();
 
     let out = rein(&["check", root.to_str().unwrap()]);
     assert_eq!(code(&out), 1);
@@ -263,8 +263,8 @@ fn missing_main_is_a_project_error() {
 #[test]
 fn unreachable_function_is_a_warning() {
     let root = temp_dir("orphan");
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
-    fs::write(root.join("orphan.rein"), "/** Orphan. */\nexport default function orphan() {\n  return \"x\";\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return `ok`;\n}\n").unwrap();
+    fs::write(root.join("orphan.rein"), "/** Orphan. */\nexport default function orphan() {\n  return `x`;\n}\n").unwrap();
 
     let out = rein(&["check", root.to_str().unwrap()]);
     assert_eq!(code(&out), 0);
@@ -277,7 +277,7 @@ fn unreachable_function_is_a_warning() {
 #[test]
 fn check_missing_path_is_an_error() {
     let root = temp_dir("missing");
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return `ok`;\n}\n").unwrap();
     let missing = root.join("nothere.rein");
 
     let out = rein(&["check", missing.to_str().unwrap()]);
@@ -292,7 +292,7 @@ fn check_missing_path_is_an_error() {
 fn check_directory_inside_project_reports_only_its_files() {
     let root = temp_dir("subdir");
     fs::create_dir_all(root.join("ci")).unwrap();
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return `ok`;\n}\n").unwrap();
     fs::write(root.join("ci/fix.rein"), "/** F. */\nexport default function fix() {\n  return @./gone;\n}\n").unwrap();
     fs::write(root.join("other.rein"), "/** O. */\nexport default function other() {\n  return @./nope;\n}\n").unwrap();
 
@@ -322,8 +322,8 @@ fn check_rejects_a_non_rein_file() {
 fn check_symlinked_file_is_checked_in_the_project_of_the_link() {
     let a = temp_dir("link-a");
     let b = temp_dir("link-b");
-    fs::write(a.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return \"ok\";\n}\n").unwrap();
-    fs::write(b.join("real.rein"), "/** Real. */\nexport default function real() {\n  return \"x\";\n}\n").unwrap();
+    fs::write(a.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return `ok`;\n}\n").unwrap();
+    fs::write(b.join("real.rein"), "/** Real. */\nexport default function real() {\n  return `x`;\n}\n").unwrap();
     std::os::unix::fs::symlink(b.join("real.rein"), a.join("link.rein")).unwrap();
 
     let out = rein(&["check", a.join("link.rein").to_str().unwrap()]);
@@ -438,7 +438,7 @@ fn docs_cli_names_every_subcommand_and_stays_hidden() {
 #[test]
 fn named_arguments_bind_in_any_order() {
     let root = temp_dir("named");
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./greet(name=\"world\", greeting=\"Hello\");\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./greet(name=`world`, greeting=`Hello`);\n}\n").unwrap();
     fs::write(root.join("greet.rein"), GREET).unwrap();
 
     let out = rein(&["eval", "main", "--root", root.to_str().unwrap()]);
@@ -452,9 +452,9 @@ fn named_arguments_bind_in_any_order() {
 fn call_arguments_must_be_named_and_known() {
     let cases = [
         ("return @./greet(\"world\", \"Hello\");", 1, "missing argument `greeting` in call to `@./greet`; write `greeting=value`"),
-        ("return @./greet(greeting=\"Hello\", who=\"world\");", 1, "`who` is not a parameter of `@./greet`; parameters are greeting, name"),
-        ("return @./greet(greeting=\"Hi\", greeting=\"Hello\", name=\"world\");", 1, "`greeting` is given twice in call to `@./greet`; give each name once"),
-        ("return @./greet(name=\"world\", greeting=\"Hello\");", 0, "0 errors"),
+        ("return @./greet(greeting=`Hello`, who=`world`);", 1, "`who` is not a parameter of `@./greet`; parameters are greeting, name"),
+        ("return @./greet(greeting=`Hi`, greeting=`Hello`, name=`world`);", 1, "`greeting` is given twice in call to `@./greet`; give each name once"),
+        ("return @./greet(name=`world`, greeting=`Hello`);", 0, "0 errors"),
     ];
     for (i, (body, want, message)) in cases.into_iter().enumerate() {
         let root = temp_dir(&format!("args{i}"));

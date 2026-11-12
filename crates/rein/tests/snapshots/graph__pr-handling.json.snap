@@ -214,7 +214,7 @@ expression: text
       "id": "f4_3",
       "kind": "request",
       "function": "review",
-      "label": "request: delegate(model=\"use opus model\", task=`review the pull request ${pr}\nwith a security focus and list each problem with file and line`)"
+      "label": "request: delegate(model=`use opus model`, task=`review the pull request ${pr}\nwith a security focus and list each problem with file and line`)"
     },
     {
       "id": "f4_4",
@@ -228,19 +228,19 @@ expression: text
       "id": "f4_5",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=\"request changes\", body=\"each security problem, with its file and line\", pr=pr)"
+      "label": "@./templates/post_review(kind=`request changes`, body=`each security problem, with its file and line`, pr=pr)"
     },
     {
       "id": "f4_6",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=\"approve\", body=\"the security checks you made\", pr=pr)"
+      "label": "@./templates/post_review(kind=`approve`, body=`the security checks you made`, pr=pr)"
     },
     {
       "id": "f4_7",
       "kind": "request",
       "function": "review",
-      "label": "request: delegate(model=\"use haiku model\", task=`review the pull request ${pr}\nand list each problem with file and line`)"
+      "label": "request: delegate(model=`use haiku model`, task=`review the pull request ${pr}\nand list each problem with file and line`)"
     },
     {
       "id": "f4_8",
@@ -254,19 +254,19 @@ expression: text
       "id": "f4_9",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=\"approve\", body=\"one line on what you checked\", pr=pr)"
+      "label": "@./templates/post_review(kind=`approve`, body=`one line on what you checked`, pr=pr)"
     },
     {
       "id": "f4_10",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=\"comment\", body=\"each small problem, with its file and line\", pr=pr)"
+      "label": "@./templates/post_review(kind=`comment`, body=`each small problem, with its file and line`, pr=pr)"
     },
     {
       "id": "f4_11",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=\"request changes\", body=\"each blocking problem, with its file and line\", pr=pr)"
+      "label": "@./templates/post_review(kind=`request changes`, body=`each blocking problem, with its file and line`, pr=pr)"
     },
     {
       "id": "f5",

@@ -28,7 +28,7 @@ fn write(base: &Path, rel: &str, text: &str) {
 
 /// A flow whose entry has the given description.
 fn flow_text(desc: &str) -> String {
-    format!("/** {desc} */\nexport default function main() {{\n  return \"ok\";\n}}\n")
+    format!("/** {desc} */\nexport default function main() {{\n  return `ok`;\n}}\n")
 }
 
 fn names(flows: &[Flow]) -> Vec<(String, Scope, Option<Scope>)> {
@@ -135,7 +135,7 @@ fn description_is_the_first_paragraph_of_the_doc_comment() {
     write(
         &repo,
         "rein/merge-pr/main.rein",
-        "/**\n * Decide whether a pull request\n * can be merged.\n *\n * @x later text\n */\nexport default function main() {\n  return \"ok\";\n}\n",
+        "/**\n * Decide whether a pull request\n * can be merged.\n *\n * @x later text\n */\nexport default function main() {\n  return `ok`;\n}\n",
     );
     let flows = discover(&repo, None, &[]);
     assert_eq!(

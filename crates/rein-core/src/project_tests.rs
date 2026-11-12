@@ -27,7 +27,7 @@ fn temp_project(tag: &str) -> PathBuf {
     write(
         "merge_pr.rein",
         "/** Merge a pull request. */\nexport default function mergePr(\n  /** CI status? */\n  ci: \"green\" | \"red\" | \"pending\",\n) {\n\
-         switch (ci) {\n    case \"green\": return \"merge\";\n    case \"red\": return @./ci/fix;\n    case \"pending\": return @./nope;\n}\n}\n",
+         switch (ci) {\n    case \"green\": return `merge`;\n    case \"red\": return @./ci/fix;\n    case \"pending\": return @./nope;\n}\n}\n",
     );
     write(
         "ci/fix.rein",
@@ -35,7 +35,7 @@ fn temp_project(tag: &str) -> PathBuf {
     );
     write(
         "bad-name.rein",
-        "/** x */\nexport default function bad() {\n  return \"y\";\n}\n",
+        "/** x */\nexport default function bad() {\n  return `y`;\n}\n",
     );
     fs::create_dir_all(root.join("nested/deeper")).unwrap();
     root
@@ -110,7 +110,7 @@ fn template_only_used_in_a_nested_call_is_bound_and_reachable() {
     let project = Project::from_sources(
         root.clone(),
         vec![
-            (root.join("main.rein"), "/** m */\nexport default function main() { return delegate(model=@./tpl(a=\"x\"), task=\"task\") }\n".to_string()),
+            (root.join("main.rein"), "/** m */\nexport default function main() { return delegate(model=@./tpl(a=`x`), task=`task`) }\n".to_string()),
             (root.join("tpl.rein"), "/** t */\nexport default function tpl(\n  /** A */ a: string,\n) { return `Hi ${a}` }\n".to_string()),
         ],
     );
@@ -125,7 +125,7 @@ fn template_only_used_in_a_nested_call_is_bound_and_reachable() {
 
 #[test]
 fn syntax_error_reports_only_the_syntax_error() {
-    let diags = check_one("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return )");
+    let diags = check_one("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `1` } return )");
     assert_eq!(diags.len(), 1, "{diags:?}");
     assert_eq!(diags[0].severity, Severity::Error);
 }
@@ -184,7 +184,7 @@ fn follows_symlinks_and_survives_symlink_loops() {
     let root = temp_project("links");
     fs::write(
         root.join("real.rein"),
-        "/** d */\nexport default function real() { return \"x\" }\n",
+        "/** d */\nexport default function real() { return `x` }\n",
     )
     .unwrap();
     std::os::unix::fs::symlink(root.join("real.rein"), root.join("alias.rein")).unwrap();
@@ -201,7 +201,7 @@ fn project_of(files: &[(&str, &str)]) -> Project {
     let root = PathBuf::from("/proj");
     let mut sources = vec![(
         root.join("main.rein"),
-        "/** m */\nexport default function main() { return \"m\" }\n".to_string(),
+        "/** m */\nexport default function main() { return `m` }\n".to_string(),
     )];
     sources.extend(
         files
@@ -271,7 +271,7 @@ fn missing_main_is_a_project_error() {
         root.clone(),
         vec![(
             root.join("f.rein"),
-            "/** d */\nexport default function f() { return \"x\" }".into(),
+            "/** d */\nexport default function f() { return `x` }".into(),
         )],
     );
     let errs = project.project_diagnostics();
@@ -303,11 +303,11 @@ fn unreachable_function_is_a_warning() {
         ),
         (
             "deep/leaf",
-            "/** l */\nexport default function leaf() { return \"ok\" }\n",
+            "/** l */\nexport default function leaf() { return `ok` }\n",
         ),
         (
             "orphan",
-            "/** o */\nexport default function orphan() { return \"alone\" }\n",
+            "/** o */\nexport default function orphan() { return `alone` }\n",
         ),
     ]);
     let diags = project.check();
@@ -337,7 +337,7 @@ fn main_with_syntax_error_skips_reachability() {
             ),
             (
                 root.join("orphan.rein"),
-                "/** o */\nexport default function orphan() { return \"alone\" }\n".to_string(),
+                "/** o */\nexport default function orphan() { return `alone` }\n".to_string(),
             ),
         ],
     );
@@ -419,12 +419,12 @@ fn subdirectory_with_main_is_another_flow() {
     let root = temp_project("nested");
     fs::write(
         root.join("nested/main.rein"),
-        "/** n */\nexport default function n() { return \"n\" }\n",
+        "/** n */\nexport default function n() { return `n` }\n",
     )
     .unwrap();
     fs::write(
         root.join("nested/x.rein"),
-        "/** x */\nexport default function x() { return \"x\" }\n",
+        "/** x */\nexport default function x() { return `x` }\n",
     )
     .unwrap();
     let project = Project::load(&root).unwrap();
@@ -459,7 +459,7 @@ fn find_root_walks_up_to_main() {
 #[test]
 fn template_called_from_main_is_reachable_and_drawn() {
     let project = project_of(&[
-        ("main", "/** m */\nexport default function main(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return @./tpl(a=\"a\", b=\"b\") } return @./tpl(b=\"d\", a=\"c\") \n}\n"),
+        ("main", "/** m */\nexport default function main(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return @./tpl(a=`a`, b=`b`) } return @./tpl(b=`d`, a=`c`) \n}\n"),
         ("tpl", "/** t */\nexport default function tpl(\n  /** A */ a: string,\n  /** B */ b: string,\n) { return `${a} ${b}` }\n"),
     ]);
     let diags = project.check();
@@ -477,8 +477,8 @@ fn template_called_from_main_is_reachable_and_drawn() {
 fn a_shared_struct_binds_in_every_function_that_names_it() {
     let ticket = "/** A ticket. */\nexport default interface Ticket {\n  /** Title. */\n  title: string;\n  /** VIP? */\n  vip: boolean;\n}\n";
     let a = "/** A. */\nexport default function a({ title, vip }: @./ticket) {\n  if (vip) { return `VIP ${title}` }\n  return `Plain ${title}`\n}\n";
-    let b = "/** B. */\nexport default function b({ vip, title }: @../ticket) {\n  if (vip) { return \"x\" }\n  return @../a(title=title)\n}\n";
-    let m = "/** m */\nexport default function main() { return @./sub/b(title=\"t\") }\n";
+    let b = "/** B. */\nexport default function b({ vip, title }: @../ticket) {\n  if (vip) { return `x` }\n  return @../a(title=title)\n}\n";
+    let m = "/** m */\nexport default function main() { return @./sub/b(title=`t`) }\n";
     let project = project_of(&[
         ("ticket.struct", ticket),
         ("a", a),
@@ -521,7 +521,7 @@ fn a_shared_struct_binds_in_every_function_that_names_it() {
 fn a_missing_shared_struct_is_an_error() {
     let project = project_of(&[(
         "f",
-        "/** f */\nexport default function f({ x }: @./nope) { return \"x\" }\n",
+        "/** f */\nexport default function f({ x }: @./nope) { return `x` }\n",
     )]);
     assert!(has(
         &project.check()["f"],
@@ -536,7 +536,7 @@ fn function_of(lines: usize) -> String {
     for _ in 0..lines - 3 {
         text.push_str("  // a step\n");
     }
-    text.push_str("  return \"done\";\n}\n");
+    text.push_str("  return `done`;\n}\n");
     text
 }
 
@@ -713,7 +713,7 @@ fn program_references_are_not_in_project_edges() {
 fn function_with_line(width: usize, fill: char) -> String {
     // `  return "` is 10 characters and `";` is 2.
     let text: String = std::iter::repeat_n(fill, width - 12).collect();
-    format!("/** Long. */\nexport default function long() {{\n  return \"{text}\";\n}}\n")
+    format!("/** Long. */\nexport default function long() {{\n  return `{text}`;\n}}\n")
 }
 
 const WIDTH_81: &str = "line has 81 characters; the limit is 80. Break the line; a long text can be a template (backticks) that spans lines";

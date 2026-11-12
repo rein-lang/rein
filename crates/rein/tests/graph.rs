@@ -127,8 +127,8 @@ fn ids_are_unique_and_labels_are_escaped() {
     fs::create_dir_all(root.join("ci")).unwrap();
     fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./ci/fix;\n}\n").unwrap();
     fs::write(root.join("ci/fix.rein"), "/** F. */\nexport default function fix() {\n  return \"say \\\"f\\\"\";\n}\n").unwrap();
-    fs::write(root.join("ci__fix.rein"), "/** C. */\nexport default function ci__fix() {\n  return \"c\";\n}\n").unwrap();
-    fs::write(root.join("my task.rein"), "/** M. */\nexport default function m() {\n  return \"m\";\n}\n").unwrap();
+    fs::write(root.join("ci__fix.rein"), "/** C. */\nexport default function ci__fix() {\n  return `c`;\n}\n").unwrap();
+    fs::write(root.join("my task.rein"), "/** M. */\nexport default function m() {\n  return `m`;\n}\n").unwrap();
 
     let text = stdout(&rein(&["graph", "--refs", "--root", root.to_str().unwrap()]));
     for label in ["f0[[\"ci/fix\"]]", "f1[[\"ci__fix\"]]", "f2([\"main\"])", "f3[[\"my task\"]]", "f2 --> f0"] {

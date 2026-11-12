@@ -1,8 +1,8 @@
 //! Recursive descent parser: tokens to a `Function` syntax tree.
 
 use crate::ast::{
-    Arg, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, Param, ReturnValue, Spanned, Stmt, Struct, StructParam,
-    StructRef, TemplateLit, Value,
+    Arg, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
+    StructParam, StructRef, TemplateLit, Value,
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::doc::parse_doc;
@@ -79,12 +79,23 @@ impl Parser {
         }
     }
 
+    /// A tag: a quoted string in a type, a `case` label, or a comparison. A template there is an error that shows
+    /// the quoted form.
     fn string(&mut self, expected: &str) -> Result<Spanned<String>, Diagnostic> {
-        if let Tok::Str(value) = self.peek().clone() {
-            let span = self.bump();
-            Ok(Spanned { value, span })
-        } else {
-            Err(self.unexpected(expected))
+        match self.peek().clone() {
+            Tok::Str(value) => {
+                let span = self.bump();
+                Ok(Spanned { value, span })
+            }
+            Tok::Template(pieces) => {
+                let text = match pieces.as_slice() {
+                    [] => "",
+                    [Piece::Text(t)] if !t.contains('\n') => t.as_str(),
+                    _ => "...",
+                };
+                Err(Diagnostic::error(self.span(), format!("a tag uses quotes: write \"{text}\" instead of `{text}`")))
+            }
+            _ => Err(self.unexpected(expected)),
         }
     }
 
@@ -425,7 +436,10 @@ impl Parser {
             return Err(Diagnostic::error(start, "`return` needs a value: a string, a template, or `@./function`"));
         }
         let (value, span) = match self.peek().clone() {
-            Tok::Str(s) => (ReturnValue::Text(s), self.bump()),
+            Tok::Str(s) => {
+                let span = self.bump();
+                (ReturnValue::Text(Spanned { value: s, span }), span)
+            }
             Tok::Template(_) => {
                 let lit = self.template_lit()?;
                 let span = lit.span;
