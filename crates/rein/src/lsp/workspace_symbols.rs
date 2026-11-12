@@ -74,13 +74,5 @@ fn fuzzy(query: &str, name: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::fuzzy;
-
-    #[test]
-    fn fuzzy_matches_characters_in_order() {
-        assert!(fuzzy("bref", "billing/refund"));
-        assert!(fuzzy("", "main"));
-        assert!(!fuzzy("fb", "billing/refund"));
-    }
-}
+#[path = "workspace_symbols_tests.rs"]
+mod tests;
