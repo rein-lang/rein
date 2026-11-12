@@ -86,7 +86,7 @@ fn eval_red_ci_returns_ref_to_the_project_path() {
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["kind"], "ref");
-    assert_eq!(v["function"], "ci/fix");
+    assert_eq!(v["function"], "merge_pr/fix");
     assert_eq!(v["inputs"][0]["name"], "fixPushed");
 }
 
@@ -411,14 +411,14 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 #[test]
 fn running_a_template_is_an_error() {
-    let out = rein(&["eval", "templates/tell_customer", "--root", "examples/rein/support-ticket"]);
+    let out = rein(&["eval", "refund/tell_customer", "--root", "examples/rein/support-ticket"]);
     assert_eq!(code(&out), 1);
     assert!(String::from_utf8_lossy(&out.stderr).contains("templates are called from functions, not run"));
 }
 
 #[test]
 fn describe_shows_template_params_as_strings() {
-    let out = rein(&["describe", "templates/tell_customer", "--root", "examples/rein/support-ticket"]);
+    let out = rein(&["describe", "refund/tell_customer", "--root", "examples/rein/support-ticket"]);
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["inputs"][0]["type"], "string");
@@ -427,26 +427,26 @@ fn describe_shows_template_params_as_strings() {
 
 #[test]
 fn review_code_delegates_by_risk() {
-    let out = rein(&["eval", "review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=yes", "--json"]);
+    let out = rein(&["eval", "merge_pr/review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=yes", "--json"]);
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["kind"], "text");
     assert!(v["value"].as_str().unwrap().contains("Model: use opus model"), "{v}");
 
-    let out = rein(&["eval", "review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=no", "--json"]);
+    let out = rein(&["eval", "merge_pr/review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=no", "--json"]);
     assert!(json(&out)["value"].as_str().unwrap().contains("Model: use haiku model"));
 }
 
 #[test]
 fn faq_asks_the_agent_for_the_answer_then_continues() {
-    let out = rein(&["eval", "answer/faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--json"]);
+    let out = rein(&["eval", "faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--json"]);
     assert_eq!(code(&out), 3);
     let v = json(&out);
     assert_eq!(v["kind"], "request");
     assert_eq!(v["response"]["name"], "solved");
     assert_eq!(v["response"]["type"], "boolean");
 
-    let out = rein(&["eval", "answer/faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--set", "solved=no"]);
+    let out = rein(&["eval", "faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--set", "solved=no"]);
     assert_eq!(code(&out), 0);
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("next: escalate"));
 }
