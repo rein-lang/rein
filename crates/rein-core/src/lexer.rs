@@ -14,6 +14,8 @@ pub enum Tok {
     Template(Vec<Piece>),
     /// A reference such as `@./ci/fix`, with the path as written.
     Ref(String),
+    /// A bare `@`: the type of a callback parameter, such as `then: @`.
+    At,
     /// A word Rein reserves so it can give a helpful error, such as `for` or `const`.
     Reserved(String),
     Import,
@@ -81,6 +83,7 @@ impl Tok {
             Tok::Case => "case",
             Tok::Return => "return",
             Tok::Boolean => "boolean",
+            Tok::At => "@",
             Tok::LBrace => "{",
             Tok::RBrace => "}",
             Tok::LParen => "(",
@@ -261,6 +264,10 @@ fn lex_program(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
     let rest = &src[pos + 1..];
     let len = rest.find(|c: char| !(is_ident_char(c) || c == '-' || c == '/')).unwrap_or(rest.len());
     let path = &rest[..len];
+    // `@` with no name after it is the callback type, such as `then: @`.
+    if len == 0 && !rest.starts_with(['.', '-']) {
+        return Ok((Tok::At, pos + 1));
+    }
     let span = Span::new(pos, pos + 1 + len);
     let mut segments = path.split('/');
     let program = segments.next().unwrap_or_default();

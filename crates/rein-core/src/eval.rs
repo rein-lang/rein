@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::{Arg, Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, Struct, TemplateLit, Value};
-use crate::check::{string_in_condition, struct_in_use};
+use crate::check::{callback_in_use, string_in_condition, struct_in_use};
 
 /// Result of a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +96,11 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                     Some(Binding::Function(path)) => Outcome::Ref { target: path.clone(), args: named_values(env, &call.args)? },
                     _ => Outcome::Text(expand_call(env, call)?),
                 },
+                ReturnValue::Callback(name) => match declared(env, &name.value)?.ty {
+                    // The value is already the qualified path of the function the caller passed.
+                    InputType::Callback => Outcome::Ref { target: provided(env, &name.value)?.to_string(), args: Vec::new() },
+                    _ => return Err(Stop::Error(format!("`{}` is not a callback", name.value))),
+                },
             }),
             Stmt::If { cond, then, .. } => {
                 if eval(env, cond)? {
@@ -111,6 +116,7 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                     InputType::Text => return Err(Stop::Error(string_in_condition(&subject.value))),
                     InputType::Bool => return Err(bool_in_switch(&subject.value)),
                     InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&subject.value))),
+                    InputType::Callback => return Err(Stop::Error(callback_in_use(&subject.value))),
                 };
                 let raw = provided(env, &subject.value)?;
                 check_member(&subject.value, members, raw)?;
@@ -146,6 +152,7 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
                     }
                     InputType::Choice(members) => check_member(&n.value, members, provided(env, &n.value)?)?,
                     InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&n.value))),
+                    InputType::Callback => return Err(Stop::Error(callback_in_use(&n.value))),
                     InputType::Text => {}
                 }
                 out.push_str(provided(env, &n.value)?);
@@ -155,10 +162,10 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
     Ok(out)
 }
 
-/// The value of a `string` parameter of this function, for a bare name argument.
+/// The value of a `string` or callback parameter of this function, for a bare name argument.
 fn string_input(env: &Env, name: &str) -> Eval<String> {
     match declared(env, name)?.ty {
-        InputType::Text => Ok(provided(env, name)?.to_string()),
+        InputType::Text | InputType::Callback => Ok(provided(env, name)?.to_string()),
         _ => Err(Stop::Error(format!("`{name}` is not a string input"))),
     }
 }
@@ -204,6 +211,8 @@ fn expand_value(env: &Env, v: &Value) -> Eval<String> {
         Value::Template(lit) => expand_template(env, lit),
         Value::Name(n) => string_input(env, &n.value),
         Value::Call(call) => expand_call(env, call),
+        // A callback argument: the qualified path of the function it names.
+        Value::Ref(r) => target(env, &r.value),
     }
 }
 
@@ -221,6 +230,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
             match input.ty {
                 InputType::Text => Err(Stop::Error(string_in_condition(&v.value))),
                 InputType::Struct(_) => Err(Stop::Error(struct_in_use(&v.value))),
+                InputType::Callback => Err(Stop::Error(callback_in_use(&v.value))),
                 InputType::Bool => parse_bool(&v.value, provided(env, &v.value)?),
                 InputType::Choice(_) => Err(Stop::Error(format!(
                     "union parameter `{0}` needs a comparison, like `{0} === \"...\"`",
@@ -234,6 +244,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
                 return Err(match input.ty {
                     InputType::Text => Stop::Error(string_in_condition(&var.value)),
                     InputType::Struct(_) => Stop::Error(struct_in_use(&var.value)),
+                    InputType::Callback => Stop::Error(callback_in_use(&var.value)),
                     _ => bool_compared(&var.value),
                 });
             };
@@ -267,7 +278,7 @@ fn check_answer(f: &Function, input: &Input, raw: &str) -> Eval<()> {
     match &input.ty {
         InputType::Bool => parse_bool(name, raw).map(|_| ()),
         InputType::Choice(members) => check_member(name, members, raw),
-        InputType::Text => Ok(()),
+        InputType::Text | InputType::Callback => Ok(()),
         InputType::Struct(_) => match f.answer_struct(name) {
             Some(Ok(s)) => struct_values(name, s, raw).map(|_| ()).map_err(Stop::Error),
             Some(Err(msg)) => Err(Stop::Error(msg.clone())),
@@ -308,6 +319,7 @@ pub fn struct_values(name: &str, s: &Struct, raw: &str) -> Result<Vec<(String, S
             }
             (InputType::Text | InputType::Choice(_), _) => return Err(format!("field `{key}` must be a string")),
             (InputType::Struct(_), _) => return Err(format!("field `{key}` cannot be a struct")),
+            (InputType::Callback, _) => return Err(format!("field `{key}` cannot be a callback")),
         };
         out.push((key, text));
     }

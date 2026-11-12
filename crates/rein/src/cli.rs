@@ -109,7 +109,11 @@ pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, 
         Ok(request) => {
             let flow = flow.or_else(|| request.flow.clone());
             match load_flow(root, flow) {
-                Ok((project, entry)) => {
+                Ok((mut project, entry)) => {
+                    // A callback input such as `then=@program` may name a program the source does not name.
+                    let named = request.inputs.values().filter_map(|v| v.strip_prefix('@')).filter(|v| !v.starts_with('.'));
+                    let names = named.map(|v| v.split('/').next().unwrap_or_default().to_string()).collect();
+                    project.link_program_names(names, &|name| scopes::find(name).map(|f| (f.root, f.entry)));
                     let mut request = request;
                     if request.entry == ENTRY {
                         request.entry = entry;
@@ -447,6 +451,7 @@ fn input_json(input: &Input) -> Value {
         InputType::Choice(_) => "union",
         InputType::Text => "string",
         InputType::Struct(_) => "struct",
+        InputType::Callback => "callback",
     };
     let mut v = json!({
         "name": input.name.value,

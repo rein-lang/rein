@@ -154,9 +154,9 @@ impl Function {
         self.input_struct = Some(found);
     }
 
-    /// The `string` parameters, in declaration order. Their values come from the caller.
-    pub fn text_inputs(&self) -> impl Iterator<Item = &Input> {
-        self.inputs.iter().filter(|i| i.ty == InputType::Text)
+    /// The `string` and callback (`@`) parameters, in declaration order. Their values come from the caller.
+    pub fn passed_inputs(&self) -> impl Iterator<Item = &Input> {
+        self.inputs.iter().filter(|i| matches!(i.ty, InputType::Text | InputType::Callback))
     }
 }
 
@@ -279,12 +279,16 @@ pub enum InputType {
     Text,
     /// A struct answer: an inline `interface` or a shared `@./name`. Only a `request` answer has it.
     Struct(StructRef),
+    /// `@`: a callback, a function the caller passes, such as `then=@./after`. The function returns it
+    /// (`return then;`) or passes it on. Its value is the qualified path of the function, such as `after` or
+    /// `@pr-handling/main`.
+    Callback,
 }
 
 impl InputType {
     pub fn options(&self) -> Option<Vec<&str>> {
         match self {
-            InputType::Bool | InputType::Text | InputType::Struct(_) => None,
+            InputType::Bool | InputType::Text | InputType::Struct(_) | InputType::Callback => None,
             InputType::Choice(o) => Some(o.iter().map(|s| s.value.as_str()).collect()),
         }
     }
@@ -294,6 +298,7 @@ impl InputType {
         match self {
             InputType::Bool => "boolean".to_string(),
             InputType::Text => "string".to_string(),
+            InputType::Callback => "@".to_string(),
             InputType::Struct(r) => r.name().value.clone(),
             InputType::Choice(o) => o.iter().map(|s| format!("\"{}\"", s.value)).collect::<Vec<_>>().join(" | "),
         }
@@ -352,6 +357,8 @@ pub enum ReturnValue {
     Template(TemplateLit),
     /// A call of a template, such as `return delegate(model="a", task="b");` or `return @./tpl(a="a", b="b");`.
     Call(Call),
+    /// A callback parameter, such as `return then;`. It hands the agent to the function the caller passed.
+    Callback(Spanned<String>),
 }
 
 /// One part of a template literal.
@@ -374,15 +381,17 @@ pub struct TemplateLit {
 pub enum Value {
     Str(Spanned<String>),
     Template(TemplateLit),
-    /// A bare name of a `string` parameter of the caller. Only a call argument can be one.
+    /// A bare name of a `string` or callback parameter of the caller. Only a call argument can be one.
     Name(Spanned<String>),
     Call(Call),
+    /// A reference such as `@./after` or `@program`, passed to a callback parameter. Only a hand-off argument can be one.
+    Ref(Spanned<String>),
 }
 
 impl Value {
     pub fn span(&self) -> Span {
         match self {
-            Value::Str(s) | Value::Name(s) => s.span,
+            Value::Str(s) | Value::Name(s) | Value::Ref(s) => s.span,
             Value::Template(lit) => lit.span,
             Value::Call(call) => call.span,
         }

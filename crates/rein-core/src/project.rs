@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
+use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, InputType, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
 use crate::check::{check_function, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::parser::parse;
@@ -194,29 +194,45 @@ impl Project {
 
     /// Loads each program that a `@program` or `@program/function` names. `find` gives the root and entry of a
     /// program by name, as the scopes resolve it. The CLI passes it, because scopes live on the machine, not here.
+    ///
+    /// Linking is transitive: the programs that a linked program names are linked here too, in one flat table by
+    /// name. So `rein step` can follow a hand-off or a callback from one program into any other, and back.
     pub fn link_programs(&mut self, find: &FindProgram) {
-        let names: BTreeSet<String> = self
-            .files
-            .values()
-            .flat_map(|sf| keys(&sf.function))
-            .filter(|k| is_program_key(k))
-            .map(|k| k.split('/').next().unwrap_or_default().to_string())
-            .collect();
-        for name in names {
-            let loaded = find(&name).and_then(|(root, entry)| {
-                let project = Project::load(&root).map_err(|e| format!("cannot read program `{name}`: {e}"))?;
+        self.link_program_names(program_names(self), find);
+    }
+
+    /// Links the programs called `names`, then every program that those name, until none is new.
+    pub fn link_program_names(&mut self, names: BTreeSet<String>, find: &FindProgram) {
+        let mut queue: VecDeque<String> = names.into_iter().collect();
+        while let Some(name) = queue.pop_front() {
+            if self.programs.contains_key(&name) {
+                continue;
+            }
+            let loaded = find(&name).and_then(|(dir, entry)| {
+                let project = Project::load(&dir).map_err(|e| format!("cannot read program `{name}`: {e}"))?;
                 Ok(Linked { project: Box::new(project), entry })
             });
+            if let Ok(linked) = &loaded {
+                queue.extend(program_names(&linked.project));
+            }
             self.programs.insert(name, loaded);
         }
     }
 
-    /// The function to run after a hand-off from `from` to `target`. A target in another program is already
-    /// `@program/path`. Inside a linked program (`from` is `@program/path`), a local target stays in that program.
-    pub fn qualify(&self, from: &str, target: &str) -> String {
-        match from.strip_prefix('@').and_then(|f| f.split_once('/')) {
-            Some((program, _)) if !target.starts_with('@') => format!("@{program}/{target}"),
-            _ => target.to_string(),
+    /// The qualified path of a callback value as a caller gives it: `@./after` (a function of this project),
+    /// `@program` (its entry), or `@program/function`. The function must exist.
+    pub fn callback_target(&self, value: &str) -> Result<String, String> {
+        let target = match value.strip_prefix("@./") {
+            Some(local) => local.to_string(),
+            None => match value.strip_prefix('@').map(|k| self.program_binding(k)) {
+                Some(Ok(Binding::Function(path) | Binding::Template { path: Some(path), .. })) => path,
+                Some(Err(reason)) => return Err(reason),
+                _ => return Err(format!("`{value}` is not a reference; write `@./name`, `@program` or `@program/function`")),
+            },
+        };
+        match self.get(&target) {
+            Some(_) => Ok(target),
+            None => Err(format!("cannot find function `{value}`")),
         }
     }
 
@@ -252,13 +268,41 @@ impl Project {
     /// What each callee and reference of `name` refers to, keyed by [`Callee::key`]. Unresolved ones are left out.
     pub fn bindings(&self, name: &str) -> BTreeMap<String, Binding<'_>> {
         if let Some((program, path)) = name.strip_prefix('@').and_then(|n| n.split_once('/')) {
-            return self.linked(program).map_or_else(BTreeMap::new, |l| l.project.bindings(path));
+            return self.linked_bindings(program, path);
         }
         let Some(sf) = self.files.get(name) else { return BTreeMap::new() };
         keys(&sf.function)
             .into_iter()
             .filter_map(|key| Some((key.clone(), self.binding_for(name, &key).ok()?)))
             .collect()
+    }
+
+    /// The bindings of `path` in the linked `program`. A local path gets the `@program/` prefix, and a program
+    /// reference resolves in this project's flat table, so every function path here is qualified.
+    fn linked_bindings(&self, program: &str, path: &str) -> BTreeMap<String, Binding<'_>> {
+        let linked = self.linked(program);
+        let Some((linked, sf)) = linked.and_then(|l| Some((l, l.project.files.get(path)?))) else {
+            return BTreeMap::new();
+        };
+        let qualify = |p: String| match p.starts_with('@') {
+            true => p,
+            false => format!("@{program}/{p}"),
+        };
+        let mut out = BTreeMap::new();
+        for key in keys(&sf.function) {
+            let found = match is_program_key(&key) {
+                true => self.program_binding(&key),
+                false => linked.project.binding_for(path, &key),
+            };
+            let binding = match found {
+                Ok(Binding::Function(p)) => Binding::Function(qualify(p)),
+                Ok(Binding::Template { path, function }) => Binding::Template { path: path.map(qualify), function },
+                Ok(Binding::Request) => Binding::Request,
+                Err(_) => continue,
+            };
+            out.insert(key, binding);
+        }
+        out
     }
 
     /// What a callee or reference written in function `from` refers to, or why it does not resolve.
@@ -302,9 +346,14 @@ impl Project {
     /// `string` parameters, and a template the names of all its parameters, so a call can bind them by name.
     fn kind_for(&self, from: &str, key: &str) -> Result<Kind, String> {
         Ok(match self.binding_for(from, key)? {
-            Binding::Function(path) => Kind::Function {
-                strings: self.get(&path).map_or_else(Vec::new, |sf| param_names(sf.function.text_inputs())),
-            },
+            Binding::Function(path) => {
+                let function = self.get(&path).map(|sf| &sf.function);
+                let callbacks = function.map(|f| f.inputs.iter().filter(|i| i.ty == InputType::Callback));
+                Kind::Function {
+                    strings: function.map_or_else(Vec::new, |f| param_names(f.passed_inputs())),
+                    callbacks: callbacks.map_or_else(Vec::new, param_names),
+                }
+            }
             Binding::Template { function, .. } => Kind::Template { params: param_names(function.inputs.iter()) },
             Binding::Request => Kind::Request,
         })
@@ -468,6 +517,12 @@ fn collect(
     Ok(())
 }
 
+/// The names of the programs that `project` references.
+fn program_names(project: &Project) -> BTreeSet<String> {
+    let keys = project.files.values().flat_map(|sf| keys(&sf.function));
+    keys.filter(|k| is_program_key(k)).map(|k| k.split('/').next().unwrap_or_default().to_string()).collect()
+}
+
 /// Whether a reference key names another program: it is not a relative path and not a std name.
 fn is_program_key(key: &str) -> bool {
     !(key.starts_with("./") || key.starts_with("../")) && crate::stdlib::item(key).is_err()
@@ -505,8 +560,16 @@ fn keys(f: &Function) -> BTreeSet<String> {
             ReturnValue::Ref(reference) => {
                 out.insert(reference.value.clone());
             }
-            ReturnValue::Call(call) => out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string())),
-            ReturnValue::Text(_) | ReturnValue::Template(_) => {}
+            ReturnValue::Call(call) => {
+                for c in call.calls() {
+                    out.insert(c.callee.key().to_string());
+                    out.extend(c.args.iter().filter_map(|a| match &a.value {
+                        Value::Ref(r) => Some(r.value.clone()),
+                        _ => None,
+                    }));
+                }
+            }
+            ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => {}
         },
         Stmt::Request { callee, arg, .. } => {
             out.insert(callee.value.clone());

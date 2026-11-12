@@ -772,10 +772,10 @@ fn workspace_symbols_search_every_program() {
     let root = example("support-ticket");
     assert_eq!(spot_of(&root, &found[0]["location"]), spot("billing/refund.rein", 3, 24, 3, 30));
 
-    // An empty query lists every function of the four example programs.
+    // An empty query lists every function of the five example programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
-    assert_eq!(all_symbols.len(), 22, "{all}");
+    assert_eq!(all_symbols.len(), 24, "{all}");
     assert!(
         all_symbols.iter().any(|s| s["name"] == "templates/message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"
