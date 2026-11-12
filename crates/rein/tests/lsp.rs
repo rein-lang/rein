@@ -1012,6 +1012,75 @@ fn rename_refuses_to_move_a_folder_into_another_flow() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+/// A project where `a` holds `a/b`, which calls `../target`. Returns its root, canonical.
+fn folder_project(tag: &str) -> PathBuf {
+    let root = fs::canonicalize(temp_project(tag)).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return `b`;\n}\n");
+    root
+}
+
+#[test]
+fn rename_refuses_to_leave_a_file_of_the_folder_behind() {
+    let root = folder_project("rename-left-behind");
+    fs::write(root.join("a/notes.md"), "Notes.\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`a/notes.md` is not a `.rein` file of the project"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_to_move_through_a_symlinked_folder() {
+    let root = folder_project("rename-symlink");
+    fs::create_dir_all(root.join("elsewhere")).unwrap();
+    fs::write(root.join("elsewhere/x.md"), "X.\n").unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere"), root.join("a/linked")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`a/linked` is a symbolic link"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_to_move_a_file_with_a_broken_reference() {
+    let root = folder_project("rename-broken-ref");
+    // `a/b` refers to `../nope`, which does not exist. Moved to `c/b`, the text would point at another function.
+    fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../nope;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`@../nope` in `a/b` does not resolve"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn rename_a_function_needs_a_client_that_renames_files() {
     let root = example("support-ticket");
@@ -1197,6 +1266,44 @@ fn quick_fix_moves_a_function_into_the_folder_of_its_only_caller() {
     let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
     let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
     assert_eq!(diag["severity"], 2, "{diag}");
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![
+                (spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string()),
+                (spot("steps/fix_ci.rein", 2, 9, 2, 19), "@../../target".to_string()),
+            ],
+            vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_leaves_out_a_name_edit_that_changes_nothing() {
+    // `fix_ci` keeps its name when it moves, so writing its function name again changes nothing and is not sent.
+    let root = fs::canonicalize(temp_project("nest-same-name")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fix_ci() {\n  return @../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "`steps/fix_ci` is only called by `flow/merge`; move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
     let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
     let actions = server.request(2, "textDocument/codeAction", params);
     let action = &actions["result"][0];

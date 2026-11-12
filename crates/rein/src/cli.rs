@@ -125,16 +125,20 @@ pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, 
 }
 
 /// The project and its entry function for `--root DIR`, a program name or `.rein` path, or the nearest root from
-/// here. A name's entry comes from the program manifest, else `main`. A file's entry is its name.
+/// here. A root's entry is `entry` in `rein.json`, else `main`, as `rein check` uses it. A name's entry comes from
+/// the program manifest. A file's entry is its name.
 pub(crate) fn load_flow(root: Option<PathBuf>, flow: Option<String>) -> Result<(Project, String), String> {
     match (root, flow) {
         (Some(_), Some(_)) => Err("--flow and --root are mutually exclusive".to_string()),
-        (Some(root), None) => Ok((load(Some(root))?, ENTRY.to_string())),
         (None, Some(name)) => {
             let (root, entry) = scopes::locate(&name)?;
             Ok((load(Some(root))?, entry))
         }
-        (None, None) => Ok((load(None)?, ENTRY.to_string())),
+        (root, None) => {
+            let project = load(root)?;
+            let entry = project.entry().to_string();
+            Ok((project, entry))
+        }
     }
 }
 
