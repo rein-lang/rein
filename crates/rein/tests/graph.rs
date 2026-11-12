@@ -204,6 +204,8 @@ fn html_page_has_the_diagram_the_pinned_mermaid_and_the_legend() {
         "<code>merge.ci</code>",
         "<code>--answer main.task=merge</code>",
         "<code>--input pr=https://x/pr/1</code>",
+        "@media (prefers-color-scheme: dark)",
+        "theme: dark ? \"dark\" : \"default\"",
     ];
     for part in parts {
         assert!(page.contains(part), "{part}\n{page}");

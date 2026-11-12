@@ -5,14 +5,42 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <style>
-  body { margin: 0; padding: 16px; font: 14px/1.5 system-ui, sans-serif; background: #fff; color: #111; }
+  /* Colors are tokens. The OS picks the dark set. */
+  :root {
+    color-scheme: light;
+    --bg: #fff; --fg: #111; --muted: #666; --line: #ddd;
+    --ok-bg: #dcfce7; --ok-line: #16a34a; --hot-bg: #fde68a; --hot: #d97706;
+    --unresolved: #c00;
+    --dim-fill: #f3f4f6; --dim-line: #9ca3af; --dim-text: #374151;
+    --edge-bg: #e8e8e8; --edge-text: #333;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115; --fg: #e5e7eb; --muted: #a3a3a3; --line: #3f3f46;
+      --ok-bg: #14532d; --ok-line: #22c55e; --hot-bg: #78350f; --hot: #fbbf24;
+      --unresolved: #f87171;
+      --dim-fill: #26282e; --dim-line: #52525b; --dim-text: #d4d4d8;
+      --edge-bg: #1c1f26; --edge-text: #e5e7eb;
+    }
+  }
+  body { margin: 0; padding: 16px; font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
   h1 { font-size: 18px; margin: 0 0 8px; }
   .legend span { display: inline-block; margin-right: 16px; }
   .legend i { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border: 2px solid; border-radius: 3px; }
-  .legend .taken { background: #dcfce7; border-color: #16a34a; }
-  .legend .current { background: #fde68a; border-color: #d97706; }
-  .legend .dimmed { background: #fff; border-color: #999; opacity: 0.4; }
+  .legend .taken { background: var(--ok-bg); border-color: var(--ok-line); }
+  .legend .current { background: var(--hot-bg); border-color: var(--hot); }
+  .legend .dimmed { background: var(--bg); border-color: var(--muted); opacity: 0.4; }
   pre.mermaid { overflow-x: auto; }
+  /* Mermaid draws taken and current nodes with light fills. Their text stays dark in both themes. */
+  pre.mermaid .taken *, pre.mermaid .current * { color: #111 !important; }
+  pre.mermaid .unresolved * { color: var(--unresolved) !important; }
+  pre.mermaid .dimmed .label-container { fill: var(--dim-fill) !important; stroke: var(--dim-line) !important; opacity: 1 !important; }
+  /* Mermaid's own SVG style sets opacity 0.4 on dimmed labels. The :not(#_) adds an id's weight to win over it. */
+  pre.mermaid svg:not(#_) .dimmed > *, pre.mermaid svg:not(#_) .dimmed span { opacity: 1 !important; }
+  pre.mermaid .dimmed span, pre.mermaid .dimmed p { color: var(--dim-text) !important; }
+  pre.mermaid .edgeLabel, pre.mermaid .edgeLabel p, pre.mermaid .edgeLabel rect, pre.mermaid .labelBkg { background-color: var(--edge-bg) !important; fill: var(--edge-bg) !important; opacity: 1 !important; }
+  pre.mermaid .edgeLabel span, pre.mermaid .edgeLabel p { color: var(--edge-text) !important; }
 </style>
 </head>
 <body>
@@ -21,7 +49,8 @@ __WALK__<pre class="mermaid">
 __DIAGRAM__</pre>
 <script type="module">
   import mermaid from "__MERMAID__";
-  mermaid.initialize({ startOnLoad: true, securityLevel: "strict" });
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({ startOnLoad: true, securityLevel: "strict", theme: dark ? "dark" : "default" });
 </script>
 </body>
 </html>
