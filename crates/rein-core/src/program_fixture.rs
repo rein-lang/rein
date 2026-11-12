@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::flows::{Flow, Scope};
 use crate::project::{Linked, Project};
 
 const TARGET: &str = "interface Input {\n  /** The PR link. */\n  pr: string;\n  /** Is the PR a draft? */\n  draft: boolean;\n  /** What to do. */\n  task: \"review\" | \"merge\";\n}\n/** Handle a PR. */\nexport default function main({ pr, draft, task }: Input) {\n  if (draft) {\n    return `Skip ${pr}.`;\n  }\n  return `Do ${task} on ${pr}.`;\n}\n";
@@ -16,7 +17,17 @@ pub fn with_program(body: &str) -> Project {
 pub fn with_main(main: String) -> Project {
     let mut project = Project::from_sources(PathBuf::from("/p"), vec![(PathBuf::from("/p/main.rein"), main)]);
     let target = Project::from_sources(PathBuf::from("/t"), vec![(PathBuf::from("/t/main.rein"), TARGET.to_string())]);
-    let linked = Linked { project: Box::new(target), entry: "main".into() };
+    let flow = Flow {
+        name: "pr-handling".into(),
+        scope: Scope::User,
+        root: PathBuf::from("/t"),
+        description: String::new(),
+        entry: "main".into(),
+        shadowed_by: None,
+        version: None,
+        engines_rein: None,
+    };
+    let linked = Linked { project: Box::new(target), entry: "main".into(), flow };
     project.programs.insert("pr-handling".into(), Ok(linked));
     project
 }

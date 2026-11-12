@@ -1,8 +1,6 @@
 //! Completion: reference paths after `@`, argument names inside a call, union members after `===` or `case`,
 //! and elsewhere the parameter names, std names and keywords.
 
-use std::path::Path;
-
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation, Range,
     TextDocumentPositionParams, TextEdit,
@@ -62,8 +60,8 @@ fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Opt
         .keys()
         .filter(|n| n.as_str() != from && is_struct(n) == in_type)
         .map(|n| format!("@{}", relative_import(from, n.strip_suffix(STRUCT_SUFFIX).unwrap_or(n))));
-    // A struct type is never in another program.
-    let programs = if in_type { Vec::new() } else { program_labels(&project.root, typed) };
+    // A struct type is never in another program, and `@./` and `@../` name no program.
+    let programs = if in_type || typed.starts_with("@.") { Vec::new() } else { program_labels(project, typed) };
     let items = locals
         .chain(programs)
         .filter(|label| label.starts_with(typed))
@@ -77,17 +75,25 @@ fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Opt
     Some(items)
 }
 
-/// `@name` for each program visible from `root`. Once `@name/` is typed, `@name/path` for each function of that
-/// program. The scopes resolve as `rein check` run in `root` resolves them.
-fn program_labels(root: &Path, typed: &str) -> Vec<String> {
-    let visible = crate::scopes::discover_from(root);
+/// `@name` for each program visible from the project root. Once `@name/` is typed, `@name/path` for each function of
+/// that program. A program the project already references is read from its linked copy, which holds its open buffers.
+/// Otherwise the scopes are searched, as `rein check` run in the project root resolves them.
+fn program_labels(project: &Project, typed: &str) -> Vec<String> {
     match typed[1..].split_once('/') {
-        Some((program, _)) => {
-            let Ok(flow) = crate::scopes::find_in(&visible, program) else { return Vec::new() };
-            let Ok(other) = Project::load(&flow.root) else { return Vec::new() };
-            other.functions().map(|(n, _)| format!("@{program}/{n}")).collect()
+        Some((program, _)) => match project.programs.get(program) {
+            Some(Ok(linked)) => linked.project.functions().map(|(n, _)| format!("@{program}/{n}")).collect(),
+            Some(Err(_)) => Vec::new(),
+            None => {
+                let visible = crate::scopes::discover_from(&project.root);
+                let Ok(flow) = crate::scopes::find_in(&visible, program) else { return Vec::new() };
+                let Ok(other) = Project::load(&flow.root) else { return Vec::new() };
+                other.functions().map(|(n, _)| format!("@{program}/{n}")).collect()
+            }
+        },
+        None => {
+            let visible = crate::scopes::discover_from(&project.root);
+            visible.iter().filter(|f| f.shadowed_by.is_none()).map(|f| format!("@{}", f.name)).collect()
         }
-        None => visible.iter().filter(|f| f.shadowed_by.is_none()).map(|f| format!("@{}", f.name)).collect(),
     }
 }
 
