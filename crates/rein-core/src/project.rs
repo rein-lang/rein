@@ -192,23 +192,58 @@ impl Project {
         self.programs.get(program)?.as_ref().ok()
     }
 
-    /// Loads each program that a `@program` or `@program/function` names. `find` gives the root and entry of a
-    /// program by name, as the scopes resolve it. The CLI passes it, because scopes live on the machine, not here.
+    /// Loads each program that a `@program` or `@program/function` names, and the programs those name, and so on.
+    /// All of them sit here, at the top, so a hand-off from one program to the next resolves. `find` gives the root
+    /// and entry of a program by name, as the scopes resolve it. The CLI passes it, because scopes live on the
+    /// machine, not here.
     pub fn link_programs(&mut self, find: &FindProgram) {
-        let names: BTreeSet<String> = self
-            .files
-            .values()
-            .flat_map(|sf| keys(&sf.function))
-            .filter(|k| is_program_key(k))
-            .map(|k| k.split('/').next().unwrap_or_default().to_string())
-            .collect();
-        for name in names {
+        let mut queue: VecDeque<String> = program_names(&self.files).into_iter().collect();
+        while let Some(name) = queue.pop_front() {
+            if self.programs.contains_key(&name) {
+                continue;
+            }
             let loaded = find(&name).and_then(|(root, entry)| {
                 let project = Project::load(&root).map_err(|e| format!("cannot read program `{name}`: {e}"))?;
                 Ok(Linked { project: Box::new(project), entry })
             });
+            if let Ok(linked) = &loaded {
+                queue.extend(program_names(&linked.project.files));
+            }
             self.programs.insert(name, loaded);
         }
+    }
+
+    /// One error per program reference that a hand-off from `name` can reach inside other programs and that does
+    /// not resolve: a program that is not installed, or a function it does not have. A reference written in `name`
+    /// itself is the checker's error, so it is not repeated here. The run would fail when it reached the reference,
+    /// so the agent learns it before the first step.
+    fn missing_programs(&self, name: &str, f: &Function) -> Vec<Diagnostic> {
+        let bindings = self.bindings(name);
+        let mut queue: VecDeque<String> = keys(f)
+            .into_iter()
+            .filter(|k| is_program_key(k))
+            .filter_map(|k| bound_path(bindings.get(&k)?))
+            .collect();
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        while let Some(from) = queue.pop_front() {
+            if !seen.insert(from.clone()) {
+                continue;
+            }
+            let Some(sf) = self.get(&from) else { continue };
+            let bindings = self.bindings(&from);
+            for key in keys(&sf.function) {
+                match bindings.get(&key) {
+                    Some(b) => queue.extend(bound_path(b).map(|t| self.qualify(&from, &t))),
+                    None if is_program_key(&key) => {
+                        let reason = self.program_binding(&key).err().unwrap_or_default();
+                        out.push(Diagnostic::error(Span::default(), format!("`{from}` hands off to `@{key}`: {reason}")));
+                    }
+                    None => {}
+                }
+            }
+        }
+        out
     }
 
     /// The function to run after a hand-off from `from` to `target`. A target in another program is already
@@ -252,7 +287,16 @@ impl Project {
     /// What each callee and reference of `name` refers to, keyed by [`Callee::key`]. Unresolved ones are left out.
     pub fn bindings(&self, name: &str) -> BTreeMap<String, Binding<'_>> {
         if let Some((program, path)) = name.strip_prefix('@').and_then(|n| n.split_once('/')) {
-            return self.linked(program).map_or_else(BTreeMap::new, |l| l.project.bindings(path));
+            let Some(linked) = self.linked(program) else { return BTreeMap::new() };
+            let mut out = linked.project.bindings(path);
+            // The programs a linked program names are linked here, at the top, so they resolve here.
+            let program_keys = linked.project.files.get(path).map(|sf| keys(&sf.function)).unwrap_or_default();
+            for key in program_keys.into_iter().filter(|k| is_program_key(k)) {
+                if let Ok(b) = self.program_binding(&key) {
+                    out.insert(key, b);
+                }
+            }
+            return out;
         }
         let Some(sf) = self.files.get(name) else { return BTreeMap::new() };
         keys(&sf.function)
@@ -324,6 +368,7 @@ impl Project {
                 let mut diags = Vec::new();
                 let resolve = |path: &str| self.kind_for(name, path);
                 diags.extend(check_function(&sf.function, name, &resolve));
+                diags.extend(self.missing_programs(name, &sf.function));
                 if !is_struct(name) {
                     diags.extend(check_length(&sf.function, name, &sf.text, self.max_function_lines));
                 }
@@ -471,6 +516,24 @@ fn collect(
 /// Whether a reference key names another program: it is not a relative path and not a std name.
 fn is_program_key(key: &str) -> bool {
     !(key.starts_with("./") || key.starts_with("../")) && crate::stdlib::item(key).is_err()
+}
+
+/// The program names that `@program` references in `files` name.
+fn program_names(files: &BTreeMap<String, SourceFile>) -> BTreeSet<String> {
+    files
+        .values()
+        .flat_map(|sf| keys(&sf.function))
+        .filter(|k| is_program_key(k))
+        .map(|k| k.split('/').next().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// The function a binding runs, if it runs one.
+fn bound_path(b: &Binding<'_>) -> Option<String> {
+    match b {
+        Binding::Function(path) | Binding::Template { path: Some(path), .. } => Some(path.clone()),
+        _ => None,
+    }
 }
 
 /// Why a `@program` has no program behind it.

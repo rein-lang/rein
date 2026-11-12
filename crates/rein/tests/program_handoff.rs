@@ -105,3 +105,66 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     assert!(text.contains("Handle https://x/pr/2.") && text.contains("\"main.pick\":{\"pr\""), "{text}");
     fs::remove_dir_all(&home).unwrap();
 }
+
+/// Installs `a`, which asks one question and hands off to `b`, and `b`, which asks one question and returns
+/// `b_call`, and `c`, which is done at once. Returns the REIN_HOME.
+fn chain(tag: &str, b_call: &str) -> PathBuf {
+    let home = std::env::temp_dir().join(format!("rein-handoff-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&home);
+    let ask = |name: &str, call: &str| {
+        format!("/** {name}. */\nexport default function main(\n  /** Go on? */\n  go: boolean,\n) {{\n  if (go) {{\n    return {call};\n  }}\n  return `stop`;\n}}\n")
+    };
+    program(&home, "a", &ask("A", "@b/main"));
+    program(&home, "b", &ask("B", b_call));
+    program(&home, "c", "/** C. */\nexport default function main() {\n  return `done c`;\n}\n");
+    home
+}
+
+/// The first step of `a` is an error that names `missing`, and `rein check` and `rein run` report the same.
+fn assert_first_step_names(home: &Path, missing: &str) {
+    let out = rein(home, &["step", "a", "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"kind\":\"error\"") && text.contains(missing), "{text}");
+    let out = rein(home, &["check", home.join("a").to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains(missing), "{out:?}");
+    let out = rein(home, &["run", "a"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(missing), "{out:?}");
+}
+
+#[test]
+fn a_chain_of_hand_offs_with_every_program_installed_runs() {
+    let home = chain("present", "@c/main");
+    let out = rein(&home, &["check", home.join("a").to_str().unwrap()]);
+    assert!(out.status.success(), "{out:?}");
+    let out = rein(&home, &["step", "a", "--json"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let out = rein(&home, &["step", "a", "--answer", "main.go=true", "--answer", "@b/main.go=true", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("done c") && text.contains("@c/main"), "{text}");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_program_missing_behind_another_program() {
+    let home = chain("transitive", "@d/main");
+    assert_first_step_names(&home, "`@b/main` hands off to `@d/main`: unknown program `d`; run `rein list` to list programs, or `rein install -g d` to install it");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_function_missing_in_an_installed_program() {
+    let home = chain("nofn", "@c/other");
+    assert_first_step_names(&home, "`@b/main` hands off to `@c/other`: cannot find function `other` in program `c`");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_program_missing_from_the_entry() {
+    let home = chain("direct", "@c/main");
+    fs::remove_dir_all(home.join("b")).unwrap();
+    assert_first_step_names(&home, "unknown program `b`; run `rein list` to list programs, or `rein install -g b` to install it");
+    fs::remove_dir_all(&home).unwrap();
+}
