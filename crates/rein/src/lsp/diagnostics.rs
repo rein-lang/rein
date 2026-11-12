@@ -51,13 +51,12 @@ pub fn refresh(connection: &Connection, docs: &Docs, published: &mut BTreeSet<Ur
             lists.entry(open.unwrap_or_else(|| changed.clone())).or_default().extend(extra);
         }
     }
-    // A file in a folder the loader skips is in no project, so it has no diagnostics. It gets one hint saying why.
-    let mut opened: BTreeSet<Url> = published.iter().cloned().collect();
-    opened.insert(changed.clone());
-    for uri in opened {
-        let Some(path) = doc_path(&uri) else { continue };
+    // A file in a folder the loader skips is in no project, so it has no diagnostics. An open one gets one hint
+    // saying why. Only open buffers are chosen, so a closed file, or one that moved, is left out and gets an empty list below.
+    for uri in docs.keys() {
+        let Some(path) = doc_path(uri) else { continue };
         if let Some(folder) = skipped_folder_of(&Project::find_root(&path), &path) {
-            lists.entry(uri).or_default().push(skipped_hint(&folder));
+            lists.entry(uri.clone()).or_default().push(skipped_hint(&folder));
         }
     }
     for stale in published.iter().filter(|u| !lists.contains_key(*u)) {
