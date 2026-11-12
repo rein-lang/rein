@@ -66,7 +66,7 @@ pub fn find(name: &str) -> Result<Flow, String> {
 pub fn find_in(all: &[Flow], name: &str) -> Result<Flow, String> {
     match flows::resolve(all, name) {
         Some(flow) => Ok(flow.clone()),
-        None => Err(format!("unknown program `{name}`; run `rein list` to list programs")),
+        None => Err(format!("unknown program `{name}`; run `rein list` to list programs, or `rein install -g {name}` to install it")),
     }
 }
 
