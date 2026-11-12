@@ -637,7 +637,7 @@ fn step_follows_a_hand_off_into_another_program() {
     assert_eq!(instruction, "Do merge on https://x/pr/1.");
 }
 
-const PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(\"pick a PR\");\n  return @pr-handling/main(pr=pick.pr);\n}\n";
+const PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return @pr-handling/main(pr=pick.pr);\n}\n";
 
 #[test]
 fn struct_answer_asks_for_a_json_object_with_the_fields_of_the_struct() {
@@ -682,7 +682,7 @@ fn struct_answer_field_reaches_the_hand_off() {
 
 #[test]
 fn shared_struct_answer_field_decides_a_branch() {
-    let main = "/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: @./pick = await request(\"pick a PR\");\n  if (pick.urgent) {\n    return `Hurry ${pick.pr}.`;\n  }\n  return `Handle ${pick.pr}.`;\n}\n";
+    let main = "/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: @./pick = await request(`pick a PR`);\n  if (pick.urgent) {\n    return `Hurry ${pick.pr}.`;\n  }\n  return `Handle ${pick.pr}.`;\n}\n";
     let shared = "/** A picked PR. */\nexport default interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n";
     let p = project(&[("main.rein", main), ("pick.struct.rein", shared)]);
     let res = step(&p, &req("main", &[("main.pick", "{\"pr\":\"u/1\",\"urgent\":true}")]));

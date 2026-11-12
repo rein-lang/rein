@@ -764,21 +764,21 @@ export default async function f() {
     );
 }
 
-const PICK: &str = "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** d */\nexport default async function f() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(\"pick a PR\");\n";
+const PICK: &str = "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** d */\nexport default async function f() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n";
 
 #[test]
 fn struct_answer_is_used_in_a_hand_off_a_template_a_switch_and_a_condition() {
     clean(&format!("{PICK}  return @./merge(pr=pick.pr);\n}}"));
-    clean(&format!("{PICK}  return @./tpl(a=pick.pr, b=\"x\");\n}}"));
+    clean(&format!("{PICK}  return @./tpl(a=pick.pr, b=`x`);\n}}"));
     clean(&format!("{PICK}  return `Handle ${{pick.pr}}.`;\n}}"));
-    clean(&format!("{PICK}  if (pick.urgent) {{\n    return \"now\";\n  }}\n  return \"later\";\n}}"));
-    clean(&format!("{PICK}  switch (pick.task) {{\n    case \"review\":\n      return @./merge(pr=pick.pr);\n    case \"merge\":\n      return \"merge it\";\n  }}\n}}"));
+    clean(&format!("{PICK}  if (pick.urgent) {{\n    return `now`;\n  }}\n  return `later`;\n}}"));
+    clean(&format!("{PICK}  switch (pick.task) {{\n    case \"review\":\n      return @./merge(pr=pick.pr);\n    case \"merge\":\n      return `merge it`;\n  }}\n}}"));
 }
 
 #[test]
 fn bare_string_answer_is_an_error() {
     expect_diag(
-        "/** d */\nexport default async function f() {\n  /** The link. */\n  const pr: string = await request(\"pick a PR\");\n  return @./merge(pr=pr);\n}",
+        "/** d */\nexport default async function f() {\n  /** The link. */\n  const pr: string = await request(`pick a PR`);\n  return @./merge(pr=pr);\n}",
         Severity::Error,
         "a `string` answer is not allowed; answer a struct with a `string` field",
     );
@@ -788,14 +788,14 @@ fn bare_string_answer_is_an_error() {
 fn unknown_field_of_a_struct_answer_is_an_error() {
     let msg = "`z` is not a field of `Pick`; fields are pr, task, urgent";
     expect_diag(&format!("{PICK}  return @./merge(pr=pick.z);\n}}"), Severity::Error, msg);
-    expect_diag(&format!("{PICK}  if (pick.z) {{\n    return \"a\";\n  }}\n  return \"b\";\n}}"), Severity::Error, msg);
+    expect_diag(&format!("{PICK}  if (pick.z) {{\n    return `a`;\n  }}\n  return `b`;\n}}"), Severity::Error, msg);
     expect_diag(&format!("{PICK}  return `${{pick.z}}`;\n}}"), Severity::Error, msg);
 }
 
 #[test]
 fn string_field_cannot_decide_a_branch() {
     expect_diag(
-        &format!("{PICK}  if (pick.pr) {{\n    return \"a\";\n  }}\n  return \"b\";\n}}"),
+        &format!("{PICK}  if (pick.pr) {{\n    return `a`;\n  }}\n  return `b`;\n}}"),
         Severity::Error,
         "`pick.pr` is a string input; a condition cannot read it",
     );
@@ -804,7 +804,7 @@ fn string_field_cannot_decide_a_branch() {
 #[test]
 fn struct_answer_itself_is_not_a_value() {
     expect_diag(
-        &format!("{PICK}  if (pick) {{\n    return \"a\";\n  }}\n  return \"b\";\n}}"),
+        &format!("{PICK}  if (pick) {{\n    return `a`;\n  }}\n  return `b`;\n}}"),
         Severity::Error,
         "`pick` is a struct answer; read one of its fields, like `pick.field`",
     );
@@ -813,7 +813,7 @@ fn struct_answer_itself_is_not_a_value() {
 #[test]
 fn struct_answer_must_name_a_struct() {
     expect_diag(
-        "/** d */\nexport default async function f() {\n  /** The pick. */\n  const pick: Missing = await request(\"pick\");\n  return \"x\";\n}",
+        "/** d */\nexport default async function f() {\n  /** The pick. */\n  const pick: Missing = await request(`pick`);\n  return `x`;\n}",
         Severity::Error,
         "cannot find struct `Missing`",
     );
