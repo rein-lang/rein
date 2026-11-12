@@ -107,23 +107,11 @@ enum Command {
         #[arg(long)]
         root: Option<PathBuf>,
     },
-    /// Print the program graph: functions, questions, branches, outcomes, and hand-offs.
+    /// Print the program graph: functions, questions, branches, outcomes, and hand-offs. With answers, mark the
+    /// path the flow takes.
     Graph {
-        /// Program to draw: a `.rein` file, or a name (see `rein list`). Default: the project around the current directory.
-        #[arg(conflicts_with = "root")]
-        program: Option<String>,
-        /// Project root. Default: the nearest directory with main.rein.
-        #[arg(long)]
-        root: Option<PathBuf>,
-        /// Draw only the references: one node per function, one edge per reference.
-        #[arg(long)]
-        refs: bool,
-        /// Output format.
-        #[arg(long, value_enum, default_value = "mermaid")]
-        format: graph::GraphFormat,
-        /// Write to FILE instead of stdout. A `.svg` or `.png` FILE is rendered from DOT by Graphviz `dot`.
-        #[arg(long, short, value_name = "FILE")]
-        output: Option<PathBuf>,
+        #[command(flatten)]
+        args: graph::GraphArgs,
     },
     /// List the programs visible from here, as `ls` lists files: names, or `-l` for details. Operands are name globs.
     #[command(alias = "flows")]
@@ -195,7 +183,7 @@ fn main() -> ExitCode {
             cli::step(entry, root, flow.or(program), &answer, &input, stdin, json)
         }
         Command::Describe { function, root } => cli::describe(&function, root),
-        Command::Graph { program, root, refs, format, output } => graph::run(program, root, refs, format, output.as_deref()),
+        Command::Graph { args } => graph::run(&args),
         Command::List { args } => list::run(&args),
         Command::Show { name } => programs::show(&name),
         Command::Serve { mcp: true } => mcp::serve(),

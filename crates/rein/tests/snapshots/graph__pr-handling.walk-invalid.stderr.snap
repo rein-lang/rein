@@ -1,0 +1,5 @@
+---
+source: crates/rein/tests/graph.rs
+expression: err
+---
+error: invalid value `ship` for `task`; expected one of: `review`, `address comments`, `fix ci`, `merge`
