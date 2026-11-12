@@ -83,7 +83,7 @@ fn read_entry(root: &Path) -> String {
     fs::read_to_string(root.join(crate::flows::MANIFEST))
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|m| Some(m.get("entry")?.as_str()?.trim_end_matches(".rein").to_string()))
+        .and_then(|m| Some(crate::flows::entry_name(m.get("entry")?.as_str()?)))
         .unwrap_or_else(|| ENTRY.to_string())
 }
 
@@ -334,7 +334,7 @@ impl Project {
     pub fn check(&self) -> BTreeMap<String, Vec<Diagnostic>> {
         let adj = self.adjacency();
         let reachable = self.reachable_from_entry(&adj);
-        let callers = callers_of(&adj);
+        let placements = self.placements(&adj, reachable.as_ref());
         self.files
             .iter()
             .map(|(name, sf)| {
@@ -352,14 +352,12 @@ impl Project {
                 diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &adj));
                 if !is_struct(name) && reachable.as_ref().is_some_and(|r| !r.contains(name)) {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
-                    diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from main")));
+                    let entry = &self.entry;
+                    diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from {entry}")));
                 }
-                if let Some((caller, home)) = self.misplaced(name, &callers) {
+                if let Some(placement) = placements.get(name) {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
-                    let msg = format!(
-                        "`{name}` is only called by `{caller}`; move it to `{home}.rein` so the folders show the flow"
-                    );
-                    diags.push(Diagnostic::warning(span, msg));
+                    diags.push(Diagnostic::warning(span, placement.message(name)));
                 }
                 diags.sort_by_key(|d| (d.span.start, d.span.end));
                 (name.clone(), diags)
@@ -369,9 +367,44 @@ impl Project {
 
     /// Where function `name` belongs when one other function calls it: in a folder named after that caller,
     /// next to the caller's file. Callees of the entry stay in the entry's folder, the program root.
-    /// None when `name` is a struct, the entry, has no caller or more than one, or is already in place.
+    /// None when `name` is a struct, the entry, not reachable from the entry, has no caller or more than one,
+    /// is already in place, or cannot move there because the path is taken or another function belongs there too.
     pub fn nest_target(&self, name: &str) -> Option<String> {
-        self.misplaced(name, &callers_of(&self.adjacency())).map(|(_, home)| home)
+        let adj = self.adjacency();
+        let reachable = self.reachable_from_entry(&adj);
+        match self.placements(&adj, reachable.as_ref()).remove(name)? {
+            Placement { home, clash, .. } if clash.is_empty() => Some(home),
+            _ => None,
+        }
+    }
+
+    /// The nesting warning of each function that is not where the rule puts it. A function not reachable from
+    /// the entry is left out: the reachability warning covers it, and unreachable functions that call each
+    /// other would each be told to move into the other's folder. A target path that another file already has
+    /// is left out too, since the move cannot happen. Two functions with one target name each other.
+    fn placements(
+        &self,
+        adj: &BTreeMap<String, BTreeSet<String>>,
+        reachable: Option<&BTreeSet<String>>,
+    ) -> BTreeMap<String, Placement> {
+        let callers = callers_of(adj);
+        let mut out: BTreeMap<String, Placement> = BTreeMap::new();
+        for (name, _) in self.functions() {
+            if reachable.is_some_and(|r| !r.contains(name)) {
+                continue;
+            }
+            let Some((caller, home)) = self.misplaced(name, &callers) else { continue };
+            if self.files.contains_key(&home) {
+                continue;
+            }
+            out.insert(name.clone(), Placement { caller: caller.to_string(), home, clash: Vec::new() });
+        }
+        let homes: Vec<(String, String)> = out.iter().map(|(n, p)| (n.clone(), p.home.clone())).collect();
+        for (name, placement) in &mut out {
+            placement.clash =
+                homes.iter().filter(|(n, h)| n != name && *h == placement.home).map(|(n, _)| n.clone()).collect();
+        }
+        out
     }
 
     /// The only caller of `name` and the project path `name` should have, when it is not there yet.
@@ -408,14 +441,15 @@ impl Project {
             .collect()
     }
 
-    /// Functions reachable from `main` through references. None when `main` is missing or has a syntax error.
+    /// Functions reachable from the entry (`main`, or `entry` in `rein.json`) through references. None when the
+    /// entry is missing or has a syntax error.
     fn reachable_from_entry(&self, adj: &BTreeMap<String, BTreeSet<String>>) -> Option<BTreeSet<String>> {
-        let entry = self.files.get(ENTRY)?;
+        let entry = self.files.get(&self.entry)?;
         if !entry.parse_diagnostics.is_empty() {
             return None;
         }
         let mut seen = BTreeSet::new();
-        let mut queue = VecDeque::from([ENTRY.to_string()]);
+        let mut queue = VecDeque::from([self.entry.clone()]);
         while let Some(name) = queue.pop_front() {
             if seen.insert(name.clone()) {
                 queue.extend(adj.get(&name).into_iter().flatten().cloned());
@@ -456,6 +490,35 @@ impl Project {
                 ))
             })
             .collect()
+    }
+}
+
+/// Where the nesting rule puts a function that is not there yet.
+struct Placement {
+    /// The only caller.
+    caller: String,
+    /// The project path the function belongs at.
+    home: String,
+    /// Other functions that belong at the same path. Then none of them can move until one is renamed.
+    clash: Vec<String>,
+}
+
+impl Placement {
+    /// The warning for function `name`.
+    fn message(&self, name: &str) -> String {
+        let Placement { caller, home, clash } = self;
+        if clash.is_empty() {
+            return format!(
+                "`{name}` is only called by `{caller}`; move it to `{home}.rein` so the folders show the flow. \
+                 The move changes its answer keys and breaks `@<program>/{name}` references from other programs"
+            );
+        }
+        let others: Vec<String> = clash.iter().map(|c| format!("`{c}`")).collect();
+        format!(
+            "`{name}` is only called by `{caller}`, but `{home}.rein` is also the place for {}; rename one of them, \
+             then move each into the folder of its caller",
+            others.join(", ")
+        )
     }
 }
 

@@ -203,7 +203,7 @@ pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
     let manifest: Manifest = read_json(&root.join(MANIFEST)).unwrap_or_default();
     let package: PackageJson = read_json(&root.join(PACKAGE)).unwrap_or_default();
     let entry_file = manifest.entry.unwrap_or_else(|| MAIN_FILE.to_string());
-    let entry = entry_file.strip_suffix(".rein").unwrap_or(&entry_file).to_string();
+    let entry = entry_name(&entry_file);
     let description = package
         .description
         .or(manifest.description)
@@ -211,6 +211,11 @@ pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
     let name = package.name.or(manifest.name).unwrap_or(folder);
     let engines_rein = package.engines.and_then(|e| e.rein);
     Some(Flow { name, scope, root, description, entry, shadowed_by: None, version: package.version, engines_rein })
+}
+
+/// The function name of an entry file, such as `main` for `main.rein`. `rein.json` names the file.
+pub(crate) fn entry_name(file: &str) -> String {
+    file.strip_suffix(".rein").unwrap_or(file).to_string()
 }
 
 /// The JSON file at `path`, or None when it is missing or not valid.

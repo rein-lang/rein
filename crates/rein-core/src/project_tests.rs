@@ -859,3 +859,85 @@ fn a_function_called_only_by_the_entry_belongs_at_the_root() {
     assert!(has(&project.check()["security/review"], Severity::Warning, warning));
     assert_eq!(project.nest_target("security/review").as_deref(), Some("review"));
 }
+
+#[test]
+fn the_nesting_warning_says_a_move_changes_keys_and_program_references() {
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("a", "/** a */\nexport default function a() { return @./steps/leaf }\n"),
+        ("steps/leaf", "/** l */\nexport default function leaf() { return `ok` }\n"),
+    ]);
+    let tail = "The move changes its answer keys and breaks `@<program>/steps/leaf` references from other programs";
+    assert!(has(&project.check()["steps/leaf"], Severity::Warning, tail), "{:?}", project.check()["steps/leaf"]);
+}
+
+#[test]
+fn two_callees_with_one_target_name_each_other_and_get_no_move() {
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("a", &branch("a", "@./x/leaf", "@./y/leaf")),
+        ("x/leaf", "/** l */\nexport default function leaf() { return `x` }\n"),
+        ("y/leaf", "/** l */\nexport default function leaf() { return `y` }\n"),
+    ]);
+    let diags = project.check();
+    let clash = "`x/leaf` is only called by `a`, but `a/leaf.rein` is also the place for `y/leaf`; rename one of them";
+    assert!(has(&diags["x/leaf"], Severity::Warning, clash), "{:?}", diags["x/leaf"]);
+    assert!(has(&diags["y/leaf"], Severity::Warning, "is also the place for `x/leaf`"), "{:?}", diags["y/leaf"]);
+    for name in ["x/leaf", "y/leaf"] {
+        assert!(!has(&diags[name], Severity::Warning, "folders show the flow"), "{name}: {:?}", diags[name]);
+        assert_eq!(project.nest_target(name), None, "{name}");
+    }
+}
+
+#[test]
+fn a_target_path_that_another_file_has_gives_no_warning() {
+    // `x/leaf` belongs at `a/leaf`, but `a/leaf` is another function, so `x/leaf` cannot move there.
+    let taken = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("a", &branch("a", "@./x/leaf", "@./a/leaf")),
+        ("a/leaf", "/** l */\nexport default function leaf() { return @../y/leaf }\n"),
+        ("x/leaf", "/** l */\nexport default function leaf() { return `x` }\n"),
+        ("y/leaf", "/** l */\nexport default function leaf() { return `y` }\n"),
+    ]);
+    let diags = taken.check();
+    assert!(!has(&diags["x/leaf"], Severity::Warning, "only called by"), "{:?}", diags["x/leaf"]);
+    assert_eq!(taken.nest_target("x/leaf"), None);
+    assert_eq!(taken.nest_target("y/leaf").as_deref(), Some("a/leaf/leaf"));
+}
+
+#[test]
+fn unreachable_functions_get_no_nesting_warning() {
+    // `u` and `v` only call each other. Each has one caller, but neither is reachable from main.
+    let project = project_of(&[
+        ("u", "/** u */\nexport default function u() { return @./v }\n"),
+        ("v", "/** v */\nexport default function v() { return @./u }\n"),
+    ]);
+    let diags = project.check();
+    for name in ["u", "v"] {
+        assert!(has(&diags[name], Severity::Warning, "is not reachable from main"), "{name}: {:?}", diags[name]);
+        assert!(!has(&diags[name], Severity::Warning, "only called by"), "{name}: {:?}", diags[name]);
+        assert_eq!(project.nest_target(name), None, "{name}");
+    }
+}
+
+#[test]
+fn reachability_starts_at_the_entry_from_the_manifest() {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-entry-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "flow.rein"}"#);
+    write("main.rein", "/** m */\nexport default function main() { return `m` }\n");
+    write("flow.rein", "/** f */\nexport default function flow() { return @./step }\n");
+    write("step.rein", "/** s */\nexport default function step() { return `s` }\n");
+    let project = Project::load(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    let diags = project.check();
+    // `step` is reached from `flow`, the entry, and only `flow` calls it, so it stays at the root.
+    assert!(diags["step"].is_empty(), "{:?}", diags["step"]);
+    assert!(diags["flow"].is_empty(), "{:?}", diags["flow"]);
+    assert!(has(&diags["main"], Severity::Warning, "`main` is not reachable from flow"), "{:?}", diags["main"]);
+}
