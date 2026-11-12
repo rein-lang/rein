@@ -472,8 +472,16 @@ impl Project {
         // The entry inside it would move too, and `rein.json` would name a file that is gone.
         let folder = format!("{name}/");
         // A path the loader skips would drop the function out of the project.
-        let blocked = home.starts_with(&folder) || self.entry.starts_with(&folder) || !loadable_path(&home);
+        let blocked = home.starts_with(&folder) || self.entry.starts_with(&folder) || !self.loads(&home);
         (home != name && !blocked).then_some((caller.as_str(), home))
+    }
+
+    /// Whether the loader finds a function at the project path `path` in this project: [`loadable_path`], and no
+    /// folder on the way below the root holds its own `main.rein`, which makes that folder another flow.
+    pub fn loads(&self, path: &str) -> bool {
+        let folders: Vec<&str> = path.split('/').collect();
+        let mut below_root = (1..folders.len()).map(|n| folders[..n].join("/"));
+        loadable_path(path) && !below_root.any(|d| self.root.join(d).join(MAIN_FILE).is_file())
     }
 
     /// Distinct `(function, reference)` pairs for every `@program` or `@program/function` in the project.

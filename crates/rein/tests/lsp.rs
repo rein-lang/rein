@@ -988,6 +988,31 @@ fn rename_refuses_to_move_a_folder_into_a_path_the_project_skips() {
 }
 
 #[test]
+fn rename_refuses_to_move_a_folder_into_another_flow() {
+    let root = fs::canonicalize(temp_project("rename-nested-flow")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return `b`;\n}\n");
+    write("tools/main.rein", "/** Tools. */\nexport default function main() {\n  return `t`;\n}\n");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("tools");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`tools/b` is a path the project does not load"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn rename_a_function_needs_a_client_that_renames_files() {
     let root = example("support-ticket");
     let mut server = Server::start();

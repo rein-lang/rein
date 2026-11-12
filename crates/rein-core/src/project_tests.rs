@@ -959,6 +959,28 @@ fn a_path_the_loader_skips_is_never_a_nesting_target() {
 }
 
 #[test]
+fn a_folder_with_its_own_main_is_never_a_nesting_target() {
+    // `pick` belongs in `x/`, but `x/main.rein` makes `x/` another flow that the loader skips.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-nested-flow-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("main.rein", "/** m */\nexport default function main() { return @./x }\n");
+    write("x.rein", "/** x */\nexport default function x() { return @./pick }\n");
+    write("pick.rein", "/** p */\nexport default function pick() { return `p` }\n");
+    write("x/main.rein", "/** n */\nexport default function main() { return `n` }\n");
+    let project = Project::load(&root).unwrap();
+    assert!(project.loads("pick") && !project.loads("x/pick") && project.loads("y/pick"));
+    let (diags, target) = (project.check(), project.nest_target("pick"));
+    fs::remove_dir_all(&root).unwrap();
+    assert!(!has(&diags["pick"], Severity::Warning, "only called by"), "{:?}", diags["pick"]);
+    assert_eq!(target, None);
+}
+
+#[test]
 fn the_root_main_never_gets_a_nesting_warning() {
     // With the entry `start`, `main` is a plain function called only by `foo`. It still stays at the root: the
     // project needs it, and `foo/main.rein` would make `foo/` another flow.
