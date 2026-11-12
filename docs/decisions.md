@@ -69,6 +69,46 @@ Each choice can change. The reason is one line.
 
 - Bundle tool: compiles a program into one self-contained `.rein` file, so an agent can load one file and run it as a full program.
 
+## Cross-program references (proposal)
+
+Status: proposal. Not built. Today a reference stays inside its program. See [spec.md](spec.md#references).
+
+This example shows the proposed form. A `support-ticket` program calls the `main` function of a `refunds` program. It passes `ticket` by name.
+
+```ts
+/**
+ * Decide how the support agent handles a customer ticket.
+ */
+export default function main(
+  /** The ticket link. */
+  ticket: string,
+) {
+  return @refunds/main(ticket=ticket);
+}
+```
+
+**a. Reference syntax.** Two options:
+
+- `@refunds/main`: the first name is the program. A bare `@refunds` means its entry.
+- `@program:refunds/main`: a prefix shows that the name is a program.
+
+**Recommended:** `@refunds/main`. A reference that starts with `@./` or `@../` stays local. A program name never starts with a dot. No valid file changes meaning, because a bare `@name` is an error today. Program names can hold `-`, such as `merge-pr`. Reference names cannot hold `-` today, so the name rule changes.
+
+**b. Version pinning.** Three options:
+
+- No pin: the caller runs the installed version. A change in the called program reaches the caller unseen.
+- A `version` field in `rein.json`: the caller names the version it expects. The author must bump the field for each change.
+- A lock entry: `rein install` writes the content hash of each called program to the caller's `rein.lock`.
+
+**Recommended:** the lock entry. The hash catches every edit, and no author must remember a bump. The `version` field stays optional, as a label for people. `rein run` and `rein_start` refuse to start when the lock is stale, before the first step.
+
+**c. Run boundary.** Two options:
+
+- One shared run: the calling and called programs share one run id. The trace names each hop, such as `support-ticket/main -> refunds/main`. Each step stays one JSON line. `rein_answer` takes the same arguments.
+- A child run per called program: the call starts a new run with its own run id. The caller waits until the child ends. Each step needs its own run id. `rein_stop` on the parent must also stop its children.
+
+**Recommended:** one shared run. The interface stays the same. The agent answers one run id. Answer keys need a marker that a local folder cannot use, such as `@refunds/main.amount`. Without it, a local file `refunds/main.rein` would give the same key.
+
 ## Open questions
 
 - The one-file format. How several functions live in one file, and how references resolve inside it.
@@ -76,5 +116,5 @@ Each choice can change. The reason is one line.
 - Free-text answers. A free-text answer from the agent is still not possible. Each question is a `boolean` or a union.
 - Loops and retries. Today a retry is a reference cycle.
 - Side effects inside functions. Today a return value is text for the agent to act on, and a request is the only step that waits for the agent.
-- References across projects. Today references stay inside one project.
+- References across projects. Today references stay inside one project. See the proposal above.
 - Who answers inputs: agent judgment, or deterministic tools.
