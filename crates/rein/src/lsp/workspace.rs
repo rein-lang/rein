@@ -57,7 +57,9 @@ pub fn build_project(docs: &Docs, root: &Path) -> Project {
         let path = doc_path(uri)?;
         (Project::find_root(&path) == root).then(|| (path, text.clone()))
     }));
-    Project::from_sources(root.to_path_buf(), by_path.into_iter().collect())
+    let mut project = Project::from_sources(root.to_path_buf(), by_path.into_iter().collect());
+    project.link_programs(&|name| crate::scopes::find(name).map(|f| (f.root, f.entry)));
+    project
 }
 
 /// The project of `uri` and the function name of that file.

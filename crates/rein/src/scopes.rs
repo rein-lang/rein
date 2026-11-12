@@ -7,6 +7,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use rein_core::flows::{self, Flow, FLOW_DIR};
+use rein_core::project::Project;
 
 /// The user programs folder: `REIN_HOME`, else `$XDG_CONFIG_HOME/rein/programs`, else
 /// `~/.config/rein/programs`.
@@ -58,6 +59,13 @@ pub fn find(name: &str) -> Result<Flow, String> {
         Some(flow) => Ok(flow.clone()),
         None => Err(format!("unknown program `{name}`; run `rein list` to list programs")),
     }
+}
+
+/// Loads the project at `root`, and the programs its `@program` references name, found as `rein list` finds them.
+pub fn load_linked(root: &Path) -> std::io::Result<Project> {
+    let mut project = Project::load(root)?;
+    project.link_programs(&|name| find(name).map(|f| (f.root, f.entry)));
+    Ok(project)
 }
 
 /// The project root and entry function of a program named on the command line. A `.rein` path, or any

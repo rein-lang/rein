@@ -616,3 +616,22 @@ fn inputs_are_read_from_json_and_left_out_when_empty() {
     let empty = serde_json::to_string(&req("main", &[])).unwrap();
     assert!(!empty.contains("inputs"), "{empty}");
 }
+
+#[test]
+fn step_follows_a_hand_off_into_another_program() {
+    let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    let mut request = req("main", &[]);
+    request.inputs.insert("pr".into(), "https://x/pr/1".into());
+    let StepResponse::Question { key, function, trace, .. } = step(&p, &request) else { panic!("not a question") };
+    assert_eq!(key, "@pr-handling/main.draft");
+    assert_eq!(function, "@pr-handling/main");
+    assert_eq!(trace, ["main", "@pr-handling/main"]);
+
+    request.answers = answers(&[("@pr-handling/main.draft", "false")]);
+    let StepResponse::Question { key, .. } = step(&p, &request) else { panic!("not a question") };
+    assert_eq!(key, "@pr-handling/main.task");
+
+    request.answers = answers(&[("@pr-handling/main.draft", "false"), ("@pr-handling/main.task", "merge")]);
+    let StepResponse::Done { instruction, .. } = step(&p, &request) else { panic!("not done") };
+    assert_eq!(instruction, "Do merge on https://x/pr/1.");
+}

@@ -174,6 +174,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
         match outcome {
             // Auto-follow: the agent does not need to see a hop that asks nothing.
             Outcome::Ref { target, args } => {
+                let target = project.qualify(&current, &target);
                 let Some(next) = project.get(&target) else {
                     return failure(format!("unknown function `{target}`"), None, Vec::new(), answers, trace);
                 };

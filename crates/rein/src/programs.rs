@@ -29,7 +29,7 @@ pub fn record(f: &Flow) -> Value {
 /// Adds `first_step` to a record: the step a new run of the program starts on. It runs the program's first
 /// step, so only the JSON output asks for it.
 pub fn with_first_step(f: &Flow, mut v: Value) -> Value {
-    let first = match Project::load(&f.root) {
+    let first = match scopes::load_linked(&f.root) {
         Ok(project) => Run::start(project, f.entry.clone()).last().clone(),
         Err(e) => invalid_request(format!("cannot read {}: {e}", f.root.display())),
     };

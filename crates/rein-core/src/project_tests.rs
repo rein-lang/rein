@@ -660,3 +660,46 @@ fn struct_files_are_not_checked_for_length() {
         .iter()
         .any(|d| d.message.contains(" lines; the limit is ")));
 }
+
+fn errors(project: &Project) -> Vec<String> {
+    let all = &project.check()["main"];
+    all.iter().filter(|d| d.severity == Severity::Error).map(|d| d.message.clone()).collect()
+}
+
+#[test]
+fn program_hand_off_with_string_args_is_clean() {
+    let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    assert_eq!(errors(&p), Vec::<String>::new());
+    let bare = crate::program_fixture::with_program("return @pr-handling(pr=pr);");
+    assert_eq!(errors(&bare), Vec::<String>::new());
+}
+
+#[test]
+fn unknown_program_is_an_error_naming_it() {
+    let mut p = crate::program_fixture::with_program("return @pr-handlng/main(pr=pr);");
+    p.link_programs(&|name| Err(format!("unknown program `{name}`; run `rein list` to list programs")));
+    assert_eq!(errors(&p), ["unknown program `pr-handlng`; run `rein list` to list programs"]);
+    let unlinked = Project::from_sources(
+        PathBuf::from("/p"),
+        vec![(PathBuf::from("/p/main.rein"), "/** M. */\nexport default function main() {\n  return @nope;\n}\n".into())],
+    );
+    assert_eq!(errors(&unlinked), ["cannot find program `nope`; run `rein list` to list programs"]);
+}
+
+#[test]
+fn program_hand_off_checks_argument_names_and_function() {
+    let p = crate::program_fixture::with_program("return @pr-handling/main(url=pr);");
+    let msgs = errors(&p);
+    assert!(msgs.iter().any(|m| m.contains("`url` is not a parameter of `@pr-handling/main`; parameters are pr")), "{msgs:?}");
+    let missing = crate::program_fixture::with_program("return @pr-handling/main;");
+    assert_eq!(errors(&missing), ["`@pr-handling/main` takes 1 argument, got 0"]);
+    let nofn = crate::program_fixture::with_program("return @pr-handling/other(pr=pr);");
+    assert_eq!(errors(&nofn), ["cannot find function `other` in program `pr-handling`"]);
+}
+
+#[test]
+fn program_references_are_not_in_project_edges() {
+    let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    assert!(p.references().is_empty());
+    assert_eq!(p.program_refs(), [("main".to_string(), "pr-handling/main".to_string())]);
+}

@@ -218,18 +218,12 @@ fn lex_string(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
 }
 
 /// `@./path` or `@../path`: a reference to another function of the project, relative to this file.
+/// Any other `@` starts a reference to another program (`lex_program`).
 /// The path has no extension. Returns the path as written.
 fn lex_ref(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
     let rest = &src[pos + 1..];
     if !(rest.starts_with("./") || rest.starts_with("../")) {
-        let word = rest.find(|c: char| !is_ident_char(c)).unwrap_or(rest.len());
-        if word > 0 {
-            return Err(Diagnostic::error(
-                Span::new(pos, pos + 1 + word),
-                "references are relative: write `@./name`",
-            ));
-        }
-        return Err(Diagnostic::error(Span::new(pos, pos + 1), "a reference starts with `@./` or `@../`"));
+        return lex_program(src, pos);
     }
     let len = rest.find(|c: char| !(is_ident_char(c) || c == '/' || c == '.')).unwrap_or(rest.len());
     let path = &rest[..len];
@@ -245,6 +239,25 @@ fn lex_ref(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
         && !matches!(names.last(), Some(&"..") | None);
     if !ok {
         return Err(Diagnostic::error(span, "a reference is `@./path` or `@../path`, with path names made of letters, digits and `_`"));
+    }
+    Ok((Tok::Ref(path.to_string()), pos + 1 + len))
+}
+
+/// `@program` or `@program/function`: a reference to another installed program, by the name `rein list` shows.
+/// The program name may hold `-`. A function path holds names of letters, digits and `_`. Returns the text as written.
+fn lex_program(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
+    let rest = &src[pos + 1..];
+    let len = rest.find(|c: char| !(is_ident_char(c) || c == '-' || c == '/')).unwrap_or(rest.len());
+    let path = &rest[..len];
+    let span = Span::new(pos, pos + 1 + len);
+    let mut segments = path.split('/');
+    let program = segments.next().unwrap_or_default();
+    let ok = !program.is_empty()
+        && !program.starts_with('-')
+        && segments.all(|s| !s.is_empty() && s.chars().all(is_ident_char));
+    if !ok {
+        let message = "a reference is `@./path`, `@../path`, or `@program/function` for another program";
+        return Err(Diagnostic::error(span, message));
     }
     Ok((Tok::Ref(path.to_string()), pos + 1 + len))
 }

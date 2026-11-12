@@ -34,6 +34,8 @@ pub enum NodeKind {
     Done,
     /// The flow ends by handing a task to a subagent (`delegate(...)`).
     Delegate,
+    /// A function of another program (`@program/function`). The graph does not draw that program.
+    Program,
     /// A reference that does not resolve. `rein check` reports it.
     Unresolved,
 }
@@ -106,6 +108,14 @@ pub fn refs(project: &Project, entry: &str) -> Graph {
     for (name, sf) in project.functions() {
         b.function_node(name, sf);
     }
+    for (i, (from, target)) in project.program_refs().into_iter().enumerate() {
+        let label = format!("@{target}");
+        let id = format!("p{i}");
+        let kind = NodeKind::Program;
+        b.graph.nodes.push(Node { id: id.clone(), kind, function: label.clone(), label, entry: false, name: None, ty: None });
+        let from = b.id_of(&from);
+        b.graph.edges.push(Edge { from, to: id, kind: EdgeKind::Handoff, label: None, args: Vec::new() });
+    }
     for (from, to) in project.references() {
         let template = project.get(&to).is_some_and(|sf| sf.function.is_template());
         let kind = if template { EdgeKind::Template } else { EdgeKind::Handoff };
@@ -135,6 +145,14 @@ impl<'a> Builder<'a> {
     // ponytail: linear scan per lookup; index the names if a project ever has thousands of files.
     fn id_of(&self, name: &str) -> String {
         format!("f{}", self.project.functions().position(|(n, _)| n == name).unwrap_or_default())
+    }
+
+    /// The node a hand-off goes to: the function's node, or a new node for a function of another program.
+    fn target_node(&mut self, target: &str) -> String {
+        if target.starts_with('@') {
+            return self.node(NodeKind::Program, target.to_string());
+        }
+        self.id_of(target)
     }
 
     fn function_node(&mut self, name: &str, sf: &SourceFile) -> String {
@@ -243,7 +261,7 @@ impl<'a> Builder<'a> {
             }
             ReturnValue::Ref(r) => match self.project.binding_for(self.function, &r.value) {
                 Ok(Binding::Function(target)) => {
-                    let to = self.id_of(&target);
+                    let to = self.target_node(&target);
                     self.edge(from, &to, EdgeKind::Handoff, Vec::new());
                 }
                 _ => {
@@ -252,7 +270,7 @@ impl<'a> Builder<'a> {
             },
             ReturnValue::Call(call) => match self.project.binding_for(self.function, call.callee.key()) {
                 Ok(Binding::Function(target)) => {
-                    let to = self.id_of(&target);
+                    let to = self.target_node(&target);
                     let args = call.args.iter().map(|a| Arg { name: arg_name(a), value: value_text(&a.value) }).collect();
                     self.edge(from, &to, EdgeKind::Handoff, args);
                 }
@@ -274,6 +292,9 @@ impl<'a> Builder<'a> {
         for c in call.calls() {
             let Callee::Ref(_) = c.callee else { continue };
             if let Ok(Binding::Template { path: Some(path), .. }) = self.project.binding_for(self.function, c.callee.key()) {
+                if path.starts_with('@') {
+                    continue;
+                }
                 let to = self.id_of(&path);
                 self.edge((node.to_string(), None), &to, EdgeKind::Template, Vec::new());
             }
@@ -357,6 +378,7 @@ pub fn mermaid(g: &Graph) -> String {
             NodeKind::Request => format!("{id}[/\"{l}\"/]"),
             NodeKind::Done => format!("{id}(\"{l}\")"),
             NodeKind::Delegate => format!("{id}>\"{l}\"]"),
+            NodeKind::Program => format!("{id}[[\"{l}\"]]:::program"),
             NodeKind::Unresolved => format!("{id}[\"{l}\"]:::unresolved"),
         }
     };
@@ -379,6 +401,9 @@ pub fn mermaid(g: &Graph) -> String {
             out.push(format!("    {} {arrow}|\"{}\"| {}", e.from, esc(&lines.join("\n")), e.to));
         }
     }
+    if g.nodes.iter().any(|n| n.kind == NodeKind::Program) {
+        out.push("    classDef program stroke-dasharray:4 2".to_string());
+    }
     if g.nodes.iter().any(|n| n.kind == NodeKind::Unresolved) {
         out.push("    classDef unresolved stroke:#c00,color:#c00".to_string());
     }
@@ -396,6 +421,7 @@ pub fn dot(g: &Graph) -> String {
             NodeKind::Request => "shape=parallelogram",
             NodeKind::Done => "shape=box, style=rounded",
             NodeKind::Delegate => "shape=cds",
+            NodeKind::Program => "shape=box, style=dashed",
             NodeKind::Unresolved => "shape=octagon, color=red",
         };
         format!("{} [label=\"{}\", {shape}];", n.id, esc(&n.label))
