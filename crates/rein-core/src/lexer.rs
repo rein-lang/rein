@@ -387,15 +387,12 @@ fn lex_punct(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
         '|' if rest.starts_with("||") => (Tok::OrOr, 2),
         '|' => (Tok::Pipe, 1),
         '&' if rest.starts_with("&&") => (Tok::AndAnd, 2),
+        // `==` is read as `===`, and `!=` as `!==`: the same token, so the parser, checker and graph see one operator.
         '=' if rest.starts_with("===") => (Tok::EqEqEq, 3),
-        '=' if rest.starts_with("==") => {
-            return Err(Diagnostic::error(Span::new(pos, pos + 2), "use `===` instead of `==`"))
-        }
+        '=' if rest.starts_with("==") => (Tok::EqEqEq, 2),
         '=' => (Tok::Assign, 1),
         '!' if rest.starts_with("!==") => (Tok::NotEqEq, 3),
-        '!' if rest.starts_with("!=") => {
-            return Err(Diagnostic::error(Span::new(pos, pos + 2), "use `!==` instead of `!=`"))
-        }
+        '!' if rest.starts_with("!=") => (Tok::NotEqEq, 2),
         '!' => (Tok::Bang, 1),
         '/' if rest.starts_with("/*") => {
             return Err(Diagnostic::error(

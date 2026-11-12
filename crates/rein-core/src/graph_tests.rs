@@ -96,3 +96,12 @@ fn program_hand_off_is_an_edge_to_a_program_node() {
     assert!(r.nodes.iter().any(|n| n.kind == NodeKind::Program && n.label == "@pr-handling/main"));
     assert!(r.edges.iter().any(|e| e.kind == EdgeKind::Handoff && e.from == "f0"));
 }
+
+#[test]
+fn double_equals_is_labelled_like_triple() {
+    let params = "  /** C? */\n  c: \"x\" | \"y\" | \"z\",\n";
+    let triple = one("  if (c === \"x\") {\n    return \"a\";\n  }\n  return \"b\";", params);
+    let double = one("  if (c == \"x\") {\n    return \"a\";\n  }\n  return \"b\";", params);
+    let labels = |p: &Project| flow(p, "main").nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>();
+    assert_eq!(labels(&double), labels(&triple));
+}

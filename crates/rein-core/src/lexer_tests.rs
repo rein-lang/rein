@@ -64,12 +64,11 @@ fn operators_and_punctuation() {
 }
 
 #[test]
-fn double_equals_is_an_error() {
-    let err = lex("a == \"x\"").unwrap_err();
-    assert_eq!(err.message, "use `===` instead of `==`");
-    assert_eq!(err.span, Span::new(2, 4));
-    let err = lex("a != \"x\"").unwrap_err();
-    assert_eq!(err.message, "use `!==` instead of `!=`");
+fn double_equals_is_the_same_as_triple() {
+    assert_eq!(kinds("== != === !=="), vec![Tok::EqEqEq, Tok::NotEqEq, Tok::EqEqEq, Tok::NotEqEq, Tok::Eof]);
+    let toks = lex("a == \"x\"").unwrap();
+    assert_eq!(toks[1], (Tok::EqEqEq, Span::new(2, 4)));
+    assert_eq!(lex("a != \"x\"").unwrap()[1].0, Tok::NotEqEq);
 }
 
 #[test]

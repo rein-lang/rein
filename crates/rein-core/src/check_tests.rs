@@ -245,6 +245,31 @@ fn boolean_parameter_compared() {
 }
 
 #[test]
+fn double_equals_on_boolean_parameter_is_still_an_error() {
+    expect_diag(
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a == \"x\") { return \"1\" } return \"2\"  }",
+        Severity::Error,
+        "boolean parameter `a` cannot be compared; use `if (a)` or `if (!a)`",
+    );
+}
+
+#[test]
+fn double_equals_checks_its_union_member() {
+    expect_diag(
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c != \"z\") { return \"1\" } return \"2\"  }",
+        Severity::Error,
+        "`z` is not a member of `c`",
+    );
+}
+
+#[test]
+fn double_not_equal_uses_the_tag_quote_rule() {
+    let (_, diags) = parse("/** d */\nexport default function f(\n  /** C */ ci: \"green\" | \"red\",\n) { if (ci != `red`) { return `1` } return `2`  }");
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].message, "a tag uses quotes: write \"red\" instead of `red`");
+}
+
+#[test]
 fn boolean_parameter_as_switch_subject() {
     expect_diag(
         "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { switch (a) { case \"x\": return `1` } }",
