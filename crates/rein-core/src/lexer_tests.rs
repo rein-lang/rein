@@ -162,6 +162,47 @@ fn template_literal_escapes_and_raw_newlines() {
     assert_eq!(pieces[2], Piece::Text("\nd".into()));
 }
 
+/// The text of a template with no `${}`.
+fn template_text(src: &str) -> String {
+    let toks = lex(src).unwrap();
+    let Tok::Template(pieces) = &toks[0].0 else {
+        panic!("{:?}", toks[0].0)
+    };
+    pieces
+        .iter()
+        .map(|p| match p {
+            Piece::Text(t) => t.clone(),
+            Piece::Name(n) => panic!("unexpected name {}", n.value),
+        })
+        .collect()
+}
+
+#[test]
+fn template_dedents_the_indent_shared_by_its_lines() {
+    assert_eq!(template_text("`Read the log.\n    Fix the test.`"), "Read the log.\nFix the test.");
+    // Extra indent past the shared one stays, so a list keeps its nesting.
+    assert_eq!(template_text("`a\n    b\n      c`"), "a\nb\n  c");
+    // Blank lines do not count toward the shared indent.
+    assert_eq!(template_text("`a\n    b\n\n    c`"), "a\nb\n\nc");
+    // A line with no indent means no indent is dropped.
+    assert_eq!(template_text("`a\n  b\nc`"), "a\n  b\nc");
+    // The first line is not indented, and a template with no raw newline is unchanged.
+    assert_eq!(template_text("`  a  `"), "  a  ");
+    // An escaped `\n` is not a raw newline, so it does not trigger the dedent.
+    assert_eq!(template_text("`a\\n    b`"), "a\n    b");
+}
+
+#[test]
+fn template_dedent_keeps_interpolations() {
+    let toks = lex("`a\n    ${b}\n    c`").unwrap();
+    let Tok::Template(pieces) = &toks[0].0 else {
+        panic!("{:?}", toks[0].0)
+    };
+    assert_eq!(pieces[0], Piece::Text("a\n".into()));
+    assert!(matches!(&pieces[1], Piece::Name(n) if n.value == "b"));
+    assert_eq!(pieces[2], Piece::Text("\nc".into()));
+}
+
 #[test]
 fn template_literal_only_takes_a_name() {
     let err = lex("`${a.b}`").unwrap_err();

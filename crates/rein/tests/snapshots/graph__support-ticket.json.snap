@@ -25,7 +25,7 @@ expression: text
       "id": "f0_1",
       "kind": "request",
       "function": "answer/faq",
-      "label": "request: `Reply with the help article link and ask the customer if it solved the\n      problem.`"
+      "label": "request: `Reply with the help article link and ask the customer if it solved the\nproblem.`"
     },
     {
       "id": "f0_2",
@@ -59,7 +59,7 @@ expression: text
       "id": "f1_1",
       "kind": "done",
       "function": "billing/refund",
-      "label": "@../templates/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\n      ticket.`, nextStep=\"Then tell the customer the refund takes 5 business days.\")"
+      "label": "@../templates/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\nticket.`, nextStep=\"Then tell the customer the refund takes 5 business days.\")"
     },
     {
       "id": "f2",
@@ -71,7 +71,7 @@ expression: text
       "id": "f2_0",
       "kind": "done",
       "function": "escalate",
-      "label": "Assign the ticket to the tier 2 queue. Tell the customer a person\n    will reply within one business day. Do not promise a refund or a fix."
+      "label": "Assign the ticket to the tier 2 queue. Tell the customer a person\nwill reply within one business day. Do not promise a refund or a fix."
     },
     {
       "id": "f3",
@@ -106,7 +106,7 @@ expression: text
       "id": "f4_0",
       "kind": "done",
       "function": "templates/close_ticket",
-      "label": "Tell the customer: ${opening} ${nextStep} Then close the ticket as\n    solved."
+      "label": "Tell the customer: ${opening} ${nextStep} Then close the ticket as\nsolved."
     },
     {
       "id": "f5",

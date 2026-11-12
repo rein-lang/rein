@@ -266,6 +266,7 @@ fn lex_program(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
 fn lex_template(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
     let mut pieces = Vec::new();
     let mut text = String::new();
+    let indent = template_indent(src, pos);
     let mut i = pos + 1;
     loop {
         let Some(c) = src[i..].chars().next() else {
@@ -298,6 +299,18 @@ fn lex_template(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
                 pieces.push(Piece::Name(Spanned { value, span: Span::new(name_start, name_end) }));
                 i = name_end + 1;
             }
+            '\n' => {
+                // Dedent: a raw newline keeps its line break, and the indent shared by every line after the
+                // first is dropped from the next line. Extra indent past the shared one stays.
+                text.push('\n');
+                i += 1;
+                for _ in 0..indent {
+                    match src[i..].chars().next() {
+                        Some(ws @ (' ' | '\t')) => i += ws.len_utf8(),
+                        _ => break,
+                    }
+                }
+            }
             '\\' => {
                 let escaped = match src[i + 1..].chars().next() {
                     Some(q @ ('`' | '\\' | '$')) => q,
@@ -318,6 +331,33 @@ fn lex_template(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
             }
         }
     }
+}
+
+/// The indent a template at `pos` drops from each line after its first: the least leading spaces or tabs of its
+/// non-blank lines after the first. Zero when the template has no raw newline, or when its end is not found (the
+/// lexer then reports the unclosed template). Escaped `\n` is two characters, not a line break.
+// ponytail: CRLF files are not special-cased; the `\r` counts as text on each line.
+fn template_indent(src: &str, pos: usize) -> usize {
+    let mut i = pos + 1;
+    let mut end = None;
+    while let Some(c) = src[i..].chars().next() {
+        match c {
+            '`' => {
+                end = Some(i);
+                break;
+            }
+            '\\' => i += 1 + src[i + 1..].chars().next().map_or(0, char::len_utf8),
+            _ => i += c.len_utf8(),
+        }
+    }
+    let Some(end) = end else { return 0 };
+    src[pos + 1..end]
+        .split('\n')
+        .skip(1)
+        .filter(|line| line.contains(|c: char| !c.is_whitespace()))
+        .map(|line| line.len() - line.trim_start_matches([' ', '\t']).len())
+        .min()
+        .unwrap_or(0)
 }
 
 fn lex_punct(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {

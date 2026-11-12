@@ -176,7 +176,7 @@ fn check_applies_the_line_length_limit() {
 }
 
 #[test]
-fn a_template_keeps_its_newlines_and_indentation() {
+fn a_template_drops_the_shared_indent_of_its_lines() {
     let root = temp_dir("multiline");
     let text = "/** Entry. */\nexport default function main() {\n  return `Read the log.\n    Fix the test.`;\n}\n";
     fs::write(root.join("main.rein"), text).unwrap();
@@ -184,7 +184,7 @@ fn a_template_keeps_its_newlines_and_indentation() {
 
     let out = rein(&["step", main.to_str().unwrap(), "--json"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains(r#""instruction":"Read the log.\n    Fix the test.""#), "{stdout}");
+    assert!(stdout.contains(r#""instruction":"Read the log.\nFix the test.""#), "{stdout}");
 
     fs::remove_dir_all(&root).unwrap();
 }
