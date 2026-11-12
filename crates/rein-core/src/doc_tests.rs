@@ -5,13 +5,40 @@ fn doc(inner: &str) -> DocBlock {
 }
 
 #[test]
-fn description_keeps_line_breaks_and_collapses_blank_runs() {
+fn description_joins_lines_and_collapses_blank_runs_to_a_paragraph_break() {
     let d = doc("\n * First line.\n * Second line.\n *\n *\n *\n * New paragraph.\n ");
     assert_eq!(
         d.description.value,
-        "First line.\nSecond line.\n\nNew paragraph."
+        "First line. Second line.\n\nNew paragraph."
     );
     assert!(d.tags.is_empty());
+}
+
+#[test]
+fn field_doc_over_two_lines_keeps_both_lines() {
+    let d = doc("\n * Does the pull request wait for another pull request or change that is\n * not merged yet?\n ");
+    assert_eq!(
+        d.description.value,
+        "Does the pull request wait for another pull request or change that is not merged yet?"
+    );
+}
+
+#[test]
+fn doc_over_three_lines_keeps_all_three() {
+    let d = doc("\n * One\n * two\n * three.\n ");
+    assert_eq!(d.description.value, "One two three.");
+}
+
+#[test]
+fn lines_without_a_leading_star_are_joined_too() {
+    let d = doc("\n  Is the customer a VIP\n  and paying?\n ");
+    assert_eq!(d.description.value, "Is the customer a VIP and paying?");
+}
+
+#[test]
+fn ragged_indent_is_trimmed_and_inner_spaces_are_kept() {
+    let d = doc("\n *   Padded   start\n *     end   \n ");
+    assert_eq!(d.description.value, "Padded   start end");
 }
 
 #[test]
@@ -28,7 +55,7 @@ fn multi_line_parameter_doc_is_one_description() {
     let d = doc("\n * Is the customer a VIP?\n * Check the account tier in the CRM.\n ");
     assert_eq!(
         d.description.value,
-        "Is the customer a VIP?\nCheck the account tier in the CRM."
+        "Is the customer a VIP? Check the account tier in the CRM."
     );
 }
 

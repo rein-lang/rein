@@ -365,6 +365,43 @@ fn text_output_uses_typescript_types() {
     );
 }
 
+#[test]
+fn step_question_keeps_every_line_of_a_multi_line_field_doc() {
+    let root = temp_dir("fielddoc");
+    fs::write(
+        root.join("main.rein"),
+        "interface Input {\n  /** The link. */\n  pr: string;\n  /** Does the pull request wait for another pull request or change that is\n   * not merged yet? */\n  blocked: boolean;\n  /** Which task? */\n  task: \"a\" | \"b\";\n}\n\n/**\n * Demo.\n */\nexport default function main({ pr, blocked, task }: Input) {\n  if (blocked) {\n    return `blocked ${pr}`;\n  }\n  return `ok`;\n}\n",
+    )
+    .unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--input", "pr=x", "--json"]);
+    let v = json(&out);
+    assert_eq!(v["key"], "main.blocked");
+    assert_eq!(
+        v["description"],
+        "Does the pull request wait for another pull request or change that is not merged yet?"
+    );
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn async_answer_doc_over_several_lines_keeps_every_line() {
+    let root = temp_dir("answerdoc");
+    fs::write(
+        root.join("main.rein"),
+        "/** Entry. */\nexport default async function main() {\n  /**\n   * Did the runbook steps\n   * clear the alert?\n   */\n  const fixed: boolean = await request(\n    `Run the steps.`,\n  );\n  if (fixed) {\n    return `closed`;\n  }\n  return `paged`;\n}\n",
+    )
+    .unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
+    let v = json(&out);
+    assert_eq!(v["kind"], "request");
+    assert_eq!(v["response"]["description"], "Did the runbook steps clear the alert?");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("rein-cli-{tag}-{}-{nanos}", std::process::id()));

@@ -160,7 +160,7 @@ export default function handleTicket({ category, vip }: Ticket) {
 Parsing rules, for each doc block:
 
 - For each line, strip the leading whitespace, then one leading `*`, then one following space if present.
-- The text before the first line that starts with `@` is the description. It is trimmed. Line breaks are kept. Three or more line breaks in a row become one paragraph break.
+- The text before the first line that starts with `@` is the description. It is trimmed. The lines of one paragraph are joined with one space, so a doc comment over several lines is one line of text. A blank line starts a new paragraph; a run of blank lines is one paragraph break. Example: `/** Does the pull request wait for another pull request or change that is` + newline + `* not merged yet? */` is the description `Does the pull request wait for another pull request or change that is not merged yet?`.
 - Text after an `@` line is not part of the description.
 - A `@` tag is an error when it is `@param`: `describe each parameter in its own doc comment, right before it`. Any other tag gives a warning: `unknown tag`.
 - An empty function description is an error. An empty parameter doc comment is an error: `parameter `x` needs a doc comment: /** question */ x: ...`. A field gives `field `x` needs a doc comment: /** question */ x: ...`.
@@ -505,6 +505,7 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | `rein uninstall [-g] <args>...` | Run `pnpm remove <args>` in the same folder rules. |
 | `rein update [-g] [<args>...]` | Run `pnpm update --ignore-scripts <args>` in the same folder rules. |
 | `rein lsp` | Run the language server over stdio. See [Language server](#language-server) for its features. |
+| `rein dap` | Run the debug adapter over stdio (Debug Adapter Protocol). See [Debug adapter](#debug-adapter). |
 
 Exit codes: 0 for a text or reference result, 1 for an error, 2 for a parameter needed, 3 for a request.
 
@@ -582,6 +583,10 @@ The code is in `crates/rein/src/lsp/`, one module per feature. It reads the tree
 - Completion: after `@./` or `@../`, the project functions relative to the current file, or after `}: ` the shared structs. Each item replaces the whole reference token. Inside call parentheses, where an argument name goes, the parameters (the fields of a struct parameter) not given yet, as `name=`. After `x === "` or `case "`, the members of the union, each replacing the whole literal. Elsewhere, the parameter names, the std names, and keywords.
 - Signature help: inside call parentheses, the callee's parameters (the fields of a struct parameter), with the current one active.
 - Quick fixes: add a doc comment to a function or a parameter that has none, and add `name=` to a positional argument.
+
+### Debug adapter
+
+The code is in `crates/rein/src/dap/`. `rein dap` speaks the Debug Adapter Protocol over stdio. It walks a program with the step engine (section 11), so it has no evaluator of its own. It stops at a line breakpoint on a question, a request, a hand-off, or the end. A question with no answer is sent to the client as a `rein/ask` event. The client answers with a `rein/answer` request, and the walk goes on. The editor side and the steps for the user are in the [VS Code extension README](https://github.com/rein-lang/vscode-rein#readme).
 
 ## 11. Stepping (agent interface)
 
