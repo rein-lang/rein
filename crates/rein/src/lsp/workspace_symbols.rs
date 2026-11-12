@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use lsp_types::{OneOf, SymbolKind, WorkspaceSymbol, WorkspaceSymbolParams, WorkspaceSymbolResponse};
+use rein_core::ast::{is_struct, STRUCT_SUFFIX};
 use rein_core::project::Project;
 
 use super::definition::std_dir;
@@ -12,7 +13,8 @@ use super::occurrences::header_span;
 use super::workspace::{build_project, doc_path, location, State};
 
 /// The programs under the workspace folders and those of the open files. Each function's name is its project
-/// path, such as `billing/refund`, and its container is the program folder.
+/// path, such as `billing/refund`, and its container is the program folder. A shared struct is listed as a
+/// struct, by its path without `.struct`.
 pub fn workspace_symbols(state: &State, p: &WorkspaceSymbolParams) -> Option<WorkspaceSymbolResponse> {
     let mut roots = BTreeSet::new();
     for folder in &state.folders {
@@ -25,11 +27,19 @@ pub fn workspace_symbols(state: &State, p: &WorkspaceSymbolParams) -> Option<Wor
     for root in roots {
         let project = build_project(&state.docs, &root);
         let program = root.file_name().map(|n| n.to_string_lossy().into_owned());
-        for name in project.files.keys().filter(|n| fuzzy(&query, &n.to_lowercase())) {
-            let Some(at) = location(&state.docs, &project, name, header_span(&project, name)) else { continue };
+        for (name, sf) in &project.files {
+            // A `.struct.rein` file is a struct, named by its path without `.struct`.
+            let (shown, kind, span) = match sf.function.exported_struct().filter(|_| is_struct(name)) {
+                Some(s) => (name.strip_suffix(STRUCT_SUFFIX).unwrap_or(name).to_string(), SymbolKind::STRUCT, s.name.span),
+                None => (name.clone(), SymbolKind::FUNCTION, header_span(&project, name)),
+            };
+            if !fuzzy(&query, &shown.to_lowercase()) {
+                continue;
+            }
+            let Some(at) = location(&state.docs, &project, name, span) else { continue };
             out.push(WorkspaceSymbol {
-                name: name.clone(),
-                kind: SymbolKind::FUNCTION,
+                name: shown,
+                kind,
                 tags: None,
                 container_name: program.clone(),
                 location: OneOf::Left(at),

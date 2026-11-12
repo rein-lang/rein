@@ -39,7 +39,7 @@ expression: text
       "id": "f0_3",
       "kind": "done",
       "function": "answer/faq",
-      "label": "Close the ticket as solved."
+      "label": "@../templates/close_ticket(opening=\"Glad the help article solved the problem.\", nextStep=\"Reply to this ticket if it comes back.\")"
     },
     {
       "id": "f1",
@@ -99,11 +99,23 @@ expression: text
     {
       "id": "f4",
       "kind": "function",
+      "function": "templates/close_ticket",
+      "label": "templates/close_ticket(opening, nextStep)"
+    },
+    {
+      "id": "f4_0",
+      "kind": "done",
+      "function": "templates/close_ticket",
+      "label": "Tell the customer: ${opening} ${nextStep} Then close the ticket as solved."
+    },
+    {
+      "id": "f5",
+      "kind": "function",
       "function": "templates/tell_customer",
       "label": "templates/tell_customer(opening, nextStep)"
     },
     {
-      "id": "f4_0",
+      "id": "f5_0",
       "kind": "done",
       "function": "templates/tell_customer",
       "label": "${opening} ${nextStep}"
@@ -139,6 +151,11 @@ expression: text
       "label": "yes"
     },
     {
+      "from": "f0_3",
+      "to": "f4",
+      "kind": "template"
+    },
+    {
       "from": "f0_2",
       "to": "f2",
       "kind": "handoff",
@@ -163,7 +180,7 @@ expression: text
     },
     {
       "from": "f1_1",
-      "to": "f4",
+      "to": "f5",
       "kind": "template"
     },
     {
@@ -209,6 +226,11 @@ expression: text
     {
       "from": "f4",
       "to": "f4_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f5",
+      "to": "f5_0",
       "kind": "flow"
     }
   ]

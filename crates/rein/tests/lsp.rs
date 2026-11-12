@@ -233,12 +233,12 @@ fn hover_on_parameter_shows_its_type_and_doc() {
     let start = uri_of(&root, "start.rein");
     server.open(
         &start,
-        "/** Start. */\nexport default function start(\n  /** Does it change docs? */\n  docsOnly: boolean,\n  /** Which CI status? */\n  ci: \"green\" | \"red\",\n) {\n  if (docsOnly) {\n    return \"x\";\n  } else {\n    return \"y\";\n  }\n}\n",
+        "interface Input {\n  /** Does it change docs? */\n  docsOnly: boolean;\n  /** Which CI status? */\n  ci: \"green\" | \"red\";\n}\n\n/** Start. */\nexport default function start({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return \"x\";\n  } else {\n    return \"y\";\n  }\n}\n",
     );
     let hover = server.request(
         2,
         "textDocument/hover",
-        json!({"textDocument": {"uri": start}, "position": {"line": 3, "character": 4}}),
+        json!({"textDocument": {"uri": start}, "position": {"line": 2, "character": 4}}),
     );
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
     assert!(text.contains("docsOnly: boolean"), "{text}");
@@ -483,8 +483,8 @@ fn escalate_calls() -> Vec<Spot> {
         spot("answer/faq.rein", 8, 11, 8, 23),
         spot("answer/faq.rein", 17, 9, 17, 21),
         spot("billing/refund.rein", 8, 11, 8, 23),
-        spot("main.rein", 10, 11, 10, 22),
-        spot("main.rein", 16, 13, 16, 24),
+        spot("main.rein", 12, 11, 12, 22),
+        spot("main.rein", 18, 13, 18, 24),
     ]
 }
 
@@ -497,7 +497,7 @@ fn references_list_every_call_of_a_function() {
     let main = open_file(&mut server, &root, "main.rein");
 
     // From the function's own name, from anywhere in its file, and from a reference to it.
-    for (id, uri, line, character) in [(2, &escalate, 3, 26), (3, &escalate, 4, 20), (4, &main, 10, 15)] {
+    for (id, uri, line, character) in [(2, &escalate, 3, 26), (3, &escalate, 4, 20), (4, &main, 12, 15)] {
         let mut params = at(uri, line, character);
         params["context"] = json!({"includeDeclaration": false});
         let refs = server.request(id, "textDocument/references", params);
@@ -505,7 +505,7 @@ fn references_list_every_call_of_a_function() {
     }
 
     // With the declaration, the function's own name is in the list too.
-    let mut params = at(&main, 10, 15);
+    let mut params = at(&main, 12, 15);
     params["context"] = json!({"includeDeclaration": true});
     let refs = server.request(5, "textDocument/references", params);
     let mut expected = escalate_calls();
@@ -523,16 +523,20 @@ fn references_of_a_parameter_include_named_arguments() {
     initialize(&mut server);
     let refund = open_file(&mut server, &root, "billing/refund.rein");
 
-    // From `opening=` in the call: the argument, the declaration, and the `${opening}` use.
+    // From `opening=` in the call: the argument, the struct field, each destructuring, and each `${opening}` use.
     let mut params = at(&refund, 10, 40);
     params["context"] = json!({"includeDeclaration": true});
     let refs = server.request(2, "textDocument/references", params);
     assert_eq!(
         spots(&root, &refs["result"]),
         vec![
+            spot("answer/faq.rein", 15, 38, 15, 45),
             spot("billing/refund.rein", 10, 37, 10, 44),
-            spot("templates/tell_customer.rein", 5, 2, 5, 9),
-            spot("templates/tell_customer.rein", 9, 12, 9, 19),
+            spot("templates/close_ticket.rein", 3, 38, 3, 45),
+            spot("templates/close_ticket.rein", 4, 31, 4, 38),
+            spot("templates/message.struct.rein", 5, 2, 5, 9),
+            spot("templates/tell_customer.rein", 3, 39, 3, 46),
+            spot("templates/tell_customer.rein", 4, 12, 4, 19),
         ],
         "{refs}"
     );
@@ -576,9 +580,9 @@ fn definition_goes_to_functions_parameters_and_std() {
     // A reference goes to the name of the function it names.
     let def = server.request(2, "textDocument/definition", at(&refund, 10, 20));
     assert_eq!(spot_of(&root, &def["result"]), spot("templates/tell_customer.rein", 3, 24, 3, 36), "{def}");
-    // `name=` in a call goes to that parameter of the callee.
+    // `opening=` in a call goes to that field of the struct.
     let def = server.request(3, "textDocument/definition", at(&refund, 10, 40));
-    assert_eq!(spot_of(&root, &def["result"]), spot("templates/tell_customer.rein", 5, 2, 5, 9), "{def}");
+    assert_eq!(spot_of(&root, &def["result"]), spot("templates/message.struct.rein", 5, 2, 5, 9), "{def}");
     // A parameter used in the body goes to its declaration.
     let def = server.request(4, "textDocument/definition", at(&refund, 7, 8));
     assert_eq!(spot_of(&root, &def["result"]), spot("billing/refund.rein", 5, 2, 5, 17), "{def}");
@@ -592,7 +596,7 @@ fn definition_goes_to_functions_parameters_and_std() {
     );
     let def = server.request(5, "textDocument/definition", at(&start, 4, 12));
     assert!(def["result"]["uri"].as_str().unwrap().ends_with("/rein-std/delegate.rein"), "{def}");
-    assert_eq!(def["result"]["range"], json!({"start": {"line": 3, "character": 24}, "end": {"line": 3, "character": 32}}));
+    assert_eq!(def["result"]["range"], json!({"start": {"line": 10, "character": 24}, "end": {"line": 10, "character": 32}}));
     let def = server.request(6, "textDocument/definition", at(&start, 3, 30));
     assert!(def["result"].is_null(), "{def}");
 
@@ -658,19 +662,19 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
         vec![
             ("answer/faq".to_string(), vec![spot("answer/faq.rein", 8, 11, 8, 23), spot("answer/faq.rein", 17, 9, 17, 21)]),
             ("billing/refund".to_string(), vec![spot("billing/refund.rein", 8, 11, 8, 23)]),
-            ("main".to_string(), vec![spot("main.rein", 10, 11, 10, 22), spot("main.rein", 16, 13, 16, 24)]),
+            ("main".to_string(), vec![spot("main.rein", 12, 11, 12, 22), spot("main.rein", 18, 13, 18, 24)]),
         ],
         "{incoming}"
     );
 
-    let items = server.request(4, "textDocument/prepareCallHierarchy", at(&main, 3, 25));
+    let items = server.request(4, "textDocument/prepareCallHierarchy", at(&main, 10, 25));
     let outgoing = server.request(5, "callHierarchy/outgoingCalls", json!({"item": items["result"][0]}));
     let names: Vec<String> = calls_of(&root, &outgoing["result"], "to").into_iter().map(|(n, _)| n).collect();
     assert_eq!(names, ["answer/faq", "billing/refund", "escalate"], "{outgoing}");
     // Outgoing ranges are in the caller's file.
     let ranges = &outgoing["result"][2]["fromRanges"];
-    assert_eq!(ranges[0], json!({"start": {"line": 10, "character": 11}, "end": {"line": 10, "character": 22}}));
-    assert_eq!(ranges[1], json!({"start": {"line": 16, "character": 13}, "end": {"line": 16, "character": 24}}));
+    assert_eq!(ranges[0], json!({"start": {"line": 12, "character": 11}, "end": {"line": 12, "character": 22}}));
+    assert_eq!(ranges[1], json!({"start": {"line": 18, "character": 13}, "end": {"line": 18, "character": 24}}));
 
     server.shutdown();
 }
@@ -726,7 +730,12 @@ fn workspace_symbols_search_every_program() {
 
     // An empty query lists every function of the four example programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
-    assert_eq!(all["result"].as_array().unwrap().len(), 20, "{all}");
+    let all_symbols = all["result"].as_array().unwrap();
+    assert_eq!(all_symbols.len(), 22, "{all}");
+    assert!(
+        all_symbols.iter().any(|s| s["name"] == "templates/message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
+        "{all}"
+    );
 
     server.shutdown();
 }
@@ -781,9 +790,13 @@ fn rename_a_parameter_updates_named_arguments() {
         edits_of(&root, &edit["result"]),
         (
             vec![
+                lead(spot("answer/faq.rein", 15, 38, 15, 45)),
                 lead(spot("billing/refund.rein", 10, 37, 10, 44)),
-                lead(spot("templates/tell_customer.rein", 5, 2, 5, 9)),
-                lead(spot("templates/tell_customer.rein", 9, 12, 9, 19)),
+                lead(spot("templates/close_ticket.rein", 3, 38, 3, 45)),
+                lead(spot("templates/close_ticket.rein", 4, 31, 4, 38)),
+                lead(spot("templates/message.struct.rein", 5, 2, 5, 9)),
+                lead(spot("templates/tell_customer.rein", 3, 39, 3, 46)),
+                lead(spot("templates/tell_customer.rein", 4, 12, 4, 19)),
             ],
             vec![]
         ),
@@ -806,11 +819,11 @@ fn rename_a_function_renames_its_file_and_references() {
     let main = open_file(&mut server, &root, "main.rein");
 
     // On a reference, only the file name part is renamed.
-    let prepared = server.request(2, "textDocument/prepareRename", at(&main, 10, 15));
+    let prepared = server.request(2, "textDocument/prepareRename", at(&main, 12, 15));
     assert_eq!(prepared["result"]["placeholder"], "escalate");
-    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 10, "character": 14}, "end": {"line": 10, "character": 22}}));
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 12, "character": 14}, "end": {"line": 12, "character": 22}}));
 
-    let mut params = at(&main, 10, 15);
+    let mut params = at(&main, 12, 15);
     params["newName"] = json!("handoff");
     let edit = server.request(3, "textDocument/rename", params);
     let handoff = |s: Spot| (s, "handoff".to_string());
@@ -822,8 +835,8 @@ fn rename_a_function_renames_its_file_and_references() {
                 handoff(spot("answer/faq.rein", 17, 13, 17, 21)),
                 handoff(spot("billing/refund.rein", 8, 15, 8, 23)),
                 handoff(spot("escalate.rein", 3, 24, 3, 32)),
-                handoff(spot("main.rein", 10, 14, 10, 22)),
-                handoff(spot("main.rein", 16, 16, 16, 24)),
+                handoff(spot("main.rein", 12, 14, 12, 22)),
+                handoff(spot("main.rein", 18, 16, 18, 24)),
             ],
             vec![("escalate.rein".to_string(), "handoff.rein".to_string())]
         ),
@@ -843,7 +856,7 @@ fn rename_a_function_needs_a_client_that_renames_files() {
     initialize(&mut server);
     let main = open_file(&mut server, &root, "main.rein");
 
-    let mut params = at(&main, 10, 15);
+    let mut params = at(&main, 12, 15);
     params["newName"] = json!("handoff");
     let failed = server.request(2, "textDocument/rename", params);
     assert_eq!(failed["error"]["message"], "this editor cannot rename files, so a function cannot be renamed", "{failed}");
@@ -875,9 +888,9 @@ fn completion_offers_argument_names_and_union_members() {
 
     // After `case "`: the members of the switch subject. Each replaces the whole literal.
     let main = open_file(&mut server, &root, "main.rein");
-    let items = server.request(3, "textDocument/completion", at(&main, 13, 10));
+    let items = server.request(3, "textDocument/completion", at(&main, 15, 10));
     assert_eq!(labels(&items), ["\"billing\"", "\"account\"", "\"how_to\""], "{items}");
-    let range = json!({"start": {"line": 13, "character": 9}, "end": {"line": 13, "character": 18}});
+    let range = json!({"start": {"line": 15, "character": 9}, "end": {"line": 15, "character": 18}});
     assert_eq!(items["result"][0]["textEdit"]["range"], range);
 
     // After `c === "`: the members of `c`.
@@ -963,6 +976,108 @@ fn quick_fixes_add_doc_comments_and_name_arguments() {
     let (title, edit) = quick_fix(&mut server, 4, &positional, "missing argument `model`");
     assert_eq!(title, "Name the argument `model=`");
     assert_eq!(edit, insert_at(2, 18, "model="));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn structs_hover_define_reference_rename_and_list() {
+    // Canonical, like `example()`: the server reports renamed files under the canonical path.
+    let root = fs::canonicalize(temp_project("structs")).unwrap();
+    let ticket_text = "/** A support ticket. */\nexport default interface Ticket {\n  /** The ticket title. */\n  title: string;\n  /** Is the customer a VIP? */\n  vip: boolean;\n}\n";
+    let a_text = "/** A. */\nexport default function a({ title, vip }: @./ticket) {\n  if (vip) {\n    return `VIP: ${title}`;\n  }\n  return `Answer ${title}`;\n}\n";
+    let b_text = "/** B. */\nexport default function b({ title, vip }: @./ticket) {\n  if (vip) {\n    return \"x\";\n  }\n  return @./a(title=title);\n}\n";
+    fs::write(root.join("ticket.struct.rein"), ticket_text).unwrap();
+    fs::write(root.join("a.rein"), a_text).unwrap();
+    fs::write(root.join("b.rein"), b_text).unwrap();
+    let mut server = start_with_file_renames();
+    let ticket = uri_of(&root, "ticket.struct.rein");
+    let a = uri_of(&root, "a.rein");
+    let b = uri_of(&root, "b.rein");
+    server.open(&ticket, ticket_text);
+    server.open(&a, a_text);
+    server.open(&b, b_text);
+
+    // Hover on the struct name in a parameter type: the struct's doc and its fields.
+    let hover = server.request(2, "textDocument/hover", at(&a, 1, 45));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    for part in ["interface Ticket", "A support ticket.", "title: string", "vip: boolean"] {
+        assert!(text.contains(part), "{text}");
+    }
+
+    // Definition on the struct name goes to the struct file.
+    let def = server.request(3, "textDocument/definition", at(&a, 1, 45));
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/ticket.struct.rein"), "{def}");
+    assert_eq!(def["result"]["range"]["start"]["line"], 1, "{def}");
+
+    // Definition on `title=` in a call goes to the field of the struct.
+    let def = server.request(4, "textDocument/definition", at(&b, 5, 15));
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/ticket.struct.rein"), "{def}");
+    assert_eq!(spot_of(&root, &def["result"]), spot("ticket.struct.rein", 3, 2, 3, 7), "{def}");
+
+    // References of the struct name, without the declaration.
+    let mut params = at(&ticket, 1, 27);
+    params["context"] = json!({"includeDeclaration": false});
+    let refs = server.request(5, "textDocument/references", params);
+    assert_eq!(spots(&root, &refs["result"]), vec![spot("a.rein", 1, 42, 1, 51), spot("b.rein", 1, 42, 1, 51)], "{refs}");
+
+    // Document symbols: the struct, with its fields as children.
+    let symbols = server.request(6, "textDocument/documentSymbol", json!({"textDocument": {"uri": ticket}}));
+    let symbols = symbols["result"].as_array().unwrap();
+    assert_eq!(symbols.len(), 1, "{symbols:?}");
+    assert_eq!(symbols[0]["name"], "Ticket");
+    assert_eq!(symbols[0]["kind"], 23);
+    let children: Vec<&str> = symbols[0]["children"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(children, ["title", "vip"]);
+
+    // Completion after `@./` in a new buffer lists the struct file and not the functions.
+    let c = uri_of(&root, "c.rein");
+    server.open(&c, "/** C. */\nexport default function c({ title }: @./");
+    let items = server.request(7, "textDocument/completion", at(&c, 1, 40));
+    let names = labels(&items);
+    assert!(names.contains(&"@./ticket".to_string()) && !names.contains(&"@./a".to_string()), "{names:?}");
+
+    // Rename the struct: its file is renamed, and each reference changes its last path segment.
+    let mut params = at(&a, 1, 45);
+    params["newName"] = json!("issue");
+    let edit = server.request(8, "textDocument/rename", params);
+    let issue = |s: Spot| (s, "issue".to_string());
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![issue(spot("a.rein", 1, 45, 1, 51)), issue(spot("b.rein", 1, 45, 1, 51))],
+            vec![("ticket.struct.rein".to_string(), "issue.struct.rein".to_string())]
+        ),
+        "{edit}"
+    );
+
+    // Rename a field from its declaration: the destructuring, the body uses and the named argument all change.
+    let mut params = at(&ticket, 3, 3);
+    params["newName"] = json!("subject");
+    let edit = server.request(9, "textDocument/rename", params);
+    let subject = |s: Spot| (s, "subject".to_string());
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                subject(spot("a.rein", 1, 28, 1, 33)),
+                subject(spot("a.rein", 3, 19, 3, 24)),
+                subject(spot("a.rein", 5, 19, 5, 24)),
+                subject(spot("b.rein", 1, 28, 1, 33)),
+                subject(spot("b.rein", 5, 14, 5, 19)),
+                subject(spot("b.rein", 5, 20, 5, 25)),
+                subject(spot("ticket.struct.rein", 3, 2, 3, 7)),
+            ],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    // Two parameters are reported, and the message says to use a struct.
+    let d = uri_of(&root, "d.rein");
+    server.open(&d, "/** D. */\nexport default function d(\n  /** A? */ a: boolean,\n  /** B? */ b: boolean,\n) {\n  if (a && b) { return \"x\" }\n  return \"y\"\n}\n");
+    server.wait_diagnostics(&d, |diags| has_message(diags, "a function takes one parameter; put `a` and `b` in a struct"));
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();

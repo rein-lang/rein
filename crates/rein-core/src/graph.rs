@@ -90,7 +90,7 @@ pub struct Arg {
 /// The decision flow of every function in the project, `entry` flagged.
 pub fn flow(project: &Project, entry: &str) -> Graph {
     let mut b = Builder::new(project, entry, "flow");
-    for (i, (name, sf)) in project.files.iter().enumerate() {
+    for (i, (name, sf)) in project.functions().enumerate() {
         let id = b.function_node(name, sf);
         b.function = name;
         b.fid = i;
@@ -103,7 +103,7 @@ pub fn flow(project: &Project, entry: &str) -> Graph {
 /// One node per function and one edge per distinct reference, as `rein graph --refs` prints.
 pub fn refs(project: &Project, entry: &str) -> Graph {
     let mut b = Builder::new(project, entry, "refs");
-    for (name, sf) in &project.files {
+    for (name, sf) in project.functions() {
         b.function_node(name, sf);
     }
     for (from, to) in project.references() {
@@ -134,7 +134,7 @@ impl<'a> Builder<'a> {
 
     // ponytail: linear scan per lookup; index the names if a project ever has thousands of files.
     fn id_of(&self, name: &str) -> String {
-        format!("f{}", self.project.files.keys().position(|n| n == name).unwrap_or_default())
+        format!("f{}", self.project.functions().position(|(n, _)| n == name).unwrap_or_default())
     }
 
     fn function_node(&mut self, name: &str, sf: &SourceFile) -> String {

@@ -6,6 +6,8 @@ use rein_core::diagnostic::Span;
 use rein_core::lexer::{lex, Tok};
 use rein_core::project::Project;
 
+use super::structs::struct_of;
+
 /// What a name under the cursor stands for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Symbol {
@@ -13,6 +15,10 @@ pub enum Symbol {
     Function(String),
     /// The parameter or `const` answer `name` of function `function`.
     Param { function: String, name: String },
+    /// An `interface`: the file that declares it, and its name. A `.struct.rein` file declares a shared one.
+    Struct { file: String, name: String },
+    /// A field of a struct. Each function that takes the struct reads the field by its name.
+    Field { file: String, strukt: String, name: String },
     /// A std item, such as `delegate`.
     Std(String),
 }
@@ -114,7 +120,7 @@ pub fn header_span(project: &Project, name: &str) -> Span {
 pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, Span)> {
     let sf = project.get(name)?;
     let f = &sf.function;
-    let local = |n: &Spanned<String>| (Symbol::Param { function: name.to_string(), name: n.value.clone() }, n.span);
+    let local = |n: &Spanned<String>| (param_symbol(project, name, &n.value), n.span);
     if let Some((r, _)) = refs(f).into_iter().find(|(r, _)| r.span.contains(off)) {
         return Some((Symbol::Function(project.resolve(name, &r.value).ok()?), r.span));
     }
@@ -128,7 +134,7 @@ pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, S
             // A std template's parameters have no file to point to.
             let Callee::Ref(r) = &call.callee else { return None };
             let target = project.resolve(name, &r.value).ok()?;
-            return Some((Symbol::Param { function: target, name: arg.value.clone() }, arg.span));
+            return Some((param_symbol(project, &target, &arg.value), arg.span));
         }
     }
     let mut awaited = None;
@@ -142,6 +148,19 @@ pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, S
     if let Some(c) = awaited {
         return Some((Symbol::Std(c.value), c.span));
     }
+    if let Some(p) = f.struct_param().filter(|p| p.ty.name().span.contains(off)) {
+        let (file, s) = struct_of(project, name)?;
+        return Some((Symbol::Struct { file, name: s }, p.ty.name().span));
+    }
+    for s in &f.structs {
+        if s.name.span.contains(off) {
+            return Some((Symbol::Struct { file: name.to_string(), name: s.name.value.clone() }, s.name.span));
+        }
+        if let Some(field) = s.fields.iter().find(|i| i.name.span.contains(off)) {
+            let symbol = Symbol::Field { file: name.to_string(), strukt: s.name.value.clone(), name: field.name.value.clone() };
+            return Some((symbol, field.name.span));
+        }
+    }
     if let Some(input) = declarations(f).into_iter().find(|i| i.name.span.contains(off)) {
         return Some(local(&input.name));
     }
@@ -150,6 +169,19 @@ pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, S
     }
     let header = name_span(&sf.text)?;
     header.contains(off).then(|| (Symbol::Function(name.to_string()), header))
+}
+
+/// The field `n` of the struct that `function` takes, when `n` is in its `{ }`. Else the parameter or answer
+/// `n` of `function`.
+fn param_symbol(project: &Project, function: &str, n: &str) -> Symbol {
+    let destructured = project
+        .get(function)
+        .and_then(|sf| sf.function.struct_param())
+        .is_some_and(|p| p.fields.iter().any(|f| f.value == n));
+    match struct_of(project, function).filter(|_| destructured) {
+        Some((file, strukt)) => Symbol::Field { file, strukt, name: n.to_string() },
+        None => Symbol::Param { function: function.to_string(), name: n.to_string() },
+    }
 }
 
 /// Every `@./` reference to function `target`: the function it is written in, and the span of the token.

@@ -1,12 +1,14 @@
+interface Input {
+  /** The link of the pull request with the failing CI run. */
+  pr: string;
+  /** Why did the CI run fail? */
+  cause: "test or code" | "flaky job" | "outside the pr";
+}
+
 /**
  * Fix a failing CI run on a pull request.
  */
-export default async function fixCi(
-  /** The link of the pull request with the failing CI run. */
-  pr: string,
-  /** Why did the CI run fail? */
-  cause: "test or code" | "flaky job" | "outside the pr",
-) {
+export default async function fixCi({ pr, cause }: Input) {
   switch (cause) {
     case "flaky job":
       return `Run the failed job of ${pr} again, one time. If it fails again, start this program again for ${pr} with the cause test or code.`;

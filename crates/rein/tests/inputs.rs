@@ -274,7 +274,7 @@ fn stdin_cannot_be_combined_with_input_flags() {
 fn rein_eval_set_gives_a_string_parameter_its_value() {
     let flow = Flow::new(&[(
         "main.rein",
-        "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Link ${pr}`;\n  }\n  return \"none\";\n}\n",
+        "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return `Link ${pr}`;\n  }\n  return \"none\";\n}\n",
     )]);
     let out = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
@@ -285,7 +285,7 @@ fn rein_eval_set_gives_a_string_parameter_its_value() {
 fn rein_eval_asks_for_a_missing_string_value() {
     let flow = Flow::new(&[(
         "main.rein",
-        "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Link ${pr}`;\n  }\n  return \"none\";\n}\n",
+        "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return `Link ${pr}`;\n  }\n  return \"none\";\n}\n",
     )]);
     let out = rein(&["eval", "main", "--root", flow.path(), "--set", "ok=yes"], None);
     assert_eq!(code(&out), 2);
@@ -347,7 +347,7 @@ fn string_input_in_a_condition_is_a_check_error() {
 fn hand_off_with_too_few_arguments_is_a_check_error() {
     let flow = Flow::new(&[
         ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return @./merge;\n}\n"),
-        ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
+        ("merge.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n\n/** Merge. */\nexport default function merge({ pr, ci }: Input) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 1);
@@ -358,7 +358,7 @@ fn hand_off_with_too_few_arguments_is_a_check_error() {
 fn hand_off_with_a_repeated_argument_name_is_a_check_error() {
     let flow = Flow::new(&[
         ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return @./merge(pr=pr, pr=pr);\n}\n"),
-        ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
+        ("merge.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n\n/** Merge. */\nexport default function merge({ pr, ci }: Input) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 1);
@@ -390,8 +390,8 @@ fn argument_that_is_not_a_string_input_is_a_check_error() {
 #[test]
 fn string_input_is_a_template_argument_and_the_check_is_clean() {
     let flow = Flow::new(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return @./tpl(a=pr, b=\"b\");\n  }\n  return \"n\";\n}\n"),
-        ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** A */\n  a: string,\n  /** B */\n  b: string,\n) {\n  return `${a} then ${b}`;\n}\n"),
+        ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return @./tpl(a=pr, b=\"b\");\n  }\n  return \"n\";\n}\n"),
+        ("tpl.rein", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** Template. */\nexport default function tpl({ a, b }: Input) {\n  return `${a} then ${b}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));

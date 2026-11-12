@@ -410,4 +410,4 @@ fn call_arguments_must_be_named_and_known() {
 }
 
 /// A template with two parameters, used by the argument tests above.
-const GREET: &str = "/** Greet. */\nexport default function greet(\n  /** Greeting. */\n  greeting: string,\n  /** Who? */\n  name: string,\n) {\n  return `${greeting} ${name}`;\n}\n";
+const GREET: &str = "interface Input {\n  /** Greeting. */\n  greeting: string;\n  /** Who? */\n  name: string;\n}\n\n/** Greet. */\nexport default function greet({ greeting, name }: Input) {\n  return `${greeting} ${name}`;\n}\n";

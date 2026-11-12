@@ -1,12 +1,14 @@
+interface Ticket {
+  /** What category best fits the ticket? */
+  category: "billing" | "account" | "how_to";
+  /** Is the customer on the VIP plan? */
+  vip: boolean;
+}
+
 /**
  * Decide how the support agent handles a customer ticket.
  */
-export default function main(
-  /** What category best fits the ticket? */
-  category: "billing" | "account" | "how_to",
-  /** Is the customer on the VIP plan? */
-  vip: boolean,
-) {
+export default function main({ category, vip }: Ticket) {
   if (vip) {
     return @./escalate;
   }

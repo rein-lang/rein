@@ -1,11 +1,6 @@
 /**
  * Tell the customer what happens next, in one sentence.
  */
-export default function tellCustomer(
-  /** The first part of the sentence, such as the action taken. */
-  opening: string,
-  /** The next step the customer can expect. */
-  nextStep: string,
-) {
+export default function tellCustomer({ opening, nextStep }: @./message) {
   return `${opening} ${nextStep}`;
 }

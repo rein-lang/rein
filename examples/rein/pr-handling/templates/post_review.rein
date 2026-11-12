@@ -1,13 +1,15 @@
+interface Input {
+  /** The review type: approve, comment, or request changes. */
+  kind: string;
+  /** What the review body holds. */
+  body: string;
+  /** The link of the pull request to review. */
+  pr: string;
+}
+
 /**
  * Post one review on the pull request.
  */
-export default function postReview(
-  /** The review type: approve, comment, or request changes. */
-  kind: string,
-  /** What the review body holds. */
-  body: string,
-  /** The link of the pull request to review. */
-  pr: string,
-) {
+export default function postReview({ kind, body, pr }: Input) {
   return `Post one review on the pull request ${pr}. Type: ${kind}. Body: ${body}. Do not merge in this run.`;
 }

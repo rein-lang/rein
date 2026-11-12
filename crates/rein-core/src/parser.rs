@@ -1,6 +1,9 @@
 //! Recursive descent parser: tokens to a `Function` syntax tree.
 
-use crate::ast::{Arg, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, ReturnValue, Spanned, Stmt, TemplateLit, Value};
+use crate::ast::{
+    Arg, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, Param, ReturnValue, Spanned, Stmt, Struct, StructParam,
+    StructRef, TemplateLit, Value,
+};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::doc::parse_doc;
 use crate::lexer::{lex, Tok};
@@ -26,7 +29,8 @@ struct Parser {
     pos: usize,
 }
 
-const DOC_PLACES: &str = "the doc comment must go right before `export default function` or a parameter";
+const DOC_PLACES: &str =
+    "the doc comment must go right before `export default function`, an `interface`, a parameter, a field, or a const answer";
 const NO_VARIABLES: &str = "Rein has no variables, except `/** question */ const x: type = await request(...)`";
 const NO_ELSE: &str = "Rein has no `else`: end the `if` block with a return, and handle the other case after it";
 
@@ -102,31 +106,106 @@ impl Parser {
         Some(doc)
     }
 
-    /// The file's one function, with its doc block.
+    /// The file's items: one `export default function` and its inline `interface`s, or, in a `.struct.rein`
+    /// file, one `export default interface`. The checker decides which items a file may hold.
     fn file(&mut self, f: &mut Function) -> Result<(), Diagnostic> {
-        if *self.peek() == Tok::Import {
-            return Err(Diagnostic::error(
-                self.span(),
-                "Rein has no imports; reference functions with `@./path` and use std functions directly",
-            ));
+        loop {
+            if *self.peek() == Tok::Import {
+                return Err(Diagnostic::error(
+                    self.span(),
+                    "Rein has no imports; reference functions with `@./path` and use std functions directly",
+                ));
+            }
+            let doc = self.doc_block();
+            if self.is_word("interface") {
+                let s = self.struct_decl(doc, None, false)?;
+                f.structs.push(s);
+                continue;
+            }
+            if *self.peek() == Tok::Export {
+                let found = self.peek().describe();
+                let export = self.bump();
+                let default = *self.peek() == Tok::Default;
+                if default {
+                    self.bump();
+                }
+                if self.is_word("interface") {
+                    let s = self.struct_decl(doc, Some(export), default)?;
+                    f.structs.push(s);
+                    continue;
+                }
+                if !default {
+                    return Err(self.unexpected("`default`"));
+                }
+                if f.name.is_some() {
+                    return Err(Diagnostic::error(
+                        export,
+                        format!("expected end of file, found {found}; a file holds one `export default function`"),
+                    ));
+                }
+                self.function(f, doc)?;
+                continue;
+            }
+            if let Some(doc) = doc {
+                return Err(Diagnostic::error(doc.span, DOC_PLACES));
+            }
+            match self.peek() {
+                Tok::Eof if f.name.is_some() || f.exported_struct().is_some() => break,
+                Tok::Eof => return Err(self.unexpected("`export default function`")),
+                _ if f.name.is_some() => {
+                    return Err(Diagnostic::error(
+                        self.span(),
+                        format!(
+                            "expected end of file, found {}; a file holds one `export default function`",
+                            self.peek().describe()
+                        ),
+                    ));
+                }
+                _ => return Err(self.unexpected("`export default function`")),
+            }
         }
-        if let Some(doc) = self.doc_block() {
+        // An inline struct parameter binds now. A `@./` struct binds when the project loads.
+        if let Some(StructRef::Local(name)) = f.struct_param().map(|p| p.ty.clone()) {
+            let found = f.structs.iter().find(|s| s.name.value == name.value).cloned().ok_or_else(|| {
+                format!("cannot find struct `{0}`; declare `interface {0} {{ ... }}` in this file", name.value)
+            });
+            f.bind_struct(found);
+        }
+        Ok(())
+    }
+
+    fn is_word(&self, word: &str) -> bool {
+        matches!(self.peek(), Tok::Ident(w) if w == word)
+    }
+
+    /// `function NAME(params) block`, after `export default`.
+    fn function(&mut self, f: &mut Function, doc: Option<DocBlock>) -> Result<(), Diagnostic> {
+        if let Some(doc) = doc {
             f.description = Some(doc.description.clone());
             f.doc = Some(doc);
         }
-        self.expect(Tok::Export, "`export default function`")?;
-        self.expect(Tok::Default, "`default`")?;
-        if matches!(self.peek(), Tok::Ident(w) if w == "async") {
+        if self.is_word("async") {
             f.async_span = Some(self.bump());
             f.is_async = true;
         }
         self.expect(Tok::Function, "`function`")?;
-        self.ident("function name")?;
+        f.name = Some(self.ident("function name")?);
         self.expect(Tok::LParen, "`(`")?;
         while *self.peek() != Tok::RParen {
             let doc = self.doc_block();
-            let input = self.param(doc)?;
-            f.inputs.push(input);
+            if *self.peek() == Tok::LBrace {
+                if let Some(doc) = doc {
+                    return Err(Diagnostic::error(
+                        doc.span,
+                        "a struct parameter has no doc comment; document each field in its `interface`",
+                    ));
+                }
+                f.params.push(Param::Struct(self.struct_param()?));
+            } else {
+                let input = self.param(doc, true)?;
+                f.inputs.push(input.clone());
+                f.params.push(Param::Scalar(input));
+            }
             if *self.peek() != Tok::Comma {
                 break;
             }
@@ -134,25 +213,64 @@ impl Parser {
         }
         self.expect(Tok::RParen, "`)`")?;
         f.body = self.block()?;
-        if *self.peek() != Tok::Eof {
-            if matches!(self.peek(), Tok::Doc(_)) {
-                return Err(Diagnostic::error(self.span(), DOC_PLACES));
-            }
-            return Err(Diagnostic::error(
-                self.span(),
-                format!(
-                    "expected end of file, found {}; a file holds one `export default function`",
-                    self.peek().describe()
-                ),
-            ));
-        }
         Ok(())
     }
 
-    /// `IDENT : type`. `doc` is the parameter's own doc block, when it has one.
-    fn param(&mut self, doc: Option<DocBlock>) -> Result<Input, Diagnostic> {
-        let name = self.ident("parameter name")?;
+    /// `{ a, b }: Name` or `{ a, b }: @./name`.
+    fn struct_param(&mut self) -> Result<StructParam, Diagnostic> {
+        let start = self.bump();
+        let mut fields = Vec::new();
+        while *self.peek() != Tok::RBrace {
+            fields.push(self.ident("field name")?);
+            if *self.peek() != Tok::Comma {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(Tok::RBrace, "`}`")?;
         self.expect(Tok::Colon, "`:`")?;
+        let ty = match self.peek().clone() {
+            Tok::Ref(path) => StructRef::Ref(Spanned { value: path, span: self.bump() }),
+            Tok::Ident(name) => StructRef::Local(Spanned { value: name, span: self.bump() }),
+            _ => return Err(self.unexpected("a struct name, or a reference like `@./name`")),
+        };
+        Ok(StructParam { fields, ty, span: start.to(self.last_span()) })
+    }
+
+    /// `interface Name { /** doc */ field: type; ... }`. A field ends with `;`, `,`, or nothing.
+    fn struct_decl(&mut self, doc: Option<DocBlock>, export: Option<Span>, default: bool) -> Result<Struct, Diagnostic> {
+        let start = export.unwrap_or_else(|| self.span());
+        self.bump();
+        let name = self.ident("struct name")?;
+        self.expect(Tok::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        while *self.peek() != Tok::RBrace {
+            let doc = self.doc_block();
+            fields.push(self.param(doc, false)?);
+            if matches!(self.peek(), Tok::Semi | Tok::Comma) {
+                self.bump();
+            }
+        }
+        self.bump();
+        Ok(Struct { name, doc, fields, export, default, span: start.to(self.last_span()) })
+    }
+
+    /// `IDENT : type`. `doc` is the doc block of the parameter or field, when it has one. A parameter names a
+    /// struct type only when it is destructured, so `x: Name` gets its own message.
+    fn param(&mut self, doc: Option<DocBlock>, param: bool) -> Result<Input, Diagnostic> {
+        let name = self.ident(if param { "parameter name" } else { "field name" })?;
+        self.expect(Tok::Colon, "`:`")?;
+        let struct_type = match self.peek() {
+            Tok::Ref(p) => Some(format!("@{p}")),
+            Tok::Ident(w) if w != "string" => Some(w.clone()),
+            _ => None,
+        };
+        if let (true, Some(ty)) = (param, struct_type) {
+            return Err(Diagnostic::error(
+                self.span(),
+                format!("a struct parameter is destructured: write `{{ field, ... }}: {ty}`"),
+            ));
+        }
         let ty = self.param_type()?;
         let span = name.span.to(self.last_span());
         // A missing doc block gives an empty description; the checker reports it.
@@ -509,17 +627,19 @@ pub(crate) mod tests {
     pub(crate) const SAMPLE: &str = r#"
 // merge_pr.rein
 
-/**
- * Decide whether a pull request can be merged.
- */
-export default function mergePr(
+interface Input {
   /** Does the PR change only documentation files? */
-  docsOnly: boolean,
+  docsOnly: boolean;
   /**
    * What is the CI status of the PR?
    */
-  ci: "green" | "red" | "pending",
-) {
+  ci: "green" | "red" | "pending";
+}
+
+/**
+ * Decide whether a pull request can be merged.
+ */
+export default function mergePr({ docsOnly, ci }: Input) {
   if (docsOnly) {
     return "approved";
   }
@@ -846,5 +966,50 @@ export default function f(
     fn bare_name_is_not_a_request_value() {
         let msg = one_error("/** d */\nexport default async function f(\n  /** Link */ pr: string,\n) {\n  /** Ok? */\n  const ok: boolean = await request(pr);\n  return \"y\"\n}");
         assert!(msg.contains("expected a string or a template literal"), "{msg}");
+    }
+
+    #[test]
+    fn struct_parameter_binds_the_inline_interface_fields() {
+        let src = "interface Input {\n  /** A? */\n  a: boolean;\n  /** B? */\n  b: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ b, a }: Input) {\n  if (a) { return \"1\" }\n  return `${b}`\n}";
+        let f = ok(src);
+        assert_eq!(f.params.len(), 1);
+        let names: Vec<&str> = f.inputs.iter().map(|i| i.name.value.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        assert_eq!(f.inputs[0].description.value, "A?");
+        assert_eq!(f.inputs[0].ty, InputType::Bool);
+        let span = f.inputs[0].name.span;
+        assert_eq!(&src[span.start..span.end], "a");
+        assert!(span.start > src.find("function").unwrap(), "{span:?}");
+        assert_eq!(f.structs.len(), 1);
+        assert!(matches!(&f.input_struct, Some(Ok(_))));
+    }
+
+    #[test]
+    fn a_struct_type_must_be_destructured() {
+        assert_eq!(
+            one_error("/** d */\nexport default function f(x: Input) { return \"y\" }"),
+            "a struct parameter is destructured: write `{ field, ... }: Input`"
+        );
+        assert_eq!(
+            one_error("/** d */\nexport default function f(x: @./ticket) { return \"y\" }"),
+            "a struct parameter is destructured: write `{ field, ... }: @./ticket`"
+        );
+    }
+
+    #[test]
+    fn a_struct_file_holds_its_exported_interface() {
+        let f = ok("/** A ticket. */\nexport default interface Ticket {\n  /** Title. */\n  title: string\n}\n");
+        assert!(f.name.is_none());
+        let s = f.exported_struct().unwrap();
+        assert_eq!(s.name.value, "Ticket");
+        assert_eq!(s.fields.len(), 1);
+        assert_eq!(s.fields[0].name.value, "title");
+        assert_eq!(s.fields[0].ty, InputType::Text);
+    }
+
+    #[test]
+    fn a_struct_parameter_has_no_doc_comment() {
+        let msg = one_error("/** d */\nexport default function f(/** no */ { a }: Input) { return \"y\" }\ninterface Input {\n  /** A */ a: boolean;\n}");
+        assert!(msg.contains("a struct parameter has no doc comment"), "{msg}");
     }
 }

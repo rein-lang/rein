@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Value};
+use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
 use crate::check::{check_function, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::parser::parse;
@@ -77,7 +77,43 @@ impl Project {
             };
             files.insert(name, SourceFile { path, text, function, parse_diagnostics });
         }
-        Self { root, files }
+        let mut project = Self { root, files };
+        project.bind_structs();
+        project
+    }
+
+    /// Binds each `{ ... }: @./name` parameter to the `export default interface` of `name.struct.rein`.
+    fn bind_structs(&mut self) {
+        let found: Vec<(String, Result<Struct, String>)> = self
+            .files
+            .iter()
+            .filter_map(|(name, sf)| {
+                let StructRef::Ref(r) = &sf.function.struct_param()?.ty else { return None };
+                Some((name.clone(), self.struct_for(name, &r.value).map(|(_, s)| s.clone())))
+            })
+            .collect();
+        for (name, s) in found {
+            if let Some(sf) = self.files.get_mut(&name) {
+                sf.function.bind_struct(s);
+            }
+        }
+    }
+
+    /// The struct that the parameter type `@<source>`, written in `from`, names: the `export default interface`
+    /// of `<source>.struct.rein`. Returns the project path of that file, such as `ticket.struct`, and the struct.
+    pub fn struct_for(&self, from: &str, source: &str) -> Result<(String, &Struct), String> {
+        let name = format!("{}{STRUCT_SUFFIX}", join(from, source)?);
+        let base = source.rsplit('/').next().unwrap_or(source);
+        self.files
+            .get(&name)
+            .and_then(|sf| sf.function.exported_struct())
+            .map(|s| (name.clone(), s))
+            .ok_or_else(|| format!("cannot find struct `@{source}`; a shared struct is a `{base}.struct.rein` file"))
+    }
+
+    /// The function files. A `.struct.rein` file holds a struct, so it is left out.
+    pub fn functions(&self) -> impl Iterator<Item = (&String, &SourceFile)> {
+        self.files.iter().filter(|(n, _)| !is_struct(n))
     }
 
     /// Function name for a path under the root. Invalid names are returned as-is.
@@ -105,27 +141,7 @@ impl Project {
     /// Resolves an import path written in function `from` to the project path of a function.
     /// The path starts with `./` or `../`, has no extension, and is relative to the importing file's directory.
     pub fn resolve(&self, from: &str, source: &str) -> Result<String, String> {
-        if !(source.starts_with("./") || source.starts_with("../")) {
-            return Err(format!("references are relative: write `@./{source}`"));
-        }
-        if source.rsplit('/').next().is_some_and(|last| last.contains('.') && last != "..") {
-            return Err("references have no extension".into());
-        }
-        // The importing file's directory, as name segments. `ci/fix` starts in `ci`.
-        let mut parts: Vec<&str> = from.split('/').collect();
-        parts.pop();
-        for seg in source.split('/') {
-            match seg {
-                "" | "." => {}
-                ".." => {
-                    if parts.pop().is_none() {
-                        return Err(format!("`@{source}` leaves the project root"));
-                    }
-                }
-                s => parts.push(s),
-            }
-        }
-        let name = parts.join("/");
+        let name = join(from, source)?;
         if self.files.contains_key(&name) {
             Ok(name)
         } else {
@@ -185,7 +201,7 @@ impl Project {
                 diags.extend(check_function(&sf.function, name, &resolve));
                 let bindings = self.bindings(name);
                 diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &adj));
-                if reachable.as_ref().is_some_and(|r| !r.contains(name)) {
+                if !is_struct(name) && reachable.as_ref().is_some_and(|r| !r.contains(name)) {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
                     diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from main")));
                 }
@@ -257,6 +273,32 @@ impl Project {
             })
             .collect()
     }
+}
+
+/// The project path that `@<source>`, written in function `from`, points to. The path starts with `./` or
+/// `../`, has no extension, is relative to the folder of `from`, and stays inside the root.
+fn join(from: &str, source: &str) -> Result<String, String> {
+    if !(source.starts_with("./") || source.starts_with("../")) {
+        return Err(format!("references are relative: write `@./{source}`"));
+    }
+    if source.rsplit('/').next().is_some_and(|last| last.contains('.') && last != "..") {
+        return Err("references have no extension".into());
+    }
+    // The importing file's directory, as name segments. `ci/fix` starts in `ci`.
+    let mut parts: Vec<&str> = from.split('/').collect();
+    parts.pop();
+    for seg in source.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(format!("`@{source}` leaves the project root"));
+                }
+            }
+            s => parts.push(s),
+        }
+    }
+    Ok(parts.join("/"))
 }
 
 /// Walks `dir`. `seen` holds canonical directories already visited, so a symlink loop ends.
@@ -671,5 +713,40 @@ mod tests {
         let diags = project.check();
         assert!(!has(&diags["tpl"], Severity::Warning, "not reachable"), "{:?}", diags["tpl"]);
         assert!(project.references().contains(&("main".to_string(), "tpl".to_string())));
+    }
+
+    #[test]
+    fn a_shared_struct_binds_in_every_function_that_names_it() {
+        let ticket = "/** A ticket. */\nexport default interface Ticket {\n  /** Title. */\n  title: string;\n  /** VIP? */\n  vip: boolean;\n}\n";
+        let a = "/** A. */\nexport default function a({ title, vip }: @./ticket) {\n  if (vip) { return `VIP ${title}` }\n  return `Plain ${title}`\n}\n";
+        let b = "/** B. */\nexport default function b({ vip, title }: @../ticket) {\n  if (vip) { return \"x\" }\n  return @../a(title=title)\n}\n";
+        let m = "/** m */\nexport default function main() { return @./sub/b(title=\"t\") }\n";
+        let project = project_of(&[("ticket.struct", ticket), ("a", a), ("sub/b", b), ("main", m)]);
+
+        let input_names = |name: &str| -> Vec<String> {
+            project.get(name).unwrap().function.inputs.iter().map(|i| i.name.value.clone()).collect()
+        };
+        assert_eq!(input_names("a"), ["title", "vip"]);
+        assert_eq!(input_names("sub/b"), ["title", "vip"]);
+
+        let diags = project.check();
+        for (name, ds) in &diags {
+            assert!(!ds.iter().any(|d| d.severity == Severity::Error), "{name} has an error: {ds:?}");
+        }
+        assert!(!has(&diags["ticket.struct"], Severity::Warning, "not reachable"), "{:?}", diags["ticket.struct"]);
+
+        let fns: Vec<&str> = project.functions().map(|(n, _)| n.as_str()).collect();
+        assert!(fns.contains(&"a"), "{fns:?}");
+        assert!(!fns.contains(&"ticket.struct"), "{fns:?}");
+    }
+
+    #[test]
+    fn a_missing_shared_struct_is_an_error() {
+        let project = project_of(&[("f", "/** f */\nexport default function f({ x }: @./nope) { return \"x\" }\n")]);
+        assert!(has(
+            &project.check()["f"],
+            Severity::Error,
+            "cannot find struct `@./nope`; a shared struct is a `nope.struct.rein` file"
+        ));
     }
 }

@@ -1,9 +1,10 @@
-//! Hover: the doc of a function, a std item, or a parameter and its type.
+//! Hover: the doc of a function, a std item, a struct, or a parameter or field and its type.
 
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Range, TextDocumentPositionParams};
 use rein_core::ast::{Binding, Function, Input};
 
 use super::occurrences::{declaration, symbol_at, Symbol};
+use super::structs::{struct_decl, struct_markdown};
 use super::text::{offset, range, token_at};
 use super::workspace::{locate, State};
 use crate::cli::description;
@@ -24,6 +25,8 @@ pub fn hover(state: &State, p: &TextDocumentPositionParams) -> Option<Hover> {
     let value = match symbol {
         Symbol::Function(target) => function_markdown(&target, &project.get(&target)?.function),
         Symbol::Param { function, name: n } => param_markdown(declaration(&project.get(&function)?.function, &n)?),
+        Symbol::Struct { file, name: n } => struct_markdown(struct_decl(&project, &file, &n)?),
+        Symbol::Field { file, strukt, name: n } => param_markdown(struct_decl(&project, &file, &strukt)?.field(&n)?),
         Symbol::Std(n) => std_markdown(&n)?,
     };
     Some(markdown(value, Some(range(&sf.text, span))))

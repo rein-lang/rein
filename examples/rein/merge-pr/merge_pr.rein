@@ -1,14 +1,16 @@
 // merge_pr.rein
 
+interface Input {
+  /** Does the PR change only documentation files? */
+  docsOnly: boolean;
+  /** What is the CI status of the PR? */
+  ci: "green" | "red" | "pending";
+}
+
 /**
  * Decide whether a pull request can be merged.
  */
-export default function mergePr(
-  /** Does the PR change only documentation files? */
-  docsOnly: boolean,
-  /** What is the CI status of the PR? */
-  ci: "green" | "red" | "pending",
-) {
+export default function mergePr({ docsOnly, ci }: Input) {
   if (docsOnly) {
     return "approved";
   }

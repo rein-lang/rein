@@ -1,14 +1,16 @@
+interface Input {
+  /** The link of the pull request to review. */
+  pr: string;
+  /** Did you write this pull request yourself? */
+  ownPr: boolean;
+  /** Does the PR change authentication, payments, or permissions code? */
+  securitySensitive: boolean;
+}
+
 /**
  * Review the code changes of a pull request and post the result.
  */
-export default async function review(
-  /** The link of the pull request to review. */
-  pr: string,
-  /** Did you write this pull request yourself? */
-  ownPr: boolean,
-  /** Does the PR change authentication, payments, or permissions code? */
-  securitySensitive: boolean,
-) {
+export default async function review({ pr, ownPr, securitySensitive }: Input) {
   if (ownPr) {
     return askUser(question=`This is my own pull request ${pr}. Who reviews it?`);
   }
