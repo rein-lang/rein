@@ -25,13 +25,13 @@ expression: text
       "id": "f0_1",
       "kind": "done",
       "function": "ci/fix",
-      "label": "Wait for CI to finish. Then start this program again with the task merge."
+      "label": "Wait for CI to finish. Then start this program again with the task\n      merge."
     },
     {
       "id": "f0_2",
       "kind": "done",
       "function": "ci/fix",
-      "label": "Read the CI log. Fix the failing test or code. Push the fix. Then run ci/fix again."
+      "label": "Read the CI log. Fix the failing test or code. Push the fix. Then run\n    ci/fix again."
     },
     {
       "id": "f1",
@@ -126,13 +126,13 @@ expression: text
       "id": "f4_1",
       "kind": "done",
       "function": "security/review",
-      "label": "Stop. Remove the secret from the diff. Rotate the secret. Then run merge_pr again."
+      "label": "Stop. Remove the secret from the diff. Rotate the secret. Then run\n      merge_pr again."
     },
     {
       "id": "f4_2",
       "kind": "done",
       "function": "security/review",
-      "label": "Check the auth and permission changes. Ask the security owner to approve. Then run merge_pr again."
+      "label": "Check the auth and permission changes. Ask the security owner to\n    approve. Then run merge_pr again."
     }
   ],
   "edges": [

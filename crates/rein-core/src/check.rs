@@ -101,7 +101,7 @@ pub fn check_line_length(text: &str, max: u64) -> Vec<Diagnostic> {
             diags.push(Diagnostic::error(
                 Span::new(start + over, start + line_text.len()),
                 format!(
-                    "line has {chars} characters; the limit is {max}. Break the line; to break a long string, end the line with `\\` and start the next line at column 1"
+                    "line has {chars} characters; the limit is {max}. Break the line; a long text can be a template (backticks) that spans lines"
                 ),
             ));
         }

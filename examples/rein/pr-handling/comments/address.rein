@@ -10,19 +10,19 @@ interface Input {
  */
 export default async function addressComments({ pr, openComments }: Input) {
   if (!openComments) {
-    return `No comment is open on ${pr}. Ask the reviewer for a new review. \
-Then stop.`;
+    return `No comment is open on ${pr}. Ask the reviewer for a new review.
+      Then stop.`;
   }
   /** Did you answer every open comment with a fix or a reply? */
   const allAnswered: boolean = await request(
-    `For each open comment on ${pr}: fix the code or reply with the reason \
-you do not. Push one commit. Resolve each thread you fixed.`,
+    `For each open comment on ${pr}: fix the code or reply with the reason
+      you do not. Push one commit. Resolve each thread you fixed.`,
   );
   if (allAnswered) {
     return `Ask the reviewer for a new review of ${pr}. Then stop.`;
   }
   return askUser(
-    question=`I cannot answer one or more review comments on ${pr}. Which \
-change do you want?`,
+    question=`I cannot answer one or more review comments on ${pr}. Which
+      change do you want?`,
   );
 }

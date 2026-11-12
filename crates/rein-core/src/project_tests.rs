@@ -716,7 +716,7 @@ fn function_with_line(width: usize, fill: char) -> String {
     format!("/** Long. */\nexport default function long() {{\n  return \"{text}\";\n}}\n")
 }
 
-const WIDTH_81: &str = "line has 81 characters; the limit is 80. Break the line; to break a long string, end the line with `\\` and start the next line at column 1";
+const WIDTH_81: &str = "line has 81 characters; the limit is 80. Break the line; a long text can be a template (backticks) that spans lines";
 
 /// Line-length errors of the file `long` in a project of `main` and `long`.
 fn width_errors(text: &str) -> Vec<Diagnostic> {

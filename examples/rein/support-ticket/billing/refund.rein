@@ -9,8 +9,8 @@ export default function refund(
     return @../escalate;
   }
   return @../templates/tell_customer(
-    opening="Refund the amount the customer asked for and confirm it in \
-the ticket.",
+    opening=`Refund the amount the customer asked for and confirm it in the
+      ticket.`,
     nextStep="Then tell the customer the refund takes 5 business days.",
   );
 }

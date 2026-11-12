@@ -163,24 +163,6 @@ fn template_literal_escapes_and_raw_newlines() {
 }
 
 #[test]
-fn line_continuation_adds_no_text() {
-    let toks = lex("`a ${b} \\\nc\\\r\nd`").unwrap();
-    let Tok::Template(pieces) = &toks[0].0 else {
-        panic!("{:?}", toks[0].0)
-    };
-    assert_eq!(pieces[2], Piece::Text(" cd".into()));
-    // As in TypeScript, the next line keeps its leading spaces.
-    let toks = lex("\"a \\\n  b\"").unwrap();
-    assert!(matches!(&toks[0].0, Tok::Str(s) if s == "a   b"), "{:?}", toks[0].0);
-}
-
-#[test]
-fn a_raw_newline_in_a_string_is_still_an_error() {
-    let err = lex("\"a\nb\"").unwrap_err();
-    assert_eq!(err.message, "newline in string; write `\\n` instead");
-}
-
-#[test]
 fn template_literal_only_takes_a_name() {
     let err = lex("`${a.b}`").unwrap_err();
     assert_eq!(

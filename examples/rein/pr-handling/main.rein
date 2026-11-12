@@ -12,8 +12,8 @@ interface Input {
  */
 export default function main({ pr, draft, task }: Input) {
   if (draft) {
-    return `Stop. The pull request ${pr} is a draft. Wait until the author \
-marks it ready.`;
+    return `Stop. The pull request ${pr} is a draft. Wait until the author
+      marks it ready.`;
   }
   switch (task) {
     case "review":

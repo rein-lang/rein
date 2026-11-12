@@ -25,19 +25,19 @@ expression: text
       "id": "f0_1",
       "kind": "done",
       "function": "ci/fix",
-      "label": "Run the failed job of ${pr} again, one time. If it fails again, start this program again for ${pr} with the cause test or code."
+      "label": "Run the failed job of ${pr} again, one time. If it fails again,\n        start this program again for ${pr} with the cause test or code."
     },
     {
       "id": "f0_2",
       "kind": "done",
       "function": "ci/fix",
-      "label": "askUser(question=`CI fails on ${pr} for a reason outside this pull request. Do I wait, or do I fix it in a new pull request?`)"
+      "label": "askUser(question=`CI fails on ${pr} for a reason outside this pull request.\n          Do I wait, or do I fix it in a new pull request?`)"
     },
     {
       "id": "f0_3",
       "kind": "request",
       "function": "ci/fix",
-      "label": "request: `Read the CI log of ${pr}. Find the first failing step. Fix the test or the code. Push one commit.`"
+      "label": "request: `Read the CI log of ${pr}. Find the first failing step. Fix the test\n          or the code. Push one commit.`"
     },
     {
       "id": "f0_4",
@@ -51,13 +51,13 @@ expression: text
       "id": "f0_5",
       "kind": "done",
       "function": "ci/fix",
-      "label": "Wait for CI to finish on ${pr}. Then start this program again with the task merge."
+      "label": "Wait for CI to finish on ${pr}. Then start this program again\n          with the task merge."
     },
     {
       "id": "f0_6",
       "kind": "done",
       "function": "ci/fix",
-      "label": "askUser(question=`I cannot fix the failing CI job of ${pr}. What do you want me to try?`)"
+      "label": "askUser(question=`I cannot fix the failing CI job of ${pr}. What do you want\n          me to try?`)"
     },
     {
       "id": "f1",
@@ -77,13 +77,13 @@ expression: text
       "id": "f1_1",
       "kind": "done",
       "function": "comments/address",
-      "label": "No comment is open on ${pr}. Ask the reviewer for a new review. Then stop."
+      "label": "No comment is open on ${pr}. Ask the reviewer for a new review.\n      Then stop."
     },
     {
       "id": "f1_2",
       "kind": "request",
       "function": "comments/address",
-      "label": "request: `For each open comment on ${pr}: fix the code or reply with the reason you do not. Push one commit. Resolve each thread you fixed.`"
+      "label": "request: `For each open comment on ${pr}: fix the code or reply with the reason\n      you do not. Push one commit. Resolve each thread you fixed.`"
     },
     {
       "id": "f1_3",
@@ -103,7 +103,7 @@ expression: text
       "id": "f1_5",
       "kind": "done",
       "function": "comments/address",
-      "label": "askUser(question=`I cannot answer one or more review comments on ${pr}. Which change do you want?`)"
+      "label": "askUser(question=`I cannot answer one or more review comments on ${pr}. Which\n      change do you want?`)"
     },
     {
       "id": "f2",
@@ -124,7 +124,7 @@ expression: text
       "id": "f2_1",
       "kind": "done",
       "function": "main",
-      "label": "Stop. The pull request ${pr} is a draft. Wait until the author marks it ready."
+      "label": "Stop. The pull request ${pr} is a draft. Wait until the author\n      marks it ready."
     },
     {
       "id": "f2_2",
@@ -214,7 +214,7 @@ expression: text
       "id": "f4_3",
       "kind": "request",
       "function": "review",
-      "label": "request: delegate(model=\"use opus model\", task=`review the pull request ${pr} with a security focus and list each problem with file and line`)"
+      "label": "request: delegate(model=\"use opus model\", task=`review the pull request ${pr}\n        with a security focus and list each problem with file and line`)"
     },
     {
       "id": "f4_4",
@@ -240,7 +240,7 @@ expression: text
       "id": "f4_7",
       "kind": "request",
       "function": "review",
-      "label": "request: delegate(model=\"use haiku model\", task=`review the pull request ${pr} and list each problem with file and line`)"
+      "label": "request: delegate(model=\"use haiku model\", task=`review the pull request ${pr}\n        and list each problem with file and line`)"
     },
     {
       "id": "f4_8",
@@ -278,7 +278,7 @@ expression: text
       "id": "f5_0",
       "kind": "done",
       "function": "templates/post_review",
-      "label": "Post one review on the pull request ${pr}. Type: ${kind}. Body: ${body}. Do not merge in this run."
+      "label": "Post one review on the pull request ${pr}. Type: ${kind}. Body:\n    ${body}. Do not merge in this run."
     }
   ],
   "edges": [

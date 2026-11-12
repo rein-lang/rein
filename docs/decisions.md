@@ -61,7 +61,7 @@ Each choice can change. The reason is one line.
 - A function has at most 40 lines, from `export default` to `}`, and every line counts, blank and comment lines too. `rein.json` sets `maxFunctionLines` for a longer one. Why: one plain count with no skip rule to learn, so the limit is easy to check by eye; the rule matches the common `max-lines-per-function` lint with no skips.
 - A line has at most 80 characters, and `rein.json` sets `maxLineLength` for another limit. Why: 80 is Prettier's default `printWidth`, and Prettier recommends against more than 80 for readability (https://prettier.io/docs/options#print-width). Rein makes it an error, not a guideline, so long lines never land.
 - The line length counts characters, not bytes, and a tab is one character. Why: a reader sees characters; bytes would punish non-English text.
-- `\` at the end of a line continues a STRING or a TEMPLATE with no added text, and the next line keeps its leading spaces. Why: this is the TypeScript `LineContinuation` rule, so Rein text means the same in TypeScript tools. The cost is that a continued line starts at column 1; stripping the indent would read better but give a different text than TypeScript.
+- A long text is a template that spans lines. A template follows TypeScript: each newline and the next line's leading spaces are part of the text, with no dedent. A STRING still cannot hold a raw newline. Why: Rein mimics TypeScript, so a template means the same text in TypeScript tools.
 - Reference cycles are allowed, but the checker warns. Why: a cycle acts like a loop, and Rein has no loops yet. A retry flow needs one.
 - One step per eval. `rein eval` evaluates one function and returns its string or the next function. The agent, or the harness, decides whether to follow it. Why: the agent keeps control of each step.
 - `choice` stays the CLI and JSON name for a union parameter. Why: the output shape is stable for agent tools.
@@ -96,6 +96,7 @@ Each choice can change. The reason is one line.
 
 - Bundle tool: compiles a program into one self-contained `.rein` file, so an agent can load one file and run it as a full program.
 - Research an agent-agnostic tool that installs agent hooks. Why: each agent keeps its hook config in its own format and place, so Rein should not own a per-agent installer.
+- Dedent of multi-line templates: drop the common leading spaces of a template's lines, so the agent text has no code indentation.
 
 ## Open questions
 

@@ -176,15 +176,15 @@ fn check_applies_the_line_length_limit() {
 }
 
 #[test]
-fn a_backslash_at_the_end_of_a_line_continues_the_text() {
-    let root = temp_dir("continue");
-    let text = "/** Entry. */\nexport default function main() {\n  return `Read the log. \\\nFix the test.`;\n}\n";
+fn a_template_keeps_its_newlines_and_indentation() {
+    let root = temp_dir("multiline");
+    let text = "/** Entry. */\nexport default function main() {\n  return `Read the log.\n    Fix the test.`;\n}\n";
     fs::write(root.join("main.rein"), text).unwrap();
     let main = root.join("main.rein");
 
     let out = rein(&["step", main.to_str().unwrap(), "--json"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains(r#""instruction":"Read the log. Fix the test.""#), "{stdout}");
+    assert!(stdout.contains(r#""instruction":"Read the log.\n    Fix the test.""#), "{stdout}");
 
     fs::remove_dir_all(&root).unwrap();
 }

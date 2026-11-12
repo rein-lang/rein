@@ -11,6 +11,6 @@ interface Input {
  * Post one review on the pull request.
  */
 export default function postReview({ kind, body, pr }: Input) {
-  return `Post one review on the pull request ${pr}. Type: ${kind}. \
-Body: ${body}. Do not merge in this run.`;
+  return `Post one review on the pull request ${pr}. Type: ${kind}. Body:
+    ${body}. Do not merge in this run.`;
 }
