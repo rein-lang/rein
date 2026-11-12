@@ -942,6 +942,44 @@ fn a_function_whose_folder_holds_the_entry_gives_no_nesting_warning() {
 }
 
 #[test]
+fn a_path_the_loader_skips_is_never_a_nesting_target() {
+    assert!(loadable_path("merge/fix"));
+    assert!(loadable_path("main"));
+    for path in ["target/pick", "node_modules/pick", ".hidden/pick", "a/target/b", "foo/main"] {
+        assert!(!loadable_path(path), "{path}");
+    }
+    // `pick` belongs in `target/`, a folder the loader skips, so it would drop out of the project.
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./target }\n"),
+        ("target", "/** t */\nexport default function target() { return @./pick }\n"),
+        ("pick", "/** p */\nexport default function pick() { return `p` }\n"),
+    ]);
+    assert!(!has(&project.check()["pick"], Severity::Warning, "only called by"), "{:?}", project.check()["pick"]);
+    assert_eq!(project.nest_target("pick"), None);
+}
+
+#[test]
+fn the_root_main_never_gets_a_nesting_warning() {
+    // With the entry `start`, `main` is a plain function called only by `foo`. It still stays at the root: the
+    // project needs it, and `foo/main.rein` would make `foo/` another flow.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-root-main-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "start.rein"}"#);
+    write("start.rein", "/** s */\nexport default function start() { return @./foo }\n");
+    write("foo.rein", "/** f */\nexport default function foo() { return @./main }\n");
+    write("main.rein", "/** m */\nexport default function main() { return `m` }\n");
+    let project = Project::load(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    assert!(!has(&project.check()["main"], Severity::Warning, "only called by"), "{:?}", project.check()["main"]);
+    assert_eq!(project.nest_target("main"), None);
+}
+
+#[test]
 fn unreachable_functions_get_no_nesting_warning() {
     // `u` and `v` only call each other. Each has one caller, but neither is reachable from main.
     let project = project_of(&[
