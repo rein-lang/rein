@@ -2,6 +2,7 @@
 
 mod cli;
 mod dap;
+mod debug;
 mod graph;
 mod hook;
 mod live_run;
@@ -113,6 +114,11 @@ enum Command {
         #[command(flatten)]
         args: graph::GraphArgs,
     },
+    /// Debug a program in the browser: set inputs and answers, step through, and watch the path the flow takes.
+    Debug {
+        #[command(flatten)]
+        args: debug::DebugArgs,
+    },
     /// List the programs visible from here, as `ls` lists files: names, or `-l` for details. Operands are name globs.
     #[command(alias = "flows")]
     List {
@@ -184,6 +190,7 @@ fn main() -> ExitCode {
         }
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { args } => graph::run(&args),
+        Command::Debug { args } => debug::run(&args),
         Command::List { args } => list::run(&args),
         Command::Show { name } => programs::show(&name),
         Command::Serve { mcp: true } => mcp::serve(),

@@ -14,7 +14,7 @@ use rein_core::step::{invalid_request, step, StepRequest, StepResponse};
 use crate::cli;
 
 /// The mermaid build the HTML page loads. Pinned, so a page draws the same later.
-const MERMAID: &str = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+pub(crate) const MERMAID: &str = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
 
 #[derive(Clone, Copy, ValueEnum)]
 pub enum GraphFormat {
@@ -160,7 +160,7 @@ fn html(g: &Graph, request: Option<&StepRequest>) -> String {
 }
 
 /// Opens `path` in the default browser: `open` on macOS, `xdg-open` on Linux, nothing elsewhere.
-fn open(path: &Path) {
+pub(crate) fn open(path: impl AsRef<std::ffi::OsStr>) {
     let tool = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "linux") {

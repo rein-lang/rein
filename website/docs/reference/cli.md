@@ -13,6 +13,7 @@ This document contains the help content for the `rein` command-line program.
 * [`rein step`↴](#rein-step)
 * [`rein describe`↴](#rein-describe)
 * [`rein graph`↴](#rein-graph)
+* [`rein debug`↴](#rein-debug)
 * [`rein list`↴](#rein-list)
 * [`rein show`↴](#rein-show)
 * [`rein serve`↴](#rein-serve)
@@ -38,6 +39,7 @@ A small language for agent decision flows
 * `step` — Step the whole flow from `main`. This is the agent-facing interface: answer one key per call
 * `describe` — Print a function's schema as JSON
 * `graph` — Print the program graph: functions, questions, branches, outcomes, and hand-offs. With answers, mark the path the flow takes
+* `debug` — Debug a program in the browser: set inputs and answers, step through, and watch the path the flow takes
 * `list` — List the programs visible from here, as `ls` lists files: names, or `-l` for details. Operands are name globs
 * `show` — Print a program's source: its manifest and every .rein file
 * `serve` — Serve the agent interface. Holds live runs in memory
@@ -171,6 +173,29 @@ Print the program graph: functions, questions, branches, outcomes, and hand-offs
 
 * `-o`, `--output <FILE>` — Write to FILE instead of stdout. A `.svg` or `.png` FILE is rendered from DOT by Graphviz `dot`
 * `--open` — Open the page in the default browser. Without -o, write it to a temporary file first
+
+
+
+## `rein debug`
+
+Debug a program in the browser: set inputs and answers, step through, and watch the path the flow takes
+
+**Usage:** `rein debug [OPTIONS] [PROGRAM]`
+
+###### **Arguments:**
+
+* `<PROGRAM>` — Program to debug: a `.rein` file, or a name (see `rein list`). Default: the project around the current directory
+
+###### **Options:**
+
+* `--root <ROOT>` — Project root. Default: the nearest directory with main.rein
+* `--entry <ENTRY>` — Function to start from, as its path under the root without `.rein`. Default: the program's entry
+* `--input <NAME=VALUE>` — First value of a `string` parameter of the entry, as name=value. Repeat for each input
+* `--answer <KEY=VALUE>` — First answer, as key=value, such as `main.task=merge`. Repeat for each answer
+* `--port <PORT>` — Port on 127.0.0.1. Default: a free port
+
+  Default value: `0`
+* `--no-open` — Do not open the page in the browser
 
 
 

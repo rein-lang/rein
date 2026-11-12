@@ -326,7 +326,7 @@ fn failure(
 }
 
 /// The wire type name and the options of an input.
-fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
+pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
     let options = input
         .ty
         .options()
