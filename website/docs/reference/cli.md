@@ -17,6 +17,8 @@ This document contains the help content for the `rein` command-line program.
 * [`rein agent-context`↴](#rein-agent-context)
 * [`rein hook`↴](#rein-hook)
 * [`rein install`↴](#rein-install)
+* [`rein uninstall`↴](#rein-uninstall)
+* [`rein update`↴](#rein-update)
 * [`rein lsp`↴](#rein-lsp)
 
 ## `rein`
@@ -38,7 +40,9 @@ A small language for agent decision flows
 * `serve` — Serve the agent interface. Holds live runs in memory
 * `agent-context` — Print the block an agent needs to use the visible flows
 * `hook` — The agent hook entry point. Reads one event on stdin. Run by the agent, not by hand
-* `install` — Register a program folder in the user programs folder, or write a tool's hook config (`claude-code`)
+* `install` — Install a program. A folder path links it. `claude-code` writes the agent hook. Any other name is a pnpm package
+* `uninstall` — Remove an installed program package. Runs `pnpm remove` in the npm project
+* `update` — Update installed program packages within their ranges. Runs `pnpm update --ignore-scripts`
 * `lsp` — Run the language server on stdio
 
 
@@ -226,19 +230,45 @@ The agent hook entry point. Reads one event on stdin. Run by the agent, not by h
 
 ## `rein install`
 
-Register a program folder in the user programs folder, or write a tool's hook config (`claude-code`)
+Install a program. A folder path links it. `claude-code` writes the agent hook. Any other name is a pnpm package.
+
+The rule, in order: a path to an existing directory is linked into the user programs folder. The literal `claude-code` writes the hook (`--project` or `--user` pick the settings file). Anything else is passed to `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
 
 **Usage:** `rein install [OPTIONS] <TOOL>`
 
 ###### **Arguments:**
 
-* `<TOOL>` — A program folder to register, or the agent tool, such as `claude-code`
+* `<TOOL>` — A program folder, `claude-code`, or a package such as `pr-handling@^1`
 
 ###### **Options:**
 
-* `--project` — Write to the project's settings (`.claude/settings.json`). Default
-* `--user` — Write to the user's settings (`~/.claude/settings.json`)
-* `--dry-run` — Print the resulting file and write nothing
+* `--project` — For `claude-code`: write to the project's settings (`.claude/settings.json`). Default
+* `--user` — For `claude-code`: write to the user's settings (`~/.claude/settings.json`)
+* `--dry-run` — For `claude-code`: print the resulting file and write nothing
+
+
+
+## `rein uninstall`
+
+Remove an installed program package. Runs `pnpm remove` in the npm project
+
+**Usage:** `rein uninstall <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Package name, as `rein list` shows it. An alias is its own name
+
+
+
+## `rein update`
+
+Update installed program packages within their ranges. Runs `pnpm update --ignore-scripts`
+
+**Usage:** `rein update [NAME]`
+
+###### **Arguments:**
+
+* `<NAME>` — Package to update. Default: every installed package
 
 
 
