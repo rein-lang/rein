@@ -940,6 +940,30 @@ fn rename_a_function_renames_the_folder_of_its_nested_functions() {
 }
 
 #[test]
+fn rename_refuses_to_move_a_folder_that_holds_the_entry() {
+    let root = fs::canonicalize(temp_project("rename-entry-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "app/start.rein"}"#);
+    write("app/start.rein", "/** Start. */\nexport default function start() {\n  return @../app;\n}\n");
+    write("app.rein", "/** App. */\nexport default function app() {\n  return `a`;\n}\n");
+    let mut server = start_with_file_renames();
+    let start = open_file(&mut server, &root, "app/start.rein");
+
+    let mut params = at(&start, 2, 13);
+    params["newName"] = json!("web");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("holds the entry `app/start`"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn rename_a_function_needs_a_client_that_renames_files() {
     let root = example("support-ticket");
     let mut server = Server::start();
