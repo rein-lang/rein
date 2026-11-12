@@ -225,8 +225,8 @@ pub(crate) fn print_step(response: &StepResponse, as_json: bool) {
             println!("request: {instruction}");
             println!("then answer: {key}: {} - {}", shown_type(&response.r#type, &response.options), response.description);
             let fields = response.fields.as_deref().unwrap_or_default();
-            for f in fields {
-                println!("  {}: {} - {}", f.name, shown_type(&f.r#type, &f.options), f.description);
+            for line in field_lines(fields) {
+                println!("{line}");
             }
             if fields.is_empty() {
                 println!("hint: rerun with --answer {key}=<value>");
@@ -262,6 +262,11 @@ fn print_answers(answers: &BTreeMap<String, String>) {
         .map(|(k, v)| if v.starts_with('{') { format!("--answer {k}='{v}'") } else { format!("--answer {k}={v}") })
         .collect();
     println!("answers: {}", flags.join(" "));
+}
+
+/// One indented line per field of a struct answer: `  name: type - description`.
+pub(crate) fn field_lines(fields: &[rein_core::step::FieldSpec]) -> Vec<String> {
+    fields.iter().map(|f| format!("  {}: {} - {}", f.name, shown_type(&f.r#type, &f.options), f.description)).collect()
 }
 
 /// The type as TypeScript writes it: `boolean`, or the union such as `"green" | "red"`.
