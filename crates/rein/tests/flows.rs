@@ -351,12 +351,13 @@ fn install_dry_run_prints_and_writes_nothing() {
 }
 
 #[test]
-fn install_refuses_an_unsupported_tool() {
+fn install_other_name_is_a_package_for_pnpm() {
+    // Not a folder and not `claude-code`, so it goes to pnpm. A missing pnpm stops it before any network use.
     let sb = Sandbox::new("install-other");
     let repo = temp_dir("install-other-repo");
-    let out = sb.run(&repo, &["install", "cursor", "--project"]);
+    let out = sb.command(&repo, &["install", "cursor", "--project"]).env("REIN_PNPM", sb.tmp.join("no-pnpm")).output().unwrap();
     assert_eq!(code(&out), 1);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not supported yet"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("pnpm is not installed"));
 }
 
 #[test]
