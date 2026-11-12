@@ -1,6 +1,7 @@
 //! `rein` command line: checks, runs and describes Rein projects, and serves the language server.
 
 mod cli;
+mod dap;
 mod graph;
 mod hook;
 mod live_run;
@@ -178,6 +179,8 @@ enum Command {
     },
     /// Run the language server on stdio.
     Lsp,
+    /// Run the debug adapter on stdio (Debug Adapter Protocol). The VS Code extension starts it.
+    Dap,
     /// Print the command reference as Markdown.
     #[command(hide = true)]
     DocsCli,
@@ -206,6 +209,7 @@ fn main() -> ExitCode {
         Command::Uninstall { args } => packages::run("remove", &args),
         Command::Update { args } => packages::run("update", &args),
         Command::Lsp => lsp::serve(),
+        Command::Dap => dap::serve(),
         Command::DocsCli => {
             print!("{}", cli_reference());
             0
