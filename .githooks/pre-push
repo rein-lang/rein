@@ -10,3 +10,4 @@ fi
 
 node website/docs/scripts/generate-examples.mjs --check
 sh website/docs/scripts/check-cli-drift.sh
+sh scripts/check-installed-programs.sh
