@@ -91,7 +91,7 @@ fn parses_full_sample() {
 #[test]
 fn parameter_doc_block_can_be_multi_line() {
     let f = ok("/** d */\nexport default function f(\n  /**\n   * Is it VIP?\n   * Check the CRM.\n   */\n  vip: boolean,\n) { return @./a }");
-    assert_eq!(f.inputs[0].description.value, "Is it VIP?\nCheck the CRM.");
+    assert_eq!(f.inputs[0].description.value, "Is it VIP? Check the CRM.");
 }
 
 #[test]
