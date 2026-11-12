@@ -64,7 +64,7 @@ fn serve(a: &DebugArgs) -> Result<(), String> {
     let listener =
         TcpListener::bind(("127.0.0.1", a.port)).map_err(|e| format!("cannot listen on 127.0.0.1:{}: {e}", a.port))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let url = format!("http://127.0.0.1:{port}/");
+    let url = start_url(&first, port);
     println!("rein debug: {url} (Ctrl-C stops it)");
     if !a.no_open {
         graph_cmd::open(&url);
@@ -76,6 +76,20 @@ fn serve(a: &DebugArgs) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The address of the page with the starting state in its query string, as the page keeps it: `entry`, `in.<name>`
+/// for each input, `a.<key>` for each answer. An empty value is unset, so it is left out.
+fn start_url(first: &StepRequest, port: u16) -> String {
+    let mut query = form_urlencoded::Serializer::new(String::new());
+    query.append_pair("entry", &first.entry);
+    for (name, value) in first.inputs.iter().filter(|(_, v)| !v.is_empty()) {
+        query.append_pair(&format!("in.{name}"), value);
+    }
+    for (key, value) in first.answers.iter().filter(|(_, v)| !v.is_empty()) {
+        query.append_pair(&format!("a.{key}"), value);
+    }
+    format!("http://127.0.0.1:{port}/?{}", query.finish())
 }
 
 /// The loaded program, the values the page starts with, and the port the Host header must name.
@@ -130,6 +144,8 @@ impl Server {
 
     /// The response to one request: status, content type, body.
     fn respond(&self, method: &str, path: &str, body: &str) -> (&'static str, &'static str, String) {
+        // The page address carries the state in its query string, which the routes do not read.
+        let path = path.split_once('?').map_or(path, |(route, _)| route);
         match (method, path) {
             ("GET", "/") => ("200 OK", "text/html", page(&self.first)),
             ("GET", "/schema") => ("200 OK", "application/json", schema(&self.project, &self.first.entry).to_string()),
