@@ -193,6 +193,12 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
     let mut renames = Vec::new();
     for (name, file) in &project.files {
         let Some(to) = moved(name) else { continue };
+        if !rein_core::project::loadable_path(&to) {
+            return Err(format!(
+                "`{to}` is a path the project does not load (a hidden, `target` or `node_modules` folder, or a \
+                 `main` below the root); moving `{name}` there would drop it from the program"
+            ));
+        }
         let new_path = project.root.join(format!("{to}.rein"));
         if new_path.exists() {
             return Err(format!("{} already exists", new_path.display()));

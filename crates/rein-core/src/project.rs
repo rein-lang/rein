@@ -459,7 +459,8 @@ impl Project {
 
     /// The only caller of `name` and the project path `name` should have, when it is not there yet.
     fn misplaced<'a>(&self, name: &str, callers: &'a BTreeMap<String, BTreeSet<String>>) -> Option<(&'a str, String)> {
-        if is_struct(name) || name == self.entry {
+        // The root `main` stays: the project needs it, as `project_diagnostics` says.
+        if is_struct(name) || name == self.entry || name == ENTRY {
             return None;
         }
         let mut only = callers.get(name)?.iter();
@@ -470,7 +471,8 @@ impl Project {
         // A caller inside the function's own folder moves with it, so the function can never reach that folder.
         // The entry inside it would move too, and `rein.json` would name a file that is gone.
         let folder = format!("{name}/");
-        let blocked = home.starts_with(&folder) || self.entry.starts_with(&folder);
+        // A path the loader skips would drop the function out of the project.
+        let blocked = home.starts_with(&folder) || self.entry.starts_with(&folder) || !loadable_path(&home);
         (home != name && !blocked).then_some((caller.as_str(), home))
     }
 
@@ -631,7 +633,7 @@ fn collect(
         let Ok(meta) = fs::metadata(&path) else { continue };
         if meta.is_dir() {
             // A subdirectory with its own main.rein is another flow. Skip it.
-            if file_name.starts_with('.') || file_name == "target" || file_name == "node_modules" || path.join(MAIN_FILE).is_file() {
+            if skipped_folder(&file_name) || path.join(MAIN_FILE).is_file() {
                 continue;
             }
             let _ = collect(&path, out, seen);
@@ -641,6 +643,19 @@ fn collect(
         }
     }
     Ok(())
+}
+
+/// Whether the loader skips a folder of this name: hidden folders, `target` and `node_modules`.
+fn skipped_folder(name: &str) -> bool {
+    name.starts_with('.') || name == "target" || name == "node_modules"
+}
+
+/// Whether the loader finds a function at the project path `path`, such as `merge/fix`: no folder on the way is
+/// skipped, and it is not a `main` below the root, which would make its folder another flow.
+pub fn loadable_path(path: &str) -> bool {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    let file = parts.pop().unwrap_or_default();
+    !parts.iter().any(|p| skipped_folder(p)) && (parts.is_empty() || file != ENTRY)
 }
 
 /// Whether a reference key names another program: it is not a relative path and not a std name.
