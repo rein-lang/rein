@@ -706,7 +706,7 @@ fn struct_answer_is_a_json_object_on_the_wire() {
 #[test]
 fn double_equals_and_not_equal_branch_like_triple_forms() {
     let make = |op: &str| {
-        project(&[("main.rein", &format!("/** Entry. */\nexport default function main(\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {{\n  if (ci {op} \"green\") {{ return \"a\" }}\n  return \"b\";\n}}\n"))])
+        project(&[("main.rein", &format!("/** Entry. */\nexport default function main(\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {{\n  if (ci {op} \"green\") {{ return `a` }}\n  return `b`;\n}}\n"))])
     };
     let done = |p: &Project, ci: &str| match step(p, &req("main", &[("main.ci", ci)])) {
         StepResponse::Done { instruction, .. } => instruction,

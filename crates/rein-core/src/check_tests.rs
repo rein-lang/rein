@@ -263,6 +263,13 @@ fn double_equals_checks_its_union_member() {
 }
 
 #[test]
+fn double_not_equal_uses_the_tag_quote_rule() {
+    let (_, diags) = parse("/** d */\nexport default function f(\n  /** C */ ci: \"green\" | \"red\",\n) { if (ci != `red`) { return `1` } return `2`  }");
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].message, "a tag uses quotes: write \"red\" instead of `red`");
+}
+
+#[test]
 fn boolean_parameter_as_switch_subject() {
     expect_diag(
         "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { switch (a) { case \"x\": return `1` } }",
