@@ -110,7 +110,11 @@ fn flows_json_lists_visible_flows_with_scope_and_shadowing() {
     write(&sb.user_flows(), "merge-pr/main.rein", &flow_text("Shadowed."));
     write(&sb.user_flows(), "my-review/main.rein", &flow_text("My review."));
 
-    let out = sb.run(&repo, &["flows", "--json"]);
+    // Shadowed programs are hidden unless `-a` asks for them.
+    let visible = json_out(&sb.run(&repo, &["flows", "--json"]));
+    assert_eq!(visible.as_array().unwrap().len(), 2, "{visible}");
+
+    let out = sb.run(&repo, &["flows", "--json", "-a"]);
     assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
     let list = json_out(&out);
     let rows = list.as_array().unwrap();
@@ -134,8 +138,10 @@ fn flows_text_lists_the_examples_from_their_folder() {
     assert_eq!(code(&out), 0);
     let text = stdout(&out);
     for name in ["merge-pr", "incident-triage", "support-ticket"] {
-        assert!(text.lines().any(|l| l.starts_with(&format!("{name}\tproject\t"))), "{text}");
+        assert!(text.lines().any(|l| l == name), "{text}");
     }
+    let long = stdout(&sb.run(&examples, &["flows", "-l"]));
+    assert!(long.lines().any(|l| l.starts_with("project ") && l.contains(" merge-pr ")), "{long}");
 }
 
 #[test]

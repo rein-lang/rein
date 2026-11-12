@@ -4,6 +4,7 @@ mod cli;
 mod graph;
 mod hook;
 mod live_run;
+mod list;
 mod lsp;
 mod mcp;
 mod packages;
@@ -123,12 +124,11 @@ enum Command {
         #[arg(long, short, value_name = "FILE")]
         output: Option<PathBuf>,
     },
-    /// List the programs visible from here: name, scope, path, description, and first question.
+    /// List the programs visible from here, as `ls` lists files: names, or `-l` for details. Operands are name globs.
     #[command(alias = "flows")]
     List {
-        /// Print the list as JSON.
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        args: list::ListArgs,
     },
     /// Print a program's source: its manifest and every .rein file.
     Show {
@@ -193,7 +193,7 @@ fn main() -> ExitCode {
         }
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { program, root, refs, format, output } => graph::run(program, root, refs, format, output.as_deref()),
-        Command::List { json } => programs::list(json),
+        Command::List { args } => list::run(&args),
         Command::Show { name } => programs::show(&name),
         Command::Serve { mcp: true } => mcp::serve(),
         Command::Serve { mcp: false } => {

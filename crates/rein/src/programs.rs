@@ -1,8 +1,8 @@
-//! Programs as named apps: `rein list` and `rein show`. The MCP host uses the same functions.
+//! Programs as named apps: `rein show`, and the catalog the MCP host serves. `rein list` is in `list`.
 
 use std::fs;
 
-use rein_core::flows::MANIFEST;
+use rein_core::flows::{Flow, MANIFEST};
 use rein_core::project::Project;
 use rein_core::step::invalid_request;
 use serde_json::Value;
@@ -11,24 +11,35 @@ use crate::cli::flow_json;
 use crate::live_run::Run;
 use crate::scopes;
 
-/// Every visible program as JSON: the `rein flows` fields plus `first_step`, the step a new run starts on.
-/// A package whose `engines.rein` does not hold for this rein also has a `warning`.
+/// Every visible program as JSON: the `record` fields plus `first_step`, the step a new run starts on.
 pub fn catalog() -> Vec<Value> {
-    scopes::discover_here()
-        .iter()
-        .map(|f| {
-            let mut v = flow_json(f);
-            let first = match Project::load(&f.root) {
-                Ok(project) => Run::start(project, f.entry.clone()).last().clone(),
-                Err(e) => invalid_request(format!("cannot read {}: {e}", f.root.display())),
-            };
-            v["first_step"] = serde_json::to_value(first).unwrap_or_default();
-            if let Some(warning) = f.engines_rein.as_deref().and_then(|range| engines_warning(range, RUNNING)) {
-                v["warning"] = Value::String(warning);
-            }
-            v
-        })
-        .collect()
+    scopes::discover_here().iter().map(|f| with_first_step(f, record(f))).collect()
+}
+
+/// One program as JSON: the `rein flows` fields. A package whose `engines.rein` does not hold for this rein also
+/// has a `warning`.
+pub fn record(f: &Flow) -> Value {
+    let mut v = flow_json(f);
+    if let Some(warning) = warning(f) {
+        v["warning"] = Value::String(warning);
+    }
+    v
+}
+
+/// Adds `first_step` to a record: the step a new run of the program starts on. It runs the program's first
+/// step, so only the JSON output asks for it.
+pub fn with_first_step(f: &Flow, mut v: Value) -> Value {
+    let first = match Project::load(&f.root) {
+        Ok(project) => Run::start(project, f.entry.clone()).last().clone(),
+        Err(e) => invalid_request(format!("cannot read {}: {e}", f.root.display())),
+    };
+    v["first_step"] = serde_json::to_value(first).unwrap_or_default();
+    v
+}
+
+/// Why a program's `engines.rein` does not hold for this rein, if it does not.
+pub fn warning(f: &Flow) -> Option<String> {
+    f.engines_rein.as_deref().and_then(|range| engines_warning(range, RUNNING))
 }
 
 /// This rein's version. `engines.rein` ranges are checked against it.
@@ -53,24 +64,6 @@ fn range_holds(range: &str, version: &str) -> Option<bool> {
 fn triple(version: &str) -> Option<[u64; 3]> {
     let parts: Vec<u64> = version.split('.').map(|p| p.parse().ok()).collect::<Option<_>>()?;
     <[u64; 3]>::try_from(parts).ok()
-}
-
-/// `rein list`: name, scope, path, description, and the first question of each program.
-pub fn list(json: bool) -> u8 {
-    let all = catalog();
-    if json {
-        println!("{}", Value::Array(all));
-        return 0;
-    }
-    let text = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
-    for p in &all {
-        let step = &p["first_step"];
-        let first = ["description", "instruction", "message"].iter().map(|k| text(step, k)).find(|s| !s.is_empty()).unwrap_or_default();
-        let shadow = p["shadowed_by"].as_str().map_or(String::new(), |by| format!(" (shadowed by {by})"));
-        let warning = p["warning"].as_str().map_or(String::new(), |w| format!(" (warning: {w})"));
-        println!("{}\t{}\t{}\t{}\tfirst: {first}{shadow}{warning}", text(p, "name"), text(p, "scope"), text(p, "path"), text(p, "description"));
-    }
-    0
 }
 
 /// The source of a program: the manifest, then each `.rein` file with the entry first. Each file
