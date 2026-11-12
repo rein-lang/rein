@@ -1,5 +1,7 @@
-//! Completion: reference paths after `@./`, argument names inside a call, union members after `===` or `case`,
+//! Completion: reference paths after `@`, argument names inside a call, union members after `===` or `case`,
 //! and elsewhere the parameter names, std names and keywords.
+
+use std::path::Path;
 
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation, Range,
@@ -39,7 +41,8 @@ pub fn completion(state: &State, p: &TextDocumentPositionParams) -> Option<Compl
     Some(CompletionResponse::Array(items))
 }
 
-/// Completion of a reference path: the project functions, or after `}: ` the shared structs, relative to this file, that match what is typed.
+/// Completion of a reference path: the project functions relative to this file and the installed programs, or after
+/// `}: ` the shared structs, that match what is typed.
 /// Each item replaces the whole reference token, from its `@` to the end of its path.
 fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Option<Vec<CompletionItem>> {
     let before = line_before(text, off);
@@ -54,11 +57,15 @@ fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Opt
     // After `}: ` a parameter type goes, so the shared structs are offered. Elsewhere, the functions.
     let in_type = before[..at].trim_end().ends_with(':');
     let kind = if in_type { CompletionItemKind::STRUCT } else { CompletionItemKind::FUNCTION };
-    let items = project
+    let locals = project
         .files
         .keys()
         .filter(|n| n.as_str() != from && is_struct(n) == in_type)
-        .map(|n| format!("@{}", relative_import(from, n.strip_suffix(STRUCT_SUFFIX).unwrap_or(n))))
+        .map(|n| format!("@{}", relative_import(from, n.strip_suffix(STRUCT_SUFFIX).unwrap_or(n))));
+    // A struct type is never in another program.
+    let programs = if in_type { Vec::new() } else { program_labels(&project.root, typed) };
+    let items = locals
+        .chain(programs)
         .filter(|label| label.starts_with(typed))
         .map(|label| CompletionItem {
             label: label.clone(),
@@ -68,6 +75,20 @@ fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Opt
         })
         .collect();
     Some(items)
+}
+
+/// `@name` for each program visible from `root`. Once `@name/` is typed, `@name/path` for each function of that
+/// program. The scopes resolve as `rein check` run in `root` resolves them.
+fn program_labels(root: &Path, typed: &str) -> Vec<String> {
+    let visible = crate::scopes::discover_from(root);
+    match typed[1..].split_once('/') {
+        Some((program, _)) => {
+            let Ok(flow) = crate::scopes::find_in(&visible, program) else { return Vec::new() };
+            let Ok(other) = Project::load(&flow.root) else { return Vec::new() };
+            other.functions().map(|(n, _)| format!("@{program}/{n}")).collect()
+        }
+        None => visible.iter().filter(|f| f.shadowed_by.is_none()).map(|f| format!("@{}", f.name)).collect(),
+    }
 }
 
 /// Inside call parentheses, where an argument name goes: the callee's parameters not given yet, as `name=`.

@@ -232,8 +232,9 @@ A relative reference names another function of the project. The path is relative
 - `return @./path;` hands the agent to the function (section 9). The function must have no `string` parameter.
 - `return @./path(name=value);` calls a template (section 4, Templates). It hands the agent to a normal function with values (section 4, Inputs).
 - `@program/function` hands off to a function of another installed program. The program is found by name through the scopes, as `rein list` and `rein step NAME` find it. A bare `@program` means the entry of that program. It is allowed only as a hand-off in a `return`, with the same argument rules as a hand-off to a local function: only `string` parameters are passed, by name. The other inputs of the target are asked by the target as normal questions.
-- A program that is not installed is an error on the reference: `` cannot find program `x`; run `rein list` to list programs ``. A function that the program does not have is an error: `` cannot find function `f` in program `x` ``.
-- `rein step` follows the hand-off into the other program in the same run. The functions of that program have the name `@program/function`, so its answer keys are `@pr-handling/main.task`, and a local file `pr-handling/main.rein` cannot collide with them. The trace shows the same names. A program reference inside the other program is not followed.
+- A program that is not installed is an error on the reference: `` unknown program `x`; run `rein list` to list programs, or `rein install -g x` to install it ``. A function that the program does not have is an error: `` cannot find function `f` in program `x` ``.
+- Rein loads every program that a hand-off can reach, through other programs too, when it loads the project. A program reference that a hand-off reaches inside another program, and that does not resolve, is an error on the function of this project that starts the hand-off, at 1:1: `` `@b/main` hands off to `@c/main`: unknown program `c`; run `rein list` to list programs, or `rein install -g c` to install it ``. So `rein check` reports it, and the first step of `rein step`, `rein run` and `rein_start`, and the `first_step` of `rein_programs`, is an error step. The run does not start, and the agent learns about each missing program before it does any work.
+- `rein step` follows the hand-off into the other program in the same run. The functions of that program have the name `@program/function`, so its answer keys are `@pr-handling/main.task`, and a local file `pr-handling/main.rein` cannot collide with them. The trace shows the same names. A program reference inside the other program is followed the same way, so a chain of hand-offs can cross many programs.
 - `rein graph` draws a `program` node labelled `@program/function`, and a hand-off edge to it. It does not draw the other program.
 - A reference to a template without a call is an error: `` `@./tpl` is a template; call it with arguments, like `@./tpl(...)` ``.
 
@@ -461,6 +462,7 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | An answer name clashes with a parameter or another answer (`duplicate name`) |
 | An answer is used before its declaration (`` `x` is used before it is declared ``) |
 | The flow root has no `main.rein` (`project has no main.rein; it is the agent's entry point`). It is reported on `main.rein`, at 1:1. A step reports it only when its entry is missing too |
+| A hand-off reaches, inside another program, a program that is not installed or a function that the program does not have (`` `@b/main` hands off to `@c/main`: unknown program `c`; run `rein list` to list programs, or `rein install -g c` to install it ``). It is reported on the function of this project that starts the hand-off, at 1:1 |
 
 ### Warnings
 
@@ -571,7 +573,7 @@ Each run prints one of these objects:
 
 ### Language server
 
-The code is in `crates/rein/src/lsp/`, one module per feature. It reads the tree from `rein_core`'s parser and resolves references with `rein_core::project`. A reference cannot leave its program, so every feature below stays in one program, except workspace symbols.
+The code is in `crates/rein/src/lsp/`, one module per feature. It reads the tree from `rein_core`'s parser and resolves references with `rein_core::project`. A relative reference cannot leave its program, so every feature below stays in one program, except workspace symbols and program references.
 
 - Diagnostics: the checker's errors and warnings, on each open file.
 - References: on a reference, on a function's name, or anywhere else in a file, every `@./` reference to that function. On a parameter or a `name=` argument, its uses and `name=` in each call to its function. On a struct type or a struct name, every parameter type that names the struct. On a field, its place in `{ }` and its uses in each function that takes the struct, and `name=` in each call to those functions. The declaration is included when the client asks for it.
@@ -585,6 +587,7 @@ The code is in `crates/rein/src/lsp/`, one module per feature. It reads the tree
 - Completion: after `@./` or `@../`, the project functions relative to the current file, or after `}: ` the shared structs. Each item replaces the whole reference token. Inside call parentheses, where an argument name goes, the parameters (the fields of a struct parameter) not given yet, as `name=`. After `x === "` or `case "`, the members of the union, each replacing the whole literal. Elsewhere, the parameter names, the std names, and keywords.
 - Signature help: inside call parentheses, the callee's parameters (the fields of a struct parameter), with the current one active.
 - Quick fixes: add a doc comment to a function or a parameter that has none, and add `name=` to a positional argument.
+- Program references: `@program` and `@program/function` resolve through the scopes from the project root, as `rein check` run there resolves them. Go to definition opens the function in the installed program, or its entry for a bare `@program`. Hover adds the program name, version, scope and folder. Completion after `@` offers the visible programs, and after `@program/` the functions of that program. Signature help, `name=` completion and diagnostics read the target's parameters. References list the program references in the current program only; references from other programs are not searched. Rename refuses a symbol of another program.
 
 ### Debug adapter
 

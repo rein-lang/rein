@@ -21,8 +21,14 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
+        Self::start_with(&[])
+    }
+
+    /// Starts the server with extra environment variables, such as a temp `REIN_HOME`.
+    fn start_with(env: &[(&str, &Path)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
             .arg("lsp")
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -1281,4 +1287,68 @@ fn structs_hover_define_reference_rename_and_list() {
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
+}
+
+/// A program installed in the user scope. Its entry takes the PR link and asks whether it is a draft.
+const PR_HANDLING: &str = "interface Input {\n  /** The PR link. */\n  pr: string;\n  /** Is it a draft? */\n  draft: boolean;\n}\n/** Handle a PR. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Skip ${pr}.`;\n  }\n  return @./review(pr=pr);\n}\n";
+
+/// Hands off to the installed program. Line 5 holds the reference: `@` at column 9, `(` at column 26.
+const HANDOFF: &str = "/** Hand off. */\nexport default function handoff(\n  /** The PR link. */\n  pr: string,\n) {\n  return @pr-handling/main(pr=pr);\n}\n";
+
+#[test]
+fn program_references_resolve_through_the_scopes() {
+    let root = temp_project("progref");
+    let home = root.with_extension("home");
+    let program = home.join("pr-handling");
+    fs::create_dir_all(&program).unwrap();
+    fs::write(program.join("main.rein"), PR_HANDLING).unwrap();
+    fs::write(program.join("review.rein"), "/** Review. */\nexport default function review(\n  /** The PR link. */\n  pr: string,\n) {\n  return `Review ${pr}.`;\n}\n").unwrap();
+    fs::write(program.join("rein.json"), r#"{"entry":"main.rein"}"#).unwrap();
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    // Definition goes to the entry of the installed program, at its function name.
+    let def = server.request(2, "textDocument/definition", at(&handoff, 5, 12));
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/pr-handling/main.rein"), "{def}");
+    assert_eq!(def["result"]["range"]["start"], json!({"line": 7, "character": 24}), "{def}");
+
+    // Hover names the program and its scope, then the function's doc and inputs.
+    let hover = server.request(3, "textDocument/hover", at(&handoff, 5, 12));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    for part in ["program `pr-handling`", "user scope", "**@pr-handling/main**", "Handle a PR.", "`pr: string`", "`draft: boolean`"] {
+        assert!(text.contains(part), "{part} not in {text}");
+    }
+
+    // After `@`, the installed programs. After `@pr-handling/`, its functions.
+    let items = server.request(4, "textDocument/completion", at(&handoff, 5, 10));
+    assert!(labels(&items).contains(&"@pr-handling".to_string()), "{items}");
+    let items = server.request(5, "textDocument/completion", at(&handoff, 5, 22));
+    assert_eq!(labels(&items), ["@pr-handling/main", "@pr-handling/review"], "{items}");
+
+    // Signature help shows the string inputs the hand-off passes.
+    let help = server.request(6, "textDocument/signatureHelp", at(&handoff, 5, 27));
+    assert_eq!(help["result"]["signatures"][0]["label"], "@pr-handling/main(pr: string)", "{help}");
+
+    // References to the program function in this program.
+    let mut params = at(&handoff, 5, 12);
+    params["context"] = json!({"includeDeclaration": false});
+    let refs = server.request(7, "textDocument/references", params);
+    assert_eq!(spots(&root, &refs["result"]), [spot("handoff.rein", 5, 9, 5, 26)], "{refs}");
+
+    // Rename does not cross programs.
+    let mut params = at(&handoff, 5, 12);
+    params["newName"] = json!("start");
+    let rename = server.request(8, "textDocument/rename", params);
+    assert!(rename["error"]["message"].as_str().unwrap().contains("another program"), "{rename}");
+
+    // A program that is not installed is an error, as `rein check` reports it.
+    let lost = uri_of(&root, "lost.rein");
+    server.open(&lost, "/** Lost. */\nexport default function lost() {\n  return @no-such-program;\n}\n");
+    server.wait_diagnostics(&lost, |diags| has_message(diags, "unknown program `no-such-program`"));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
 }

@@ -58,7 +58,9 @@ pub fn build_project(docs: &Docs, root: &Path) -> Project {
         (Project::find_root(&path) == root).then(|| (path, text.clone()))
     }));
     let mut project = Project::from_sources(root.to_path_buf(), by_path.into_iter().collect());
-    project.link_programs(&|name| crate::scopes::find(name).map(|f| (f.root, f.entry)));
+    // Scopes resolve from the project root, as `rein check` run there does. The server's own directory is unrelated.
+    let visible = crate::scopes::discover_from(root);
+    project.link_programs(&move |name| crate::scopes::find_in(&visible, name).map(|f| (f.root, f.entry)));
     project
 }
 
