@@ -7,6 +7,7 @@ mod install;
 mod live_run;
 mod lsp;
 mod mcp;
+mod packages;
 mod programs;
 mod scopes;
 
@@ -150,19 +151,33 @@ enum Command {
         #[arg(long)]
         caller: Option<String>,
     },
-    /// Register a program folder in the user programs folder, or write a tool's hook config (`claude-code`).
+    /// Install a program. A folder path links it. `claude-code` writes the agent hook. Any other name is a pnpm package.
+    ///
+    /// The rule, in order: a path to an existing directory is linked into the user programs folder. The literal
+    /// `claude-code` writes the hook (`--project` or `--user` pick the settings file). Anything else is passed to
+    /// `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
     Install {
-        /// A program folder to register, or the agent tool, such as `claude-code`.
+        /// A program folder, `claude-code`, or a package such as `pr-handling@^1`.
         tool: String,
-        /// Write to the project's settings (`.claude/settings.json`). Default.
+        /// For `claude-code`: write to the project's settings (`.claude/settings.json`). Default.
         #[arg(long, conflicts_with = "user")]
         project: bool,
-        /// Write to the user's settings (`~/.claude/settings.json`).
+        /// For `claude-code`: write to the user's settings (`~/.claude/settings.json`).
         #[arg(long)]
         user: bool,
-        /// Print the resulting file and write nothing.
+        /// For `claude-code`: print the resulting file and write nothing.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Remove an installed program package. Runs `pnpm remove` in the npm project.
+    Uninstall {
+        /// Package name, as `rein list` shows it. An alias is its own name.
+        name: String,
+    },
+    /// Update installed program packages within their ranges. Runs `pnpm update --ignore-scripts`.
+    Update {
+        /// Package to update. Default: every installed package.
+        name: Option<String>,
     },
     /// Run the language server on stdio.
     Lsp,
@@ -193,11 +208,15 @@ fn main() -> ExitCode {
         Command::Install { tool, project: _, user, dry_run } => {
             if Path::new(&tool).is_dir() {
                 programs::install(Path::new(&tool))
-            } else {
+            } else if tool == "claude-code" {
                 let target = if user { install::Target::User } else { install::Target::Project };
                 install::run(&tool, target, dry_run)
+            } else {
+                packages::install(&tool)
             }
         }
+        Command::Uninstall { name } => packages::uninstall(&name),
+        Command::Update { name } => packages::update(name.as_deref()),
         Command::Lsp => lsp::serve(),
         Command::DocsCli => {
             let options = clap_markdown::MarkdownOptions::new().show_footer(false);

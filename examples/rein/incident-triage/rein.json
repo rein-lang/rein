@@ -1,5 +1,3 @@
 {
-  "name": "incident-triage",
-  "description": "Decide how the on-call agent handles a new production alert.",
   "entry": "main.rein"
 }

@@ -25,6 +25,12 @@ pub const MANIFEST: &str = "rein.json";
 /// The folder name of the project scope folder.
 pub const FLOW_DIR: &str = "rein";
 
+/// The folder under the user programs folder that holds the pnpm project of installed packages.
+pub const NPM_DIR: &str = "npm";
+
+/// The package manifest. Name, version, description and `engines.rein` come from it.
+pub const PACKAGE: &str = "package.json";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Scope {
     Project,
@@ -56,6 +62,10 @@ pub struct Flow {
     pub entry: String,
     /// The scope of the flow that wins this name, when this one is shadowed.
     pub shadowed_by: Option<Scope>,
+    /// The package version from `package.json`, if any.
+    pub version: Option<String>,
+    /// The Rein version range from `package.json` `engines.rein`, if any.
+    pub engines_rein: Option<String>,
 }
 
 /// Every flow visible from `cwd`, in precedence order, with shadowed flows marked.
@@ -76,6 +86,7 @@ pub fn discover(cwd: &Path, user_dir: Option<&Path>, system_dirs: &[PathBuf]) ->
     }
     if let Some(user) = user_dir {
         found.extend(flows_in(user, Scope::User));
+        found.extend(npm_programs(&user.join(NPM_DIR)));
     }
     for dir in system_dirs {
         found.extend(flows_in(dir, Scope::System));
@@ -120,6 +131,7 @@ fn flows_in(folder: &Path, scope: Scope) -> Vec<Flow> {
     flows
 }
 
+/// The Rein-only manifest fields. `name` and `description` are the fallback when there is no `package.json`.
 #[derive(Default, Deserialize)]
 struct Manifest {
     name: Option<String>,
@@ -127,8 +139,57 @@ struct Manifest {
     entry: Option<String>,
 }
 
+#[derive(Default, Deserialize)]
+struct PackageJson {
+    name: Option<String>,
+    version: Option<String>,
+    description: Option<String>,
+    engines: Option<Engines>,
+}
+
+#[derive(Deserialize)]
+struct Engines {
+    rein: Option<String>,
+}
+
+/// Packages installed in `npm_dir/node_modules`. pnpm links each direct dependency at its top level, so each
+/// top-level entry is one program, named by its link name. An npm alias such as `pr-v1` is a program of its own.
+/// A scope folder such as `@scope` holds `@scope/name` programs. Dot entries (`.pnpm`) are skipped.
+fn npm_programs(npm_dir: &Path) -> Vec<Flow> {
+    let modules = npm_dir.join("node_modules");
+    let Ok(entries) = fs::read_dir(&modules) else { return Vec::new() };
+    let mut names = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with('.') {
+            continue;
+        }
+        if !file_name.starts_with('@') {
+            names.push(file_name);
+            continue;
+        }
+        let Ok(scoped) = fs::read_dir(entry.path()) else { continue };
+        for pkg in scoped.filter_map(Result::ok) {
+            let pkg_name = pkg.file_name().to_string_lossy().into_owned();
+            if !pkg_name.starts_with('.') {
+                names.push(format!("{file_name}/{pkg_name}"));
+            }
+        }
+    }
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            // A package without a Rein entry is not a program. `program` returns None for it.
+            let mut flow = program(modules.join(&name), Scope::User)?;
+            flow.name = name;
+            Some(flow)
+        })
+        .collect()
+}
+
 /// The program in `root`: a folder with a manifest or a `main.rein`. `None` for any other folder,
-/// and for a hidden one.
+/// and for a hidden one. `package.json` wins over `rein.json` for `name` and `description`.
 pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
     let folder = root.file_name()?.to_str()?.to_string();
     let has_manifest = root.join(MANIFEST).is_file();
@@ -136,15 +197,22 @@ pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
         return None;
     }
     // ponytail: a manifest that does not parse falls back to the defaults; `rein check` could report it.
-    let manifest: Manifest = fs::read_to_string(root.join(MANIFEST))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default();
+    let manifest: Manifest = read_json(&root.join(MANIFEST)).unwrap_or_default();
+    let package: PackageJson = read_json(&root.join(PACKAGE)).unwrap_or_default();
     let entry_file = manifest.entry.unwrap_or_else(|| MAIN_FILE.to_string());
     let entry = entry_file.strip_suffix(".rein").unwrap_or(&entry_file).to_string();
-    let description = manifest.description.unwrap_or_else(|| description_of(&root.join(&entry_file)));
-    let name = manifest.name.unwrap_or(folder);
-    Some(Flow { name, scope, root, description, entry, shadowed_by: None })
+    let description = package
+        .description
+        .or(manifest.description)
+        .unwrap_or_else(|| description_of(&root.join(&entry_file)));
+    let name = package.name.or(manifest.name).unwrap_or(folder);
+    let engines_rein = package.engines.and_then(|e| e.rein);
+    Some(Flow { name, scope, root, description, entry, shadowed_by: None, version: package.version, engines_rein })
+}
+
+/// The JSON file at `path`, or None when it is missing or not valid.
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
 /// First paragraph of the doc comment of the file, with its whitespace collapsed to single spaces.
@@ -314,5 +382,27 @@ mod tests {
         assert_eq!(app.scope, Scope::Project);
         assert_eq!(app.description, "From the manifest.");
         assert_eq!(app.entry, "start");
+    }
+
+    #[test]
+    fn package_json_wins_over_rein_json_and_rein_json_is_the_fallback() {
+        let repo = temp_dir("precedence");
+        write(&repo, "rein/app/package.json", r#"{"name": "pkg-name", "version": "1.2.3", "description": "From package.json.", "engines": {"rein": "^0.1.0"}}"#);
+        write(&repo, "rein/app/rein.json", r#"{"name": "rein-name", "description": "From rein.json.", "entry": "start.rein"}"#);
+        write(&repo, "rein/app/start.rein", &flow_text("From the doc comment."));
+        write(&repo, "rein/plain/package.json", r#"{"name": "plain-pkg"}"#);
+        write(&repo, "rein/plain/rein.json", r#"{"description": "Fallback description."}"#);
+        write(&repo, "rein/plain/main.rein", &flow_text("From the doc comment."));
+        let flows = discover(&repo, None, &[]);
+        let app = resolve(&flows, "pkg-name").unwrap();
+        assert_eq!(app.description, "From package.json.");
+        assert_eq!(app.version.as_deref(), Some("1.2.3"));
+        assert_eq!(app.engines_rein.as_deref(), Some("^0.1.0"));
+        assert_eq!(app.entry, "start");
+        assert!(resolve(&flows, "rein-name").is_none());
+        let plain = resolve(&flows, "plain-pkg").unwrap();
+        assert_eq!(plain.description, "Fallback description.");
+        assert_eq!(plain.version, None);
+        assert_eq!(plain.engines_rein, None);
     }
 }

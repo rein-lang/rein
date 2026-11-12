@@ -186,6 +186,7 @@ pub(crate) fn flow_json(f: &rein_core::flows::Flow) -> Value {
         "scope": f.scope.label(),
         "path": f.root.display().to_string(),
         "description": f.description,
+        "version": f.version,
         "entry": f.entry,
         "shadowed": f.shadowed_by.is_some(),
         "shadowed_by": f.shadowed_by.map(|s| s.label()),
