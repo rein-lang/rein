@@ -110,7 +110,7 @@ Anyone can build and share a program, so two authors can pick the same name. The
 
 - A program name is kebab-case, 1 to 3 words: a noun phrase that leads with the object, such as `pr-handling`, `product-fit`, `next-pr` or `self-improve`. Why: a hand-off reads as "hand the agent to `pr-handling`", and `rein list` groups programs by their object.
 - A program name has no `rein-` prefix and no author. Why: every call already starts with `@`, so `@rein-pr-handling` says Rein twice; the author lives in the source, not in the name.
-- Avoid a verb-first name (`handle-pr`) and a one-word name that is too wide (`pr`). Why: a verb-first name sorts by verb, and a wide name collides at once.
+- Avoid a verb-first name (`handle-pr`) and a one-word name that is too wide (`pr`). Why: a verb-first name sorts by verb, and a wide name collides at once. The example `examples/rein/merge-pr` is older than this rule.
 
 ### Identity and local names (proposed)
 
@@ -120,7 +120,7 @@ Anyone can build and share a program, so two authors can pick the same name. The
 - Inside an installed program, a call to a local name that its `package.json` does not bind is an error: `` `@x` is not bound; add "x" to dependencies ``. In the project you develop, it is a warning, and the call falls back to the scopes. This replaces the rule that programs reached through other programs are found through the root project's scopes. Why: with many authors, a lookup per machine can call another author's program without a word.
 - In one run, one local name has one identity. Two bindings of the same local name to different identities in one run is a `rein check` error that names both. Why: both would write the same answer keys, such as `@product-fit/main.task`.
 - `rein install` gives a program its default local name: the package name without its `@scope/`. If that name is taken in the scope, the install stops and names the fix: `` `pr-handling` is already bob/rein-pr-handling; install with --as alice-pr-handling ``. Nothing is replaced in silence. `rein list` shows the name, the source and the version.
-- An install without an owner, such as `rein install pr-handling`, is an error that asks for the owner. Why: there is no index yet, so a bare name has no single meaning.
+- A bare name, such as `rein install pr-handling@^1`, still goes to pnpm unchanged and means that npm package (install-programs.md). Rein adds no index that guesses a GitHub owner for a bare name. Why: pnpm already gives a bare name one meaning, and a guess could install another author's program.
 
 ### Repos and packages
 
@@ -128,7 +128,7 @@ Anyone can build and share a program, so two authors can pick the same name. The
 - A repo that holds a tool, not a program, names its kind: `vscode-rein`.
 - Each program repo has the GitHub topic `rein-program`. Why: search can find programs by topic, not by guessing from names.
 - A program has one canonical repo. A copy is archived with a link to it.
-- The `package.json` `name` is the program name, with `"private": true`. If a program is ever published to npm, it is `@<owner>/<name>`, and its default local name is the part after the scope.
+- The `package.json` `name` is the program name, as in the program package of install-programs.md. A program published to npm under a scope is `@<owner>/<name>`, and its default local name is the part after the scope (proposed).
 
 ### Function and file names
 

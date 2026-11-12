@@ -92,7 +92,7 @@ A program package uses `package.json`, as a VS Code extension does. It has these
   "version": "1.0.0",
   "description": "Decide how the agent handles a pull request.",
   "license": "MIT",
-  "repository": "github:owner/pr-handling",
+  "repository": "github:owner/rein-pr-handling",
   "files": ["**/*.rein"],
   "keywords": ["rein", "pull-request"],
   "engines": {
