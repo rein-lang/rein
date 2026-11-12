@@ -96,6 +96,28 @@ impl Server {
         msg["params"]["diagnostics"].as_array().unwrap().clone()
     }
 
+    /// Sends a request, which the server answers after the notifications sent before it. Returns one list per
+    /// publish for `uri` that came first, so a publish with no diagnostics is seen too.
+    fn publishes_for(&mut self, uri: &str) -> Vec<Vec<Value>> {
+        const SYNC: i64 = 800;
+        self.send(json!({
+            "jsonrpc": "2.0", "id": SYNC, "method": "textDocument/documentSymbol",
+            "params": {"textDocument": {"uri": uri}}
+        }));
+        let deadline = Instant::now() + TIMEOUT;
+        let mut seen = Vec::new();
+        loop {
+            let left = deadline.checked_duration_since(Instant::now()).expect("timed out waiting for the server");
+            let msg = self.messages.recv_timeout(left).expect("timed out waiting for the server");
+            if msg["id"] == SYNC {
+                return seen;
+            }
+            if msg["method"] == "textDocument/publishDiagnostics" && msg["params"]["uri"] == uri {
+                seen.push(msg["params"]["diagnostics"].as_array().unwrap().clone());
+            }
+        }
+    }
+
     /// Shuts the server down and checks it exits with status 0.
     fn shutdown(&mut self) {
         let response = self.request(900, "shutdown", Value::Null);
@@ -391,6 +413,131 @@ fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
     );
     let rechecked = server.wait_diagnostics(&x, |d| !has_message(d, "leaves the project root"));
     assert!(!has_message(&rechecked, "leaves the project root"));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_file_in_a_skipped_folder_gets_a_hint_why() {
+    let root = temp_project("skipped-hint");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // The loader skips `target/`, so the file has no language features. The hint says why, at the top of the file.
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    let diags = server.wait_diagnostics(&y, |d| has_message(d, "does not load files in `target/`"));
+    let hint = diags.iter().find(|d| d["severity"] == 4).expect("hint diagnostic");
+    assert!(hint["message"].as_str().unwrap().contains("move this file"), "{hint}");
+    assert_eq!(hint["range"], json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// How many skipped-folder hints a publish holds.
+fn hint_count(diags: &[Value]) -> usize {
+    diags.iter().filter(|d| d["severity"] == 4 && d["message"].as_str().is_some_and(|m| m.contains("does not load"))).count()
+}
+
+/// Opens `file` under `root` with `text`, then checks that no publish for it carries the skipped-folder hint.
+fn assert_no_skipped_hint(server: &mut Server, root: &Path, file: &str, text: &str) {
+    let uri = uri_of(root, file);
+    server.open(&uri, text);
+    let published = server.publishes_for(&uri);
+    assert!(published.iter().all(|d| hint_count(d) == 0), "{published:?}");
+}
+
+#[test]
+fn a_skipped_hint_clears_when_its_file_closes() {
+    let root = temp_project("hint-close");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    server.wait_diagnostics(&y, |d| has_message(d, "does not load files in `target/`"));
+
+    // The buffer closes, so the file is no longer open. Its hint goes with it, as an empty publish.
+    server.notify("textDocument/didClose", json!({"textDocument": {"uri": y}}));
+    let cleared = server.wait_diagnostics(&y, |d| d.is_empty());
+    assert!(cleared.is_empty());
+
+    // Opening another file does not publish the closed file again.
+    let main = uri_of(&root, "main.rein");
+    server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
+    let later = server.publishes_for(&y);
+    assert!(later.is_empty(), "{later:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_skipped_hint_is_published_once_per_publish() {
+    let root = temp_project("hint-once");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    let first = server.wait_diagnostics(&y, |d| has_message(d, "does not load"));
+    assert_eq!(hint_count(&first), 1, "{first:?}");
+
+    let edited = text.replace("done", "gone");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": y, "version": 2}, "contentChanges": [{"text": edited}]}),
+    );
+    let again = server.wait_diagnostics(&y, |d| has_message(d, "does not load"));
+    assert_eq!(hint_count(&again), 1, "{again:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_program_installed_under_node_modules_gets_no_hint() {
+    let root = temp_project("installed");
+    let pkg = root.join("node_modules/foo");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("rein.json"), r#"{"entry":"start.rein"}"#).unwrap();
+    let text = "/** Start. */\nexport default function start() {\n  return `s`;\n}\n";
+    fs::write(pkg.join("start.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    assert_no_skipped_hint(&mut server, &root, "node_modules/foo/start.rein", text);
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_program_installed_by_pnpm_gets_no_hint() {
+    let root = temp_project("pnpm");
+    let pkg = root.join("node_modules/.pnpm/foo@1.0.0/node_modules/foo");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("rein.json"), r#"{"entry":"start.rein"}"#).unwrap();
+    let text = "/** Start. */\nexport default function start() {\n  return `s`;\n}\n";
+    fs::write(pkg.join("start.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    assert_no_skipped_hint(&mut server, &root, "node_modules/.pnpm/foo@1.0.0/node_modules/foo/start.rein", text);
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
