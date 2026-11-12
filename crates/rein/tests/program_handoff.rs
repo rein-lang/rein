@@ -64,3 +64,28 @@ fn check_rejects_an_unknown_program() {
     assert!(text.contains("unknown program `pr-handlng`"), "{text}");
     fs::remove_dir_all(&home).unwrap();
 }
+
+#[test]
+fn step_carries_a_string_answer_into_a_program_hand_off() {
+    let home = std::env::temp_dir().join(format!("rein-handoff-string-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&home);
+    program(&home, "pr-handling", TARGET);
+    program(&home, "picker", "/** Picks a PR. */\nexport default async function main() {\n  /** The link of the PR you picked. */\n  const pr: string = await request(\"Pick the next PR and answer its link.\");\n  return @pr-handling/main(pr=pr);\n}\n");
+    let out = rein(&home, &["check", home.join("picker").to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+
+    let out = rein(&home, &["step", "picker", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"type\":\"string\"") && text.contains("main.pr"), "{text}");
+
+    let out = rein(&home, &["step", "picker", "--answer", "main.pr=", "--json"]);
+    assert!(!out.status.success());
+    let out = rein(&home, &["step", "picker", "--answer", "main.pr=https://x/pr/1 (draft)", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("@pr-handling/main.draft"), "{text}");
+
+    let out = rein(&home, &["step", "picker", "--answer", "main.pr=https://x/pr/1", "--answer", "@pr-handling/main.draft=false", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Handle https://x/pr/1."), "{text}");
+    fs::remove_dir_all(&home).unwrap();
+}

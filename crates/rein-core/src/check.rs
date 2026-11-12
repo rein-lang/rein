@@ -478,9 +478,6 @@ impl<'a> Checker<'a> {
                         format!("const `{name}` needs a doc comment: /** question */ const {name}: ..."),
                     );
                 }
-                if matches!(response.ty, InputType::Text) {
-                    self.error(response.name.span, "a request answer is `boolean` or a union of strings");
-                }
                 if self.f.input(name).is_some() || self.names.contains(name) {
                     self.error(response.name.span, format!("duplicate name `{name}`"));
                 }
