@@ -105,3 +105,17 @@ fn double_equals_is_labelled_like_triple() {
     let labels = |p: &Project| flow(p, "main").nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>();
     assert_eq!(labels(&double), labels(&triple));
 }
+
+#[test]
+fn self_improve_is_a_node_that_hands_off_to_its_logic() {
+    let p = project(&[
+        ("main.rein", "/** M. */\nexport default function main() {\n  return self_improve(logic=@./handle, how=`Do better.`);\n}\n"),
+        ("handle.rein", "/** H. */\nexport default function handle() {\n  return `go`;\n}\n"),
+    ]);
+    let g = flow(&p, "main");
+    // Functions in name order: handle is f0, main is f1.
+    let node = g.nodes.iter().find(|n| n.kind == NodeKind::Improve).unwrap();
+    assert_eq!(node.label, "self_improve after the run\nhow: `Do better.`");
+    assert!(g.edges.iter().any(|e| e.from == node.id && e.to == "f0" && e.kind == EdgeKind::Handoff), "{:?}", g.edges);
+    assert!(mermaid(&g).contains(&format!("{}{{{{", node.id)));
+}

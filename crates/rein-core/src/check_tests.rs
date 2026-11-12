@@ -1184,3 +1184,41 @@ fn all_string_body_that_is_a_hand_off_is_a_normal_function() {
         "unused parameter `b`",
     );
 }
+
+#[test]
+fn self_improve_returned_with_a_reference_is_clean() {
+    clean("/** d */\nexport default function f() {\n  return self_improve(logic=@./handle, how=`Do better.`);\n}\n");
+}
+
+#[test]
+fn self_improve_takes_a_hand_off_with_arguments() {
+    clean("/** d */\nexport default function f(\n  /** Link. */\n  pr: string,\n) {\n  return self_improve(logic=@./merge(pr=pr), how=`Do better.`);\n}\n");
+}
+
+#[test]
+fn self_improve_must_be_returned() {
+    let src = "/** d */\nexport default async function f() {\n  /** Ok? */\n  const ok: boolean = await request(self_improve(logic=@./handle, how=`x`));\n  if (ok) {\n    return `a`;\n  }\n  return `b`;\n}\n";
+    expect_diag(src, Severity::Error, "`self_improve` wraps a whole run; return it");
+}
+
+#[test]
+fn self_improve_logic_must_be_a_function_reference() {
+    let text = "/** d */\nexport default function f() {\n  return self_improve(logic=`handle`, how=`x`);\n}\n";
+    expect_diag(text, Severity::Error, "`logic` names the function that does the work");
+    let tpl = "/** d */\nexport default function f() {\n  return self_improve(logic=@./tpl(a=`x`, b=`y`), how=`x`);\n}\n";
+    expect_diag(tpl, Severity::Error, "`logic` names the function that does the work");
+}
+
+#[test]
+fn self_improve_needs_how_and_a_logic_that_resolves() {
+    let no_how = "/** d */\nexport default function f() {\n  return self_improve(logic=@./handle);\n}\n";
+    expect_diag(no_how, Severity::Error, "missing argument `how` in call to `self_improve`");
+    let missing = "/** d */\nexport default function f() {\n  return self_improve(logic=@./missing, how=`x`);\n}\n";
+    expect_diag(missing, Severity::Error, "cannot find function `@./missing`");
+}
+
+#[test]
+fn a_bare_reference_is_no_argument_elsewhere() {
+    let src = "/** d */\nexport default function f() {\n  return delegate(model=@./handle, task=`x`);\n}\n";
+    expect_diag(src, Severity::Error, "A hand-off cannot be an argument of a call.");
+}

@@ -377,12 +377,14 @@ pub enum Value {
     /// A bare name of a `string` parameter of the caller. Only a call argument can be one.
     Name(Spanned<String>),
     Call(Call),
+    /// A bare reference, such as `@./handle`. Only `self_improve(logic=...)` takes one; the checker rejects it elsewhere.
+    Ref(Spanned<String>),
 }
 
 impl Value {
     pub fn span(&self) -> Span {
         match self {
-            Value::Str(s) | Value::Name(s) => s.span,
+            Value::Str(s) | Value::Name(s) | Value::Ref(s) => s.span,
             Value::Template(lit) => lit.span,
             Value::Call(call) => call.span,
         }
@@ -411,6 +413,17 @@ pub struct Call {
 }
 
 impl Call {
+    /// The bare references among the arguments of this call and of every nested call, such as `logic=@./handle`.
+    pub fn arg_refs(&self) -> Vec<&Spanned<String>> {
+        self.calls()
+            .into_iter()
+            .flat_map(|c| c.args.iter().filter_map(|a| match &a.value {
+                Value::Ref(r) => Some(r),
+                _ => None,
+            }))
+            .collect()
+    }
+
     /// This call, then every call nested in its arguments, at any depth.
     pub fn calls(&self) -> Vec<&Call> {
         let mut out = vec![self];

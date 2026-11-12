@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::{Arg, Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, Struct, TemplateLit, Value};
 use crate::check::{string_in_condition, struct_in_use};
+use crate::stdlib;
 
 /// Result of a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,9 @@ pub enum Outcome {
     NeedInput(String),
     /// The agent must answer `response`, after doing `instruction`.
     Request { instruction: String, response: String },
+    /// `return self_improve(...)`: run `target` with `args`, as [`Outcome::Ref`] does. When that run is done, the
+    /// agent improves the program, starting from `instruction`, the expanded std template.
+    Improve { target: String, args: Vec<(String, String)>, instruction: String },
 }
 
 /// Why evaluation stopped before a return.
@@ -94,6 +98,7 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                 ReturnValue::Call(call) => match env.bindings.get(call.callee.key()) {
                     // A hand-off: the arguments are the values of the target's `string` parameters, by name.
                     Some(Binding::Function(path)) => Outcome::Ref { target: path.clone(), args: named_values(env, &call.args)? },
+                    _ if call.callee.key() == stdlib::SELF_IMPROVE => self_improve(env, call)?,
                     _ => Outcome::Text(expand_call(env, call)?),
                 },
             }),
@@ -173,13 +178,31 @@ fn named_values(env: &Env, args: &[Arg]) -> Eval<Vec<(String, String)>> {
         .collect()
 }
 
+/// `self_improve(logic=..., how=...)`: the logic to run, and the improve text, where `${logic}` is its path.
+fn self_improve(env: &Env, call: &Call) -> Eval<Outcome> {
+    let is_logic = |a: &&Arg| a.name.as_ref().is_some_and(|n| n.value == "logic");
+    let (target, args) = match call.args.iter().find(is_logic).map(|a| &a.value) {
+        Some(Value::Ref(r)) => (target(env, &r.value)?, Vec::new()),
+        Some(Value::Call(c)) => (target(env, c.callee.key())?, named_values(env, &c.args)?),
+        _ => return Err(Stop::Error("`self_improve` needs `logic=@./function`".to_string())),
+    };
+    let rest: Vec<Arg> = call.args.iter().filter(|a| !is_logic(a)).cloned().collect();
+    let mut values = named_values(env, &rest)?;
+    values.push(("logic".to_string(), target.clone()));
+    let instruction = fill(env, call.callee.key(), &values)?;
+    Ok(Outcome::Improve { target, args, instruction })
+}
+
 /// Text of a template call: the template's own literal, with each parameter replaced by the argument of that name.
 fn expand_call(env: &Env, call: &Call) -> Eval<String> {
-    let name = call.callee.key();
+    fill(env, call.callee.key(), &named_values(env, &call.args)?)
+}
+
+/// The literal of template `name`, with each parameter replaced by its value in `args`.
+fn fill(env: &Env, name: &str, args: &[(String, String)]) -> Eval<String> {
     let Some(Binding::Template { function, .. }) = env.bindings.get(name) else {
         return Err(Stop::Error(format!("`{name}` is not an imported template")));
     };
-    let args = named_values(env, &call.args)?;
     let lit = match function.body.as_slice() {
         [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => lit,
         _ => return Err(Stop::Error(format!("`{name}` is not a template"))),
@@ -204,6 +227,7 @@ fn expand_value(env: &Env, v: &Value) -> Eval<String> {
         Value::Template(lit) => expand_template(env, lit),
         Value::Name(n) => string_input(env, &n.value),
         Value::Call(call) => expand_call(env, call),
+        Value::Ref(r) => Err(Stop::Error(format!("`@{}` is a hand-off; it cannot be an argument", r.value))),
     }
 }
 

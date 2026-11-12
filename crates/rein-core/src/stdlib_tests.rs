@@ -4,7 +4,7 @@ use crate::diagnostic::Severity;
 
 #[test]
 fn names_are_sorted_and_include_request() {
-    assert_eq!(names(), vec!["askUser", "delegate", "request"]);
+    assert_eq!(names(), vec!["askUser", "delegate", "request", "self_improve"]);
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn unknown_name_lists_what_std_has() {
     let err = item("nope").unwrap_err();
     assert_eq!(
         err,
-        "`nope` is not in std; std has: askUser, delegate, request"
+        "`nope` is not in std; std has: askUser, delegate, request, self_improve"
     );
 }
 

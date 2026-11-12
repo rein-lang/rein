@@ -478,6 +478,36 @@ fn hover_and_completion_know_the_std_library() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn self_improve_hover_definition_signature_and_completion() {
+    let root = temp_project("improve");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let handle = uri_of(&root, "handle.rein");
+    server.open(&handle, "/** H. */\nexport default function handle() {\n  return \"go\";\n}\n");
+    let main = uri_of(&root, "main.rein");
+    server.open(&main, "/** M. */\nexport default function main() {\n  return self_improve(logic=@./handle, how=\"x\");\n}\n");
+
+    let hover = server.request(2, "textDocument/hover", at(&main, 2, 12));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("improve this program"), "{text}");
+
+    // Inside `@./handle`, the definition is the logic's file.
+    let def = server.request(3, "textDocument/definition", at(&main, 2, 31));
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/handle.rein"), "{def}");
+
+    let help = server.request(4, "textDocument/signatureHelp", at(&main, 2, 24));
+    assert_eq!(help["result"]["signatures"][0]["label"], "self_improve(logic: string, how: string)", "{help}");
+
+    let items = server.request(5, "textDocument/completion", at(&main, 2, 4));
+    let labels: Vec<&str> = items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"self_improve"), "{labels:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
 /// The real example program `examples/rein/<name>`, as a canonical path.
 fn example(name: &str) -> PathBuf {
     fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rein").join(name)).unwrap()
@@ -775,7 +805,7 @@ fn workspace_symbols_search_every_program() {
     // An empty query lists every function of the four example programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
-    assert_eq!(all_symbols.len(), 22, "{all}");
+    assert_eq!(all_symbols.len(), 23, "{all}");
     assert!(
         all_symbols.iter().any(|s| s["name"] == "templates/message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"

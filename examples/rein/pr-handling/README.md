@@ -6,11 +6,14 @@ The program stops on a draft. The merge task checks CI, conflicts and the review
 
 The program has no reference cycle. A retry ends the run with the text "start this program again".
 
+The entry wraps the logic in `self_improve`. When the run is done, the `done` step also asks the agent to improve the program, and gives the program folder, the trace and the answers.
+
 ## Files
 
 | File | Function | Job |
 | --- | --- | --- |
-| `main.rein` | `main` | Entry point. Stops on a draft. Routes by task. |
+| `main.rein` | `main` | Entry point. Wraps `handle` in `self_improve`. |
+| `handle.rein` | `handle` | Stops on a draft. Routes by task. |
 | `review.rein` | `review` | Delegates the review to a subagent. Posts one review from the result. |
 | `comments/address.rein` | `comments/address` | Asks the agent to answer each open comment. |
 | `ci/fix.rein` | `ci/fix` | Routes a failed CI run by its cause. Asks the agent to push a fix. |
@@ -32,26 +35,26 @@ The merge task on a pull request that is ready. Each call after the first repeat
 
 ```text
 $ rein step --root examples/rein/pr-handling --input pr=https://example.com/pr/1 --json
-{"kind": "question", "key": "main.draft", "description": "Is the pull request still a draft?", "trace": ["main"]}
+{"kind": "question", "key": "handle.draft", "description": "Is the pull request still a draft?", "trace": ["main", "handle"]}
 # exit 2
 
-$ rein step ... --answer main.draft=no
-{"kind": "question", "key": "main.task", "options": ["review", "address comments", "fix ci", "merge"], "description": "Which task does the agent do on the pull request?", "trace": ["main"]}
+$ rein step ... --answer handle.draft=no
+{"kind": "question", "key": "handle.task", "options": ["review", "address comments", "fix ci", "merge"], "description": "Which task does the agent do on the pull request?", "trace": ["main", "handle"]}
 # exit 2
 
-$ rein step ... --answer main.task=merge
-{"kind": "question", "key": "merge.ci", "options": ["green", "red", "pending"], "description": "What is the CI status of the PR?", "trace": ["main", "merge"]}
+$ rein step ... --answer handle.task=merge
+{"kind": "question", "key": "merge.ci", "options": ["green", "red", "pending"], "description": "What is the CI status of the PR?", "trace": ["main", "handle", "merge"]}
 # exit 2
 
 $ rein step ... --answer merge.ci=green
-{"kind": "question", "key": "merge.conflicts", "description": "Does the PR conflict with its base branch?", "trace": ["main", "merge"]}
+{"kind": "question", "key": "merge.conflicts", "description": "Does the PR conflict with its base branch?", "trace": ["main", "handle", "merge"]}
 # exit 2
 
 $ rein step ... --answer merge.conflicts=no
-{"kind": "question", "key": "merge.review", "options": ["approved", "changes requested", "no review"], "description": "What is the review state of the PR?", "trace": ["main", "merge"]}
+{"kind": "question", "key": "merge.review", "options": ["approved", "changes requested", "no review"], "description": "What is the review state of the PR?", "trace": ["main", "handle", "merge"]}
 # exit 2
 
 $ rein step ... --answer merge.review=approved
-{"kind": "done", "instruction": "Merge the pull request https://example.com/pr/1. Then delete its branch.", "trace": ["main", "merge"]}
+{"kind": "done", "instruction": "Merge the pull request https://example.com/pr/1. Then delete its branch.", "self_improve": "When you finish the instruction above, improve this program. ...", "trace": ["main", "handle", "merge"]}
 # exit 0
 ```

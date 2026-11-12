@@ -568,12 +568,19 @@ impl Parser {
         Ok(Arg { name, value, span })
     }
 
-    /// The value of an argument: a string, a template literal, a bare name of a `string` parameter, or a call.
+    /// The value of an argument: a string, a template literal, a bare name of a `string` parameter, a call, or a
+    /// bare reference (only `self_improve(logic=@./x)` accepts one; the checker says so).
     fn arg_value(&mut self) -> Result<Value, Diagnostic> {
         if let Tok::Ident(name) = self.peek().clone() {
             if *self.next_tok() != Tok::LParen {
                 let span = self.bump();
                 return Ok(Value::Name(Spanned { value: name, span }));
+            }
+        }
+        if let Tok::Ref(path) = self.peek().clone() {
+            if *self.next_tok() != Tok::LParen {
+                let span = self.bump();
+                return Ok(Value::Ref(Spanned { value: path, span }));
             }
         }
         self.value()

@@ -44,7 +44,7 @@ Each choice can change. The reason is one line.
 - Function name is the file path relative to the root, without `.rein` (`ci/fix.rein` is `ci/fix`). Why: the name is the location, so no separate registry is needed. The `export default function` name is a free identifier. Why: it follows TypeScript, where the name need not match the file.
 - Functions are used through references: `return @./ci/fix;`. Why: no import statement; a reference is a path from the current file, so a file is moved with its folder.
 - A reference path starts with `./` or `../` and has no extension, and must stay inside the project. Why: a relative, bounded path keeps every function inside one project.
-- Std names need no import: `delegate`, `askUser`, `request`. Why: the std library is part of the language, so it is always there.
+- Std names need no import: `delegate`, `askUser`, `request`, `self_improve`. Why: the std library is part of the language, so it is always there.
 - Templates are files with `string` parameters, called by a std name or a reference. Why: a template is a string builder, and calls keep the caller in control of the values.
 - Inputs are parameters of the exported function: `boolean`, a union of strings such as `"green" | "red"`, or `string`. Why: a TypeScript signature the agent can read, and the checker can test values.
 - A `string` parameter is an input: the caller passes it. A `boolean` or a union is a question. Why: the type decides, so no new keyword is needed.
@@ -94,6 +94,14 @@ Each choice can change. The reason is one line.
 
 - An answer is a struct, never a free string. Only a `request` answer can be a struct, and its fields are `boolean`, a union, or `string`. Why: a struct names and documents every value, and the runtime validates it, so the agent cannot send loose text. A bare `string` answer is a checker error.
 - A field is read as `pick.pr`, one level, and works like the parameter of its type: a `string` field goes into a hand-off or a template, a `boolean` or union field decides a branch. `rein step` gives the struct as a `fields` list and takes a JSON object. Why: one rule for every value, and a bad value is rejected with the field name.
+
+## Std self_improve
+
+- ``self_improve(logic=@./x, how=`...`)`` is a std template with one exception: `logic` is a hand-off. Why: as a template it gets hover, signature help, completion and go to source from the std code that exists; the exception lives in one checker function.
+- `logic` is the only argument that takes a hand-off. Why: "a hand-off cannot be an argument" keeps a call as text; `self_improve` wraps a run, so it must name the function it runs.
+- Only the entry function returns `self_improve`: `main`, or the `rein.json` entry; in a folder of one-file programs, a function that no other function references. Why: it wraps a whole run and a program has one entry; the rule also stops it from nesting in its own logic.
+- The improve step is an optional `self_improve` field on the `done` response, not a new step kind. Why: the runtime is stateless, and a new step would need an answer key; an optional field keeps protocol version 1, as `flow` and `inputs` did.
+- The improve text gives the program folder, the trace and the answers. Why: the agent must know which files to change and what the run did.
 
 ## Planned (not built)
 

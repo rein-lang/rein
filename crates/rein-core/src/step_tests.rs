@@ -155,6 +155,7 @@ fn full_path_is_done_with_the_trace() {
                 ("merge_pr.ci", "green")
             ]),
             trace: trace(&["main", "merge_pr"]),
+            self_improve: None,
         }
     );
 }
@@ -205,6 +206,7 @@ fn async_request_stops_then_the_answer_continues() {
                 ("answer/faq.solved", "yes")
             ]),
             trace: trace(&["main", "answer/faq"]),
+            self_improve: None,
         }
     );
 
@@ -286,7 +288,8 @@ fn string_parameter_cannot_be_answered() {
             version: 1,
             instruction: "Hello world".into(),
             answers: answers(&[]),
-            trace: trace(&["main"])
+            trace: trace(&["main"]),
+            self_improve: None,
         }
     );
     let res = step(&project, &req("main", &[("greet.who", "x")]));
@@ -376,6 +379,7 @@ fn template_call_adds_no_hop_to_the_trace() {
             instruction: "Hi Hello".into(),
             answers: answers(&[]),
             trace: trace(&["main"]),
+            self_improve: None,
         }
     );
 }
@@ -394,6 +398,7 @@ fn nested_template_call_adds_no_hop_to_the_trace() {
             instruction: "Delegate this task to a subagent.\nModel: Hi x\nTask: task".into(),
             answers: answers(&[]),
             trace: trace(&["main"]),
+            self_improve: None,
         }
     );
 }
@@ -571,6 +576,7 @@ fn hand_off_binds_the_input_for_the_target() {
             instruction: "Merge L.".into(),
             answers: answers(&[("main.draft", "no"), ("merge.ci", "green")]),
             trace: trace(&["main", "merge"]),
+            self_improve: None,
         }
     );
 }
@@ -718,4 +724,41 @@ fn double_equals_and_not_equal_branch_like_triple_forms() {
     let ne = make("!=");
     assert_eq!(done(&ne, "green"), "b");
     assert_eq!(done(&ne, "red"), "a");
+}
+
+/// `main` wraps `handle`, which asks `vip`, in `self_improve`.
+fn improve_project() -> Project {
+    project(&[
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return self_improve(logic=@./handle, how=`Ask fewer questions.`);\n}\n"),
+        ("handle.rein", "/** Handle. */\nexport default function handle(\n  /** VIP? */\n  vip: boolean,\n) {\n  if (vip) {\n    return `Escalate.`;\n  }\n  return `Answer.`;\n}\n"),
+    ])
+}
+
+#[test]
+fn self_improve_steps_into_the_logic_like_a_hand_off() {
+    let res = step(&improve_project(), &req("main", &[]));
+    let StepResponse::Question { key, trace: t, .. } = res else { panic!("{res:?}") };
+    assert_eq!(key, "handle.vip");
+    assert_eq!(t, trace(&["main", "handle"]));
+}
+
+#[test]
+fn self_improve_follows_the_done_with_the_improve_instruction() {
+    let project = improve_project();
+    let res = step(&project, &req("main", &[("handle.vip", "no")]));
+    let StepResponse::Done { instruction, self_improve, .. } = res else { panic!("{res:?}") };
+    assert_eq!(instruction, "Answer.");
+    let text = self_improve.expect("self_improve text");
+    assert!(text.contains("improve this program. Ask fewer questions."), "{text}");
+    assert!(text.contains("The logic starts at handle."), "{text}");
+    assert!(text.contains(&format!("at {}", project.root.display())), "{text}");
+    assert!(text.contains("Trace: main -> handle"), "{text}");
+    assert!(text.contains("Answers: handle.vip=no"), "{text}");
+}
+
+#[test]
+fn done_without_self_improve_leaves_the_field_out() {
+    let res = step(&vip_project(), &req("main", &[("main.vip", "no")]));
+    let json = serde_json::to_string(&res).unwrap();
+    assert!(!json.contains("self_improve"), "{json}");
 }

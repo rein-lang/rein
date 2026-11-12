@@ -815,3 +815,50 @@ fn struct_files_are_checked_for_line_length() {
     let project = project_of(&[("ticket.struct", text.as_str())]);
     assert!(project.check()["ticket.struct"].iter().any(|d| d.message.starts_with("line has 81 characters")));
 }
+
+/// A project at `/p` from (file name, source) pairs.
+fn sources_at_p(files: &[(&str, &str)]) -> Project {
+    let root = PathBuf::from("/p");
+    let sources = files.iter().map(|(n, t)| (root.join(n), t.to_string())).collect();
+    Project::from_sources(root, sources)
+}
+
+#[test]
+fn self_improve_is_only_for_the_entry_and_does_not_nest() {
+    let project = sources_at_p(&[
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return self_improve(logic=@./handle, how=`x`);\n}\n"),
+        ("handle.rein", "/** Handle. */\nexport default function handle() {\n  return self_improve(logic=@./work, how=`x`);\n}\n"),
+        ("work.rein", "/** Work. */\nexport default function work() {\n  return `done`;\n}\n"),
+    ]);
+    let diags = project.check();
+    let msg = "only the entry function `main` can return `self_improve`";
+    assert!(has(&diags["handle"], Severity::Error, msg), "{diags:?}");
+    assert!(diags["main"].is_empty(), "{diags:?}");
+    assert!(diags["work"].is_empty(), "{diags:?}");
+}
+
+#[test]
+fn an_unreferenced_function_that_is_not_the_entry_cannot_return_self_improve() {
+    // No function references `other`, but it is not `main`: the program would have two entries.
+    let project = sources_at_p(&[
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return `m`;\n}\n"),
+        ("other.rein", "/** Other. */\nexport default function other() {\n  return self_improve(logic=@./work, how=`x`);\n}\n"),
+        ("work.rein", "/** Work. */\nexport default function work() {\n  return `done`;\n}\n"),
+    ]);
+    let diags = project.check();
+    let msg = "only the entry function `main` can return `self_improve`";
+    assert!(has(&diags["other"], Severity::Error, msg), "{diags:?}");
+}
+
+#[test]
+fn in_a_folder_of_one_file_programs_a_referenced_function_cannot_return_self_improve() {
+    // No `main.rein`: each file is a one-file program, so `a` may wrap `b`, but `b` is referenced by `a`.
+    let project = sources_at_p(&[
+        ("a.rein", "/** A. */\nexport default function a() {\n  return self_improve(logic=@./b, how=`x`);\n}\n"),
+        ("b.rein", "/** B. */\nexport default function b() {\n  return self_improve(logic=@./c, how=`x`);\n}\n"),
+        ("c.rein", "/** C. */\nexport default function c() {\n  return `done`;\n}\n"),
+    ]);
+    let diags = project.check();
+    assert!(!diags["a"].iter().any(|d| d.message.contains("self_improve")), "{diags:?}");
+    assert!(has(&diags["b"], Severity::Error, "but `a` references `b`"), "{diags:?}");
+}

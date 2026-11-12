@@ -36,6 +36,8 @@ pub enum NodeKind {
     Delegate,
     /// A function of another program (`@program/function`). The graph does not draw that program.
     Program,
+    /// `self_improve`: the logic runs, then the agent improves the program. A hand-off edge goes to the logic.
+    Improve,
     /// A reference that does not resolve. `rein check` reports it.
     Unresolved,
 }
@@ -273,6 +275,7 @@ impl<'a> Builder<'a> {
                     self.step_to(from, NodeKind::Unresolved, format!("@{}", r.value));
                 }
             },
+            ReturnValue::Call(call) if call.callee.key() == crate::stdlib::SELF_IMPROVE => self.self_improve(call, from),
             ReturnValue::Call(call) => match self.project.binding_for(self.function, call.callee.key()) {
                 Ok(Binding::Function(target)) => {
                     let to = self.target_node(&target);
@@ -289,6 +292,22 @@ impl<'a> Builder<'a> {
                     self.step_to(from, NodeKind::Unresolved, call_text(call));
                 }
             },
+        }
+    }
+
+    /// `self_improve`: a node with its guidance, then a hand-off edge to the logic it wraps.
+    fn self_improve(&mut self, call: &Call, from: From) {
+        let arg = |n: &str| call.args.iter().find(|a| arg_name(a) == n).map(|a| &a.value);
+        let how = arg("how").map_or_else(String::new, value_text);
+        let node = self.step_to(from, NodeKind::Improve, format!("self_improve after the run\nhow: {how}"));
+        let (key, args) = match arg("logic") {
+            Some(Value::Ref(r)) => (r.value.as_str(), Vec::new()),
+            Some(Value::Call(c)) => (c.callee.key(), c.args.iter().map(|a| Arg { name: arg_name(a), value: value_text(&a.value) }).collect()),
+            _ => return,
+        };
+        if let Ok(Binding::Function(target)) = self.project.binding_for(self.function, key) {
+            let to = self.id_of(&target);
+            self.edge((node, None), &to, EdgeKind::Handoff, args);
         }
     }
 
@@ -328,6 +347,7 @@ fn value_text(v: &Value) -> String {
         Value::Template(lit) => format!("`{}`", template_text(&lit.pieces)),
         Value::Name(n) => n.value.clone(),
         Value::Call(c) => call_text(c),
+        Value::Ref(r) => format!("@{}", r.value),
     }
 }
 
@@ -384,6 +404,7 @@ pub fn mermaid(g: &Graph) -> String {
             NodeKind::Done => format!("{id}(\"{l}\")"),
             NodeKind::Delegate => format!("{id}>\"{l}\"]"),
             NodeKind::Program => format!("{id}[[\"{l}\"]]:::program"),
+            NodeKind::Improve => format!("{id}{{{{\"{l}\"}}}}"),
             NodeKind::Unresolved => format!("{id}[\"{l}\"]:::unresolved"),
         }
     };
@@ -427,6 +448,7 @@ pub fn dot(g: &Graph) -> String {
             NodeKind::Done => "shape=box, style=rounded",
             NodeKind::Delegate => "shape=cds",
             NodeKind::Program => "shape=box, style=dashed",
+            NodeKind::Improve => "shape=hexagon",
             NodeKind::Unresolved => "shape=octagon, color=red",
         };
         format!("{} [label=\"{}\", {shape}];", n.id, esc(&n.label))

@@ -46,6 +46,10 @@ pub fn refs(f: &Function) -> Vec<(&Spanned<String>, Option<&Call>)> {
         if let Callee::Ref(r) = &call.callee {
             out.push((r, Some(call)));
         }
+        out.extend(call.args.iter().filter_map(|a| match &a.value {
+            Value::Ref(r) => Some((r, None)),
+            _ => None,
+        }));
     }
     out.sort_by_key(|(r, _)| r.span.start);
     out
@@ -90,7 +94,7 @@ fn value_names<'a>(v: &'a Value, out: &mut Vec<&'a Spanned<String>>) {
         Value::Name(n) => out.push(n),
         Value::Template(lit) => template_names(lit, out),
         Value::Call(call) => call.args.iter().for_each(|a| value_names(&a.value, out)),
-        Value::Str(_) => {}
+        Value::Str(_) | Value::Ref(_) => {}
     }
 }
 

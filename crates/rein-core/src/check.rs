@@ -106,7 +106,7 @@ fn value_quoted_text(v: &Value, out: &mut Vec<Diagnostic>) {
     match v {
         Value::Str(s) => out.push(Diagnostic::error(s.span, TEXT_QUOTES)),
         Value::Call(call) => call_quoted_text(call, out),
-        Value::Template(_) | Value::Name(_) => {}
+        Value::Template(_) | Value::Name(_) | Value::Ref(_) => {}
     }
 }
 
@@ -240,6 +240,8 @@ fn written_names(p: &Param) -> Vec<String> {
     }
 }
 
+const HAND_OFF_ARG: &str = "A hand-off cannot be an argument of a call.";
+
 const STRUCT_FILE_ONLY: &str = "a `.struct.rein` file holds one `export default interface` and nothing else";
 
 struct Checker<'a> {
@@ -300,6 +302,28 @@ impl<'a> Checker<'a> {
             Value::Template(lit) => self.template_names(lit),
             Value::Name(name) => self.string_arg(name),
             Value::Call(call) => self.call(call, false),
+            Value::Ref(r) => self.error(r.span, HAND_OFF_ARG),
+        }
+    }
+
+    /// The one exception to "a hand-off cannot be an argument of a call": `self_improve(logic=...)` names the
+    /// function it wraps, as `@./x` or as the hand-off `@./x(name=value)`. It must be the `return` value itself.
+    fn self_improve(&mut self, call: &Call, hand_off: bool) {
+        if !hand_off {
+            self.error(call.span, "`self_improve` wraps a whole run; return it: return self_improve(logic=@./handle, how=`...`);");
+        }
+        for arg in &call.args {
+            if arg.name.as_ref().is_some_and(|n| n.value == "logic") {
+                match &arg.value {
+                    Value::Ref(r) => self.returned_ref(r),
+                    Value::Call(c) if matches!(&c.callee, Callee::Ref(p) if matches!((self.resolve)(&p.value), Ok(Kind::Function { .. }))) => {
+                        self.call(c, true);
+                    }
+                    v => self.error(v.span(), "`logic` names the function that does the work: write `logic=@./handle`"),
+                }
+            } else {
+                self.value(&arg.value);
+            }
         }
     }
 
@@ -615,7 +639,7 @@ impl<'a> Checker<'a> {
             Callee::Ref(path) => match (self.resolve)(&path.value) {
                 Err(msg) => self.error(path.span, msg),
                 Ok(Kind::Function { .. }) if !hand_off => {
-                    self.error(path.span, "A hand-off cannot be an argument of a call.");
+                    self.error(path.span, HAND_OFF_ARG);
                 }
                 Ok(Kind::Function { strings }) if strings.is_empty() => {
                     self.error(call.span, format!("`@{}` takes no arguments; return it without a call", path.value));
@@ -632,6 +656,9 @@ impl<'a> Checker<'a> {
                 Ok(Binding::Template { function, .. }) => {
                     let params: Vec<String> = function.inputs.iter().map(|i| i.name.value.clone()).collect();
                     self.arguments(call, &params, &name.value);
+                    if name.value == stdlib::SELF_IMPROVE {
+                        return self.self_improve(call, hand_off);
+                    }
                 }
                 // Std names are templates or `request`, never functions.
                 Ok(Binding::Function(_)) => {}

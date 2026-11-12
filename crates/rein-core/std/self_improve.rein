@@ -1,0 +1,20 @@
+interface Input {
+  /**
+   * The function that does the real work, as a reference: `@./handle`, or
+   * `@./handle(pr=pr)` to pass inputs.
+   */
+  logic: string;
+  /** How should the agent improve the program after the run? */
+  how: string;
+}
+
+/**
+ * Run the logic, then ask the agent to improve this program. Only the entry
+ * function, such as `main`, returns it.
+ */
+export default function self_improve({ logic, how }: Input) {
+  return `When you finish the instruction above, improve this program. ${how}
+  The logic starts at ${logic}. Change the program's .rein files, run
+  \`rein check\` on the program folder until it reports no errors, then
+  report what you changed.`;
+}

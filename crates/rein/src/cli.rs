@@ -95,7 +95,7 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
             }
             OK
         }
-        Ok(Outcome::Ref { target, .. }) => show_ref(&project, &target, json),
+        Ok(Outcome::Ref { target, .. } | Outcome::Improve { target, .. }) => show_ref(&project, &target, json),
         Ok(Outcome::NeedInput(name)) => need_input(&sf.function, &name, json),
     }
 }
@@ -237,8 +237,11 @@ pub(crate) fn print_step(response: &StepResponse, as_json: bool) {
             print_answers(answers);
             println!("trace: {}", trace.join(" -> "));
         }
-        StepResponse::Done { instruction, answers, trace, .. } => {
+        StepResponse::Done { instruction, answers, trace, self_improve, .. } => {
             println!("{instruction}");
+            if let Some(text) = self_improve {
+                println!("self improve: {text}");
+            }
             print_answers(answers);
             println!("trace: {}", trace.join(" -> "));
         }

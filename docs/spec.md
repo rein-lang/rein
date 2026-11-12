@@ -80,14 +80,14 @@ answer      := DOC "const" IDENT ":" (type | IDENT | REF) "=" "await" "request" 
 return      := "return" (STRING | TEMPLATE | REF | REF "(" args ")" | IDENT "(" args ")") ";"?   // REF with args: a template call or a hand-off
 args        := arg ("," arg)* ","?           // the args of a call or a hand-off
 arg         := IDENT "=" value               // named, as in Python. A value with no name is a checker error
-value       := STRING | TEMPLATE | IDENT | IDENT "(" args ")" | REF "(" args ")"
+value       := STRING | TEMPLATE | IDENT | IDENT "(" args ")" | REF "(" args ")" | REF   // a bare REF only as the logic of self_improve
 expr        := and ("||" and)*
 and         := unary ("&&" unary)*
 unary       := "!" unary | atom
 atom        := "(" expr ")" | IDENT (("===" | "==" | "!==" | "!=") STRING)?
 ```
 
-A call argument is a STRING, a TEMPLATE, a bare name of a `string` parameter of the caller (or a `string` field of a struct answer, `pick.pr`), or a template call. A hand-off cannot be an argument of a call. Wherever a name is read (a condition, a switch subject, a call argument, `${}`), it may be `answer.field`: one `.` and one level. A declaration never has a `.`.
+A call argument is a STRING, a TEMPLATE, a bare name of a `string` parameter of the caller (or a `string` field of a struct answer, `pick.pr`), or a template call. A hand-off cannot be an argument of a call. Wherever a name is read (a condition, a switch subject, a call argument, `${}`), it may be `answer.field`: one `.` and one level. A declaration never has a `.`. One exception: the `logic` argument of `self_improve` is a hand-off, `@./x` or `@./x(name=value)` (section 4, Std).
 
 Every argument has a name, as in Python: `name=value`. The name is a parameter of the callee: its scalar parameter, or a field of its struct parameter. The order of the arguments does not matter. A positional argument is a checker error, and no flag allows it. A parameter is given once.
 
@@ -232,15 +232,37 @@ A relative reference names another function of the project. The path is relative
 
 ### Std
 
-The std library needs no import. Its names are always available: `delegate`, `askUser`, and `request`.
+The std library needs no import. Its names are always available: `delegate`, `askUser`, `self_improve`, and `request`.
 
 | Name | Kind | Signature | Text |
 | --- | --- | --- | --- |
 | `delegate` | template | `delegate({ model, task }: Input)` | "Delegate this task to a subagent.\nModel: ${model}\nTask: ${task}". Doc: "Hand a task to a subagent, with the model to use." Its input is an inline struct. Fields: `model`, the model the subagent runs on; `task`, what the subagent does. A call is `delegate(model="...", task="...")`. |
 | `askUser` | template | `askUser(question: string)` | "Ask the user: ${question}". Doc: "Ask the user a question and wait for the answer." Param: `question`, the question in the user's language. |
 | `request` | built in | `await request(value)` | Asks the agent to do a step, then wait for its answer (section 4, Async requests). It is not a template. |
+| `self_improve` | template, with one exception | `self_improve({ logic, how }: Input)` | Wraps the logic of a program. Doc: "Run the logic, then ask the agent to improve this program. Only the entry function, such as `main`, returns it." Fields: `logic`, the function that does the work, as a hand-off: `@./handle`, or `@./handle(pr=pr)` to pass `string` inputs; `how`, the guidance for the improvement. A call is ``return self_improve(logic=@./handle, how=`...`)``. The rules are below. |
 
-An unknown std name is an error that lists the std names: `` `x` is not in std; std has: askUser, delegate, request ``.
+An unknown std name is an error that lists the std names: `` `x` is not in std; std has: askUser, delegate, request, self_improve ``.
+
+#### `self_improve`
+
+`self_improve` lets a program improve itself. The logic runs as normal. When the run ends, the agent changes the program, as `how` tells it.
+
+```ts
+/** Handle a pull request, then improve this program. */
+export default function main(
+  /** The link of the pull request. */
+  pr: string,
+) {
+  return self_improve(logic=@./handle(pr=pr), how=`If a question was unclear,
+  change the program so the next run is better.`);
+}
+```
+
+- `self_improve` is the value of a `return`. Anywhere else is an error, such as in an argument or a `request`: `` `self_improve` wraps a whole run; return it: return self_improve(logic=@./handle, how=`...`); ``.
+- `logic` is the only argument that is a hand-off. It is `@./x`, or `@./x(name=value)` when `x` has `string` parameters. The reference rules of a `return` apply. A string, a template or a template call is an error: `` `logic` names the function that does the work: write `logic=@./handle` ``.
+- Only the entry function returns `self_improve`: `main`, or the `entry` of `rein.json`. Any other function that returns it is an error, even one that no function references, since a program has one entry: `` only the entry function `main` can return `self_improve`; move `self_improve` to `main` ``. A folder with no entry file holds one-file programs (section 1a), each run by its file name. There, a function that another function references cannot return it: `` only an entry function can return `self_improve`, but `a` references `b`; move `self_improve` to the entry ``. Thus `self_improve` cannot be inside the logic it wraps.
+- A step goes into `logic` as it goes into `return @./logic`. The answer keys, the trace, the questions and the requests do not change.
+- When the logic ends with `done`, the `done` response also has a `self_improve` field (section 11). The field holds the std template text, then the program name and folder, the trace, and the answers.
 
 ### Templates
 
@@ -439,8 +461,11 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | A call or a hand-off gives one parameter twice (`` `a` is given twice in call to `@./tpl`; give each name once ``) |
 | A call or a hand-off leaves a parameter out (`` missing argument `b` in call to `@./tpl`; write `b=value` ``) |
 | A call or a hand-off gives arguments to a function with no `string` parameter (`` `@./x` takes no arguments; return it without a call ``) |
-| A call to a function that is not a template is not the value of a `return`, for example inside an argument or a `request` value (`A hand-off cannot be an argument of a call.`) |
+| A call to a function that is not a template is not the value of a `return`, for example inside an argument or a `request` value (`A hand-off cannot be an argument of a call.`). The `logic` of `self_improve` is the one exception |
 | A std name is unknown, or a call names a std item that is not a template |
+| `self_improve` is not the value of a `return` (`` `self_improve` wraps a whole run; return it ... ``) |
+| The `logic` of `self_improve` is not a reference to a function (`` `logic` names the function that does the work ... ``) |
+| A function other than the entry returns `self_improve` (`` only the entry function `main` can return `self_improve` ... ``) |
 | A template has an `if`, a `switch`, an import, or a statement other than one template return |
 | A template parameter is not used |
 | A template interpolates a boolean, or a name that is not a parameter or an answer |
@@ -479,6 +504,7 @@ When a file has a syntax error, only that error is reported for the file. It is 
 - `--set` also gives an answer its value. An answer's value is checked when the run reaches its `const`.
 - A template run by itself is an error.
 - A hand-off with arguments carries their values, by name, to the target. The agent runs the target with them (section 4, Inputs).
+- ``return self_improve(logic=@./x, how=`...`)`` runs `x`, as `return @./x` does. `rein eval` prints `next: x`. A step adds the improve text when the run is done (section 11).
 
 ## 10. CLI
 
@@ -488,7 +514,7 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | `rein eval [FUNCTION] [--root DIR] [--set name=value]... [--json]` | Evaluate one step. `FUNCTION` defaults to `main`. Prints the returned string, or `next: target` with the target's description and inputs. Exit code 2 when a parameter is needed. Exit code 3 when the agent must do a request. `--set` also gives a value to a `string` parameter. A name given twice with `--set` is an error. |
 | `rein run [NAME] [--root DIR] [--entry FN] [--json]` | Run a program as a live process. Writes one step per line, reads one answer per line on stdin. See [interface.md](interface.md). |
 | `rein describe [FUNCTION] [--root DIR]` | Print the function's schema as JSON. `FUNCTION` defaults to `main`. Usable as an agent tool schema. A template's parameters have type `string`. |
-| `rein graph [NAME \| --root DIR] [--refs] [--format mermaid\|dot\|json] [-o FILE]` | Print the program graph. `NAME` is a program name (section 1a) or a `.rein` file. The default is the project around the current directory. The default view is the decision flow: one node per function, per question (its text, then `name: type`), per request, and per outcome (`done` text or `delegate`). An edge from a question has the answer as its label: `yes`, `no`, or union members. A hand-off edge has its named arguments. A dashed edge goes to a template that a call uses. `--refs` draws only one node per function and one edge per reference. Node ids are `f0`, `f1`, ... for the functions in name order, and `f<i>_<j>` for the steps of function `i` in source order, so the output is stable. The entry is drawn as a stadium shape. `--format` is `mermaid` (default), `dot` (Graphviz), or `json`. `-o FILE` writes to FILE. A `.svg` or `.png` FILE is rendered from DOT by Graphviz `dot`; when `dot` is not on PATH, the command fails and names it. JSON: `{version, view, entry, nodes: [{id, kind, function, label, entry?, name?, type?}], edges: [{from, to, kind, label?, args?: [{name, value}]}]}`. Node kinds: `function`, `question`, `condition`, `request`, `done`, `delegate`, `program` (a function of another program), `unresolved`. Edge kinds: `flow`, `handoff`, `template`. |
+| `rein graph [NAME \| --root DIR] [--refs] [--format mermaid\|dot\|json] [-o FILE]` | Print the program graph. `NAME` is a program name (section 1a) or a `.rein` file. The default is the project around the current directory. The default view is the decision flow: one node per function, per question (its text, then `name: type`), per request, and per outcome (`done` text or `delegate`), and per `self_improve` (its `how`, then a hand-off edge to its logic). An edge from a question has the answer as its label: `yes`, `no`, or union members. A hand-off edge has its named arguments. A dashed edge goes to a template that a call uses. `--refs` draws only one node per function and one edge per reference. Node ids are `f0`, `f1`, ... for the functions in name order, and `f<i>_<j>` for the steps of function `i` in source order, so the output is stable. The entry is drawn as a stadium shape. `--format` is `mermaid` (default), `dot` (Graphviz), or `json`. `-o FILE` writes to FILE. A `.svg` or `.png` FILE is rendered from DOT by Graphviz `dot`; when `dot` is not on PATH, the command fails and names it. JSON: `{version, view, entry, nodes: [{id, kind, function, label, entry?, name?, type?}], edges: [{from, to, kind, label?, args?: [{name, value}]}]}`. Node kinds: `function`, `question`, `condition`, `request`, `done`, `delegate`, `improve`, `program` (a function of another program), `unresolved`. Edge kinds: `flow`, `handoff`, `template`. |
 | `rein step [--root DIR \| --flow NAME] [--entry FN] [--answer key=value]... [--input name=value]... [--stdin] [--json]` | Step the whole flow from `main`. `--flow` picks a flow by name (section 1a); `--root` and `--flow` exclude each other. `--input` gives a value to a `string` parameter of the entry function. The agent-facing interface (section 11). |
 | `rein list [-l] [-1] [-a] [-r] [-t] [--json] [PATTERN...]` | List the programs visible from here, as `ls` lists files. Names by default; `-l` for scope, version, path and description; `-a` for shadowed programs; PATTERN is a name glob. `rein flows` is an alias. |
 | `rein show <NAME>` | Print a program's manifest and every `.rein` file, entry first. |
@@ -597,7 +623,7 @@ Protocol version 1. A request and a response are JSON objects, each with a `vers
 {"version": 1, "entry": "main", "inputs": {"pr": "https://example.com/pr/1"}, "answers": {}}
 ```
 
-- `version`: default `1`. Another value is an error. Adding the optional `flow` and `inputs` fields did not change the version.
+- `version`: default `1`. Another value is an error. Adding the optional `flow` and `inputs` request fields, and the optional `self_improve` field of `done`, did not change the version.
 - `flow`: optional. The name of a visible flow (section 1a). The CLI resolves it to a flow root and steps that root. Give `flow` or a root, not both.
 - `entry`: the function to start from, by its path. Default `main`.
 - `inputs`: optional. An object. Each key is the name of a `string` parameter of the entry function, and each value is its text. Default `{}`.
@@ -611,7 +637,7 @@ Protocol version 1. A request and a response are JSON objects, each with a `vers
 | --- | --- | --- | --- |
 | `question` | `key`, `function`, `name`, `type` (`boolean` or `union`), `options` (union members, else `null`), `description` | Answer `key`, then step again. | 2 |
 | `request` | `key`, `function`, `instruction`, `response` (`name`, `type` (`boolean`, `union` or `struct`), `options`, `description`, and for a struct `fields`) | Do `instruction`, then answer `key`, then step again. | 3 |
-| `done` | `instruction` | The flow ended. Do `instruction`. | 0 |
+| `done` | `instruction`, and `self_improve` only when the entry returns `self_improve` | The flow ended. Do `instruction`. When `self_improve` is there, do it next: change the program, run `rein check`, and report. | 0 |
 | `error` | `message`, `key` (or `null`), `diagnostics` (`file`, `line`, `column`, `message`) | The request is not valid. Fix it and step again. | 1 |
 
 For a struct answer, `response.type` is `struct`, `options` is `null`, and `response.fields` lists the fields of the struct, in order. Each field is `{name, type, options, description}`: `type` is `boolean`, `union` or `string`, `options` lists the members of a union (else `null`), and `description` is the field doc comment. The answer is a JSON object with exactly these fields.

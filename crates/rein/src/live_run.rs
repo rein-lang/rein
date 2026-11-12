@@ -145,7 +145,12 @@ fn prompt_lines(response: &StepResponse) -> Option<Vec<String>> {
             lines.extend(field_lines(response.fields.as_deref().unwrap_or_default()));
             lines
         }
-        StepResponse::Done { instruction, trace, .. } => vec![instruction.clone(), format!("trace: {}", trace.join(" -> "))],
+        StepResponse::Done { instruction, trace, self_improve, .. } => {
+            let mut lines = vec![instruction.clone()];
+            lines.extend(self_improve.iter().map(|text| format!("self improve: {text}")));
+            lines.push(format!("trace: {}", trace.join(" -> ")));
+            lines
+        }
         StepResponse::Error { .. } => return None,
     })
 }

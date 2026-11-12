@@ -15,7 +15,12 @@ const REQUEST: &str = "request";
 const TEMPLATES: &[(&str, &str)] = &[
     ("askUser", include_str!("../std/askUser.rein")),
     ("delegate", include_str!("../std/delegate.rein")),
+    (SELF_IMPROVE, include_str!("../std/self_improve.rein")),
 ];
+
+/// `self_improve(logic=@./x, how=`...`)` wraps a program's logic. It is a template with one exception: its `logic`
+/// argument is a hand-off, not text. The checker, the evaluator and the stepper handle that exception.
+pub const SELF_IMPROVE: &str = "self_improve";
 
 const REQUEST_DOC: &str = "Ask the agent to do a step, then wait for its answer. Use it in an async function, as ``/** question */ const ok: boolean = await request(`...`);``. The answer is a parameter for the rest of its block.";
 

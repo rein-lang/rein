@@ -108,14 +108,13 @@ expression: text
     {
       "id": "f2",
       "kind": "function",
-      "function": "main",
-      "label": "main(pr)",
-      "entry": true
+      "function": "handle",
+      "label": "handle(pr)"
     },
     {
       "id": "f2_0",
       "kind": "question",
-      "function": "main",
+      "function": "handle",
       "label": "Is the pull request still a draft?\ndraft: boolean",
       "name": "draft",
       "type": "boolean"
@@ -123,13 +122,13 @@ expression: text
     {
       "id": "f2_1",
       "kind": "done",
-      "function": "main",
+      "function": "handle",
       "label": "Stop. The pull request ${pr} is a draft. Wait until the author\nmarks it ready."
     },
     {
       "id": "f2_2",
       "kind": "question",
-      "function": "main",
+      "function": "handle",
       "label": "Which task does the agent do on the pull request?\ntask: \"review\" | \"address comments\" | \"fix ci\" | \"merge\"",
       "name": "task",
       "type": "\"review\" | \"address comments\" | \"fix ci\" | \"merge\""
@@ -137,11 +136,24 @@ expression: text
     {
       "id": "f3",
       "kind": "function",
+      "function": "main",
+      "label": "main(pr)",
+      "entry": true
+    },
+    {
+      "id": "f3_0",
+      "kind": "improve",
+      "function": "main",
+      "label": "self_improve after the run\nhow: `If a question was unclear, or an answer did not fit its options,\nchange the program so the next run is better.`"
+    },
+    {
+      "id": "f4",
+      "kind": "function",
       "function": "merge",
       "label": "merge(pr)"
     },
     {
-      "id": "f3_0",
+      "id": "f4_0",
       "kind": "question",
       "function": "merge",
       "label": "What is the CI status of the PR?\nci: \"green\" | \"red\" | \"pending\"",
@@ -149,13 +161,13 @@ expression: text
       "type": "\"green\" | \"red\" | \"pending\""
     },
     {
-      "id": "f3_1",
+      "id": "f4_1",
       "kind": "done",
       "function": "merge",
       "label": "Wait for CI to finish on ${pr}. Then start this program again."
     },
     {
-      "id": "f3_2",
+      "id": "f4_2",
       "kind": "question",
       "function": "merge",
       "label": "Does the PR conflict with its base branch?\nconflicts: boolean",
@@ -163,13 +175,13 @@ expression: text
       "type": "boolean"
     },
     {
-      "id": "f3_3",
+      "id": "f4_3",
       "kind": "done",
       "function": "merge",
       "label": "Rebase ${pr} on its base. Push. Then start this program again."
     },
     {
-      "id": "f3_4",
+      "id": "f4_4",
       "kind": "question",
       "function": "merge",
       "label": "What is the review state of the PR?\nreview: \"approved\" | \"changes requested\" | \"no review\"",
@@ -177,19 +189,19 @@ expression: text
       "type": "\"approved\" | \"changes requested\" | \"no review\""
     },
     {
-      "id": "f3_5",
+      "id": "f4_5",
       "kind": "done",
       "function": "merge",
       "label": "Merge the pull request ${pr}. Then delete its branch."
     },
     {
-      "id": "f4",
+      "id": "f5",
       "kind": "function",
       "function": "review",
       "label": "review(pr)"
     },
     {
-      "id": "f4_0",
+      "id": "f5_0",
       "kind": "question",
       "function": "review",
       "label": "Did you write this pull request yourself?\nownPr: boolean",
@@ -197,13 +209,13 @@ expression: text
       "type": "boolean"
     },
     {
-      "id": "f4_1",
+      "id": "f5_1",
       "kind": "done",
       "function": "review",
       "label": "askUser(question=`This is my own pull request ${pr}. Who reviews it?`)"
     },
     {
-      "id": "f4_2",
+      "id": "f5_2",
       "kind": "question",
       "function": "review",
       "label": "Does the PR change authentication, payments, or permissions code?\nsecuritySensitive: boolean",
@@ -211,13 +223,13 @@ expression: text
       "type": "boolean"
     },
     {
-      "id": "f4_3",
+      "id": "f5_3",
       "kind": "request",
       "function": "review",
       "label": "request: delegate(model=`use opus model`, task=`review the pull request ${pr}\nwith a security focus and list each problem with file and line`)"
     },
     {
-      "id": "f4_4",
+      "id": "f5_4",
       "kind": "question",
       "function": "review",
       "label": "Did the security review find a problem that must be fixed?\nsecurityProblem: boolean",
@@ -225,25 +237,25 @@ expression: text
       "type": "boolean"
     },
     {
-      "id": "f4_5",
+      "id": "f5_5",
       "kind": "done",
       "function": "review",
       "label": "@./templates/post_review(kind=`request changes`, body=`each security problem, with its file and line`, pr=pr)"
     },
     {
-      "id": "f4_6",
+      "id": "f5_6",
       "kind": "done",
       "function": "review",
       "label": "@./templates/post_review(kind=`approve`, body=`the security checks you made`, pr=pr)"
     },
     {
-      "id": "f4_7",
+      "id": "f5_7",
       "kind": "request",
       "function": "review",
       "label": "request: delegate(model=`use haiku model`, task=`review the pull request ${pr}\nand list each problem with file and line`)"
     },
     {
-      "id": "f4_8",
+      "id": "f5_8",
       "kind": "question",
       "function": "review",
       "label": "What is the result of the code review?\nverdict: \"clean\" | \"small problems\" | \"blocking problems\"",
@@ -251,31 +263,31 @@ expression: text
       "type": "\"clean\" | \"small problems\" | \"blocking problems\""
     },
     {
-      "id": "f4_9",
+      "id": "f5_9",
       "kind": "done",
       "function": "review",
       "label": "@./templates/post_review(kind=`approve`, body=`one line on what you checked`, pr=pr)"
     },
     {
-      "id": "f4_10",
+      "id": "f5_10",
       "kind": "done",
       "function": "review",
       "label": "@./templates/post_review(kind=`comment`, body=`each small problem, with its file and line`, pr=pr)"
     },
     {
-      "id": "f4_11",
+      "id": "f5_11",
       "kind": "done",
       "function": "review",
       "label": "@./templates/post_review(kind=`request changes`, body=`each blocking problem, with its file and line`, pr=pr)"
     },
     {
-      "id": "f5",
+      "id": "f6",
       "kind": "function",
       "function": "templates/post_review",
       "label": "templates/post_review(kind, body, pr)"
     },
     {
-      "id": "f5_0",
+      "id": "f6_0",
       "kind": "done",
       "function": "templates/post_review",
       "label": "Post one review on the pull request ${pr}. Type: ${kind}. Body:\n${body}. Do not merge in this run."
@@ -375,7 +387,7 @@ expression: text
     },
     {
       "from": "f2_2",
-      "to": "f4",
+      "to": "f5",
       "kind": "handoff",
       "label": "review",
       "args": [
@@ -411,7 +423,7 @@ expression: text
     },
     {
       "from": "f2_2",
-      "to": "f3",
+      "to": "f4",
       "kind": "handoff",
       "label": "merge",
       "args": [
@@ -428,63 +440,8 @@ expression: text
     },
     {
       "from": "f3_0",
-      "to": "f0",
+      "to": "f2",
       "kind": "handoff",
-      "label": "red",
-      "args": [
-        {
-          "name": "pr",
-          "value": "pr"
-        }
-      ]
-    },
-    {
-      "from": "f3_0",
-      "to": "f3_1",
-      "kind": "flow",
-      "label": "pending"
-    },
-    {
-      "from": "f3_0",
-      "to": "f3_2",
-      "kind": "flow",
-      "label": "green"
-    },
-    {
-      "from": "f3_2",
-      "to": "f3_3",
-      "kind": "flow",
-      "label": "yes"
-    },
-    {
-      "from": "f3_2",
-      "to": "f3_4",
-      "kind": "flow",
-      "label": "no"
-    },
-    {
-      "from": "f3_4",
-      "to": "f3_5",
-      "kind": "flow",
-      "label": "approved"
-    },
-    {
-      "from": "f3_4",
-      "to": "f1",
-      "kind": "handoff",
-      "label": "changes requested",
-      "args": [
-        {
-          "name": "pr",
-          "value": "pr"
-        }
-      ]
-    },
-    {
-      "from": "f3_4",
-      "to": "f4",
-      "kind": "handoff",
-      "label": "no review",
       "args": [
         {
           "name": "pr",
@@ -499,15 +456,27 @@ expression: text
     },
     {
       "from": "f4_0",
+      "to": "f0",
+      "kind": "handoff",
+      "label": "red",
+      "args": [
+        {
+          "name": "pr",
+          "value": "pr"
+        }
+      ]
+    },
+    {
+      "from": "f4_0",
       "to": "f4_1",
       "kind": "flow",
-      "label": "yes"
+      "label": "pending"
     },
     {
       "from": "f4_0",
       "to": "f4_2",
       "kind": "flow",
-      "label": "no"
+      "label": "green"
     },
     {
       "from": "f4_2",
@@ -516,79 +485,138 @@ expression: text
       "label": "yes"
     },
     {
-      "from": "f4_3",
+      "from": "f4_2",
       "to": "f4_4",
-      "kind": "flow"
+      "kind": "flow",
+      "label": "no"
     },
     {
       "from": "f4_4",
       "to": "f4_5",
       "kind": "flow",
-      "label": "yes"
-    },
-    {
-      "from": "f4_5",
-      "to": "f5",
-      "kind": "template"
+      "label": "approved"
     },
     {
       "from": "f4_4",
-      "to": "f4_6",
-      "kind": "flow",
-      "label": "no"
+      "to": "f1",
+      "kind": "handoff",
+      "label": "changes requested",
+      "args": [
+        {
+          "name": "pr",
+          "value": "pr"
+        }
+      ]
     },
     {
-      "from": "f4_6",
+      "from": "f4_4",
       "to": "f5",
-      "kind": "template"
-    },
-    {
-      "from": "f4_2",
-      "to": "f4_7",
-      "kind": "flow",
-      "label": "no"
-    },
-    {
-      "from": "f4_7",
-      "to": "f4_8",
-      "kind": "flow"
-    },
-    {
-      "from": "f4_8",
-      "to": "f4_9",
-      "kind": "flow",
-      "label": "clean"
-    },
-    {
-      "from": "f4_9",
-      "to": "f5",
-      "kind": "template"
-    },
-    {
-      "from": "f4_8",
-      "to": "f4_10",
-      "kind": "flow",
-      "label": "small problems"
-    },
-    {
-      "from": "f4_10",
-      "to": "f5",
-      "kind": "template"
-    },
-    {
-      "from": "f4_8",
-      "to": "f4_11",
-      "kind": "flow",
-      "label": "blocking problems"
-    },
-    {
-      "from": "f4_11",
-      "to": "f5",
-      "kind": "template"
+      "kind": "handoff",
+      "label": "no review",
+      "args": [
+        {
+          "name": "pr",
+          "value": "pr"
+        }
+      ]
     },
     {
       "from": "f5",
       "to": "f5_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f5_0",
+      "to": "f5_1",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f5_0",
+      "to": "f5_2",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f5_2",
+      "to": "f5_3",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f5_3",
+      "to": "f5_4",
+      "kind": "flow"
+    },
+    {
+      "from": "f5_4",
+      "to": "f5_5",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f5_5",
+      "to": "f6",
+      "kind": "template"
+    },
+    {
+      "from": "f5_4",
+      "to": "f5_6",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f5_6",
+      "to": "f6",
+      "kind": "template"
+    },
+    {
+      "from": "f5_2",
+      "to": "f5_7",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f5_7",
+      "to": "f5_8",
+      "kind": "flow"
+    },
+    {
+      "from": "f5_8",
+      "to": "f5_9",
+      "kind": "flow",
+      "label": "clean"
+    },
+    {
+      "from": "f5_9",
+      "to": "f6",
+      "kind": "template"
+    },
+    {
+      "from": "f5_8",
+      "to": "f5_10",
+      "kind": "flow",
+      "label": "small problems"
+    },
+    {
+      "from": "f5_10",
+      "to": "f6",
+      "kind": "template"
+    },
+    {
+      "from": "f5_8",
+      "to": "f5_11",
+      "kind": "flow",
+      "label": "blocking problems"
+    },
+    {
+      "from": "f5_11",
+      "to": "f6",
+      "kind": "template"
+    },
+    {
+      "from": "f6",
+      "to": "f6_0",
       "kind": "flow"
     }
   ]

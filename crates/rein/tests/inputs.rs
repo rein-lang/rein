@@ -124,8 +124,8 @@ fn walk_pr_handling(answer_for: impl Fn(&str) -> &'static str) -> (Value, Vec<i3
 #[test]
 fn pr_handling_merge_walk_ends_in_done_with_the_link() {
     let (last, codes) = walk_pr_handling(|key| match key {
-        "main.draft" => "no",
-        "main.task" => "merge",
+        "handle.draft" => "no",
+        "handle.task" => "merge",
         "merge.ci" => "green",
         "merge.conflicts" => "no",
         "merge.review" => "approved",
@@ -134,14 +134,15 @@ fn pr_handling_merge_walk_ends_in_done_with_the_link() {
     assert_eq!(codes, [2, 2, 2, 2, 2, 0]);
     assert_eq!(last["kind"], "done");
     assert_eq!(last["instruction"], format!("Merge the pull request {LINK}. Then delete its branch."));
-    assert_eq!(last["trace"], json!(["main", "merge"]));
+    assert_eq!(last["trace"], json!(["main", "handle", "merge"]));
+    assert!(last["self_improve"].as_str().unwrap().contains("Trace: main -> handle -> merge"), "{last}");
 }
 
 #[test]
 fn pr_handling_review_walk_passes_the_link_to_the_review_template() {
     let (last, codes) = walk_pr_handling(|key| match key {
-        "main.draft" => "no",
-        "main.task" => "review",
+        "handle.draft" => "no",
+        "handle.task" => "review",
         "review.ownPr" => "no",
         "review.securitySensitive" => "no",
         "review.verdict" => "clean",
@@ -151,13 +152,13 @@ fn pr_handling_review_walk_passes_the_link_to_the_review_template() {
     let text = last["instruction"].as_str().unwrap();
     assert!(text.contains(LINK), "{text}");
     assert!(text.contains("Type: approve"), "{text}");
-    assert_eq!(last["trace"], json!(["main", "review"]));
+    assert_eq!(last["trace"], json!(["main", "handle", "review"]));
 }
 
 #[test]
 fn pr_handling_draft_stops_and_names_the_link() {
     let (last, _) = walk_pr_handling(|key| match key {
-        "main.draft" => "yes",
+        "handle.draft" => "yes",
         other => panic!("the walk asked an unexpected key `{other}`"),
     });
     assert_eq!(last["kind"], "done");
@@ -177,7 +178,7 @@ fn string_input_is_never_asked() {
     let root = example();
     let out = step_in(root.to_str().unwrap(), &["--input", &format!("pr={LINK}"), "--json"]);
     assert_eq!(code(&out), 2);
-    assert_eq!(json(&out)["key"], "main.draft");
+    assert_eq!(json(&out)["key"], "handle.draft");
 }
 
 #[test]
@@ -249,7 +250,7 @@ fn stdin_request_carries_the_inputs() {
     let root = example();
     let request = json!({
         "inputs": { "pr": LINK },
-        "answers": { "main.draft": "no", "main.task": "merge", "merge.ci": "green", "merge.conflicts": "no", "merge.review": "approved" },
+        "answers": { "handle.draft": "no", "handle.task": "merge", "merge.ci": "green", "merge.conflicts": "no", "merge.review": "approved" },
     });
     let out = rein(
         &["step", "--root", root.to_str().unwrap(), "--stdin"],

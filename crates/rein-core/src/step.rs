@@ -111,6 +111,9 @@ pub enum StepResponse {
         #[serde(with = "answers_json")]
         answers: Answers,
         trace: Vec<String>,
+        /// Set only when the entry returns `self_improve`: after `instruction`, the agent improves the program.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        self_improve: Option<String>,
     },
     Error {
         version: u32,
@@ -196,6 +199,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     // The `string` values of the function being run. The entry gets them from the request; a hand-off
     // passes them on, bound to the target's `string` parameters by name.
     let mut strings: BTreeMap<String, String> = req.inputs.clone();
+    let mut improve: Option<String> = None;
     for _ in 0..HOP_LIMIT {
         trace.push(current.clone());
         let Some(sf) = project.get(&current) else {
@@ -213,9 +217,12 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
             Ok(outcome) => outcome,
             Err(message) => return failure(message, None, Vec::new(), answers, trace),
         };
+        if let Outcome::Improve { instruction, .. } = &outcome {
+            improve = Some(instruction.clone());
+        }
         match outcome {
             // Auto-follow: the agent does not need to see a hop that asks nothing.
-            Outcome::Ref { target, args } => {
+            Outcome::Ref { target, args } | Outcome::Improve { target, args, .. } => {
                 let target = project.qualify(&current, &target);
                 let Some(next) = project.get(&target) else {
                     return failure(format!("unknown function `{target}`"), None, Vec::new(), answers, trace);
@@ -236,11 +243,13 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                 current = target;
             }
             Outcome::Text(instruction) => {
+                let self_improve = improve.map(|head| improve_text(project, &head, &answers, &trace));
                 return StepResponse::Done {
                     version: PROTOCOL_VERSION,
                     instruction,
                     answers,
                     trace,
+                    self_improve,
                 };
             }
             Outcome::NeedInput(name) => {
@@ -323,6 +332,15 @@ fn failure(
         answers,
         trace,
     }
+}
+
+/// The `self_improve` text of a finished run: the std template's text, then the program and what the run did.
+fn improve_text(project: &Project, head: &str, answers: &Answers, trace: &[String]) -> String {
+    let root = project.root.display();
+    let name = project.root.file_name().map_or_else(|| root.to_string(), |n| n.to_string_lossy().into_owned());
+    let given: Vec<String> = answers.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let given = if given.is_empty() { "none".to_string() } else { given.join(", ") };
+    format!("{head}\nProgram: {name}, at {root}\nTrace: {}\nAnswers: {given}", trace.join(" -> "))
 }
 
 /// The wire type name and the options of an input.

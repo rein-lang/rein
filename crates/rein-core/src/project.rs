@@ -43,6 +43,8 @@ pub struct Project {
     pub max_function_lines: u64,
     /// The most characters a line may hold: `maxLineLength` in `rein.json`, else the default.
     pub max_line_length: u64,
+    /// The entry function: `entry` in `rein.json` without `.rein`, else `main`.
+    pub entry: String,
     /// Errors in `rein.json`. They apply to every file of the project.
     manifest_diagnostics: Vec<Diagnostic>,
 }
@@ -74,6 +76,15 @@ fn read_limits(root: &Path) -> (u64, u64, Vec<Diagnostic>) {
     let lines = limit(MAX_LINES_FIELD, crate::check::DEFAULT_MAX_FUNCTION_LINES);
     let length = limit(MAX_LINE_LENGTH_FIELD, crate::check::DEFAULT_MAX_LINE_LENGTH);
     (lines, length, errors)
+}
+
+/// The entry function of `root`: the `rein.json` `entry` without `.rein`, such as `main`. Default `main`.
+fn read_entry(root: &Path) -> String {
+    let manifest = fs::read_to_string(root.join(crate::flows::MANIFEST)).ok();
+    let entry = manifest
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|m| m.get("entry")?.as_str().map(|e| e.strip_suffix(".rein").unwrap_or(e).to_string()));
+    entry.unwrap_or_else(|| ENTRY.to_string())
 }
 
 impl Project {
@@ -125,8 +136,16 @@ impl Project {
             files.insert(name, SourceFile { path, text, function, parse_diagnostics });
         }
         let (max_function_lines, max_line_length, manifest_diagnostics) = read_limits(&root);
-        let mut project =
-            Self { root, files, programs: BTreeMap::new(), max_function_lines, max_line_length, manifest_diagnostics };
+        let entry = read_entry(&root);
+        let mut project = Self {
+            root,
+            files,
+            programs: BTreeMap::new(),
+            max_function_lines,
+            max_line_length,
+            entry,
+            manifest_diagnostics,
+        };
         project.bind_structs();
         project
     }
@@ -315,6 +334,7 @@ impl Project {
     pub fn check(&self) -> BTreeMap<String, Vec<Diagnostic>> {
         let adj = self.adjacency();
         let reachable = self.reachable_from_entry(&adj);
+        let entry = self.files.contains_key(&self.entry).then_some(self.entry.as_str());
         self.files
             .iter()
             .map(|(name, sf)| {
@@ -334,6 +354,7 @@ impl Project {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
                     diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from main")));
                 }
+                diags.extend(self_improve_entry(name, &sf.function, &adj, entry));
                 diags.sort_by_key(|d| (d.span.start, d.span.end));
                 (name.clone(), diags)
             })
@@ -505,7 +526,10 @@ fn keys(f: &Function) -> BTreeSet<String> {
             ReturnValue::Ref(reference) => {
                 out.insert(reference.value.clone());
             }
-            ReturnValue::Call(call) => out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string())),
+            ReturnValue::Call(call) => {
+                out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string()));
+                out.extend(call.arg_refs().into_iter().map(|r| r.value.clone()));
+            }
             ReturnValue::Text(_) | ReturnValue::Template(_) => {}
         },
         Stmt::Request { callee, arg, .. } => {
@@ -534,13 +558,50 @@ fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<(Str
         match s {
             Stmt::Return(r) => match &r.value {
                 ReturnValue::Ref(reference) => push(&reference.value),
-                ReturnValue::Call(call) => call.calls().into_iter().filter(|c| callee_is_ref(c)).for_each(|c| push(c.callee.key())),
+                ReturnValue::Call(call) => {
+                    call.calls().into_iter().filter(|c| callee_is_ref(c)).for_each(|c| push(c.callee.key()));
+                    call.arg_refs().into_iter().for_each(|r| push(&r.value));
+                }
                 _ => {}
             },
             Stmt::Request { arg: Value::Call(call), .. } => {
                 call.calls().into_iter().filter(|c| callee_is_ref(c)).for_each(|c| push(c.callee.key()));
             }
             _ => {}
+        }
+    });
+    out
+}
+
+/// `self_improve` wraps a whole run, so only the entry function returns it: `entry`, which is `main` or the
+/// `rein.json` entry. A folder with no entry file holds one-file programs, each run by its file name; there, a
+/// function that another function references is no entry. Both rules keep `self_improve` out of its own logic.
+fn self_improve_entry(
+    name: &str,
+    f: &Function,
+    adj: &BTreeMap<String, BTreeSet<String>>,
+    entry: Option<&str>,
+) -> Vec<Diagnostic> {
+    let msg = match entry {
+        Some(entry) if entry == name => return Vec::new(),
+        Some(entry) => {
+            format!("only the entry function `{entry}` can return `self_improve`; move `self_improve` to `{entry}`")
+        }
+        None => match adj.iter().find(|(_, to)| to.contains(name)) {
+            Some((by, _)) => format!(
+                "only an entry function can return `self_improve`, but `{by}` references `{name}`; move `self_improve` to the entry"
+            ),
+            None => return Vec::new(),
+        },
+    };
+    let mut out = Vec::new();
+    walk_stmts(&f.body, &mut |s| {
+        if let Stmt::Return(r) = s {
+            if let ReturnValue::Call(call) = &r.value {
+                if call.callee.key() == crate::stdlib::SELF_IMPROVE {
+                    out.push(Diagnostic::error(call.span, msg.clone()));
+                }
+            }
         }
     });
     out
