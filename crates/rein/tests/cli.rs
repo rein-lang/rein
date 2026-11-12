@@ -510,3 +510,18 @@ fn call_arguments_must_be_named_and_known() {
 
 /// A template with two parameters, used by the argument tests above.
 const GREET: &str = "interface Input {\n  /** Greeting. */\n  greeting: string;\n  /** Who? */\n  name: string;\n}\n\n/** Greet. */\nexport default function greet({ greeting, name }: Input) {\n  return `${greeting} ${name}`;\n}\n";
+
+#[test]
+fn step_with_root_starts_at_the_entry_in_the_manifest() {
+    // `check` uses `entry` from rein.json. `step --root` must start there too, not at `main`.
+    let root = temp_dir("entry-root");
+    fs::write(root.join("rein.json"), r#"{"entry": "start"}"#).unwrap();
+    fs::write(root.join("start.rein"), "/** Start. */\nexport default function start() {\n  return `go`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Main. */\nexport default function main() {\n  return `main`;\n}\n").unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stdout));
+    assert_eq!(json(&out)["instruction"], "go");
+
+    fs::remove_dir_all(&root).unwrap();
+}

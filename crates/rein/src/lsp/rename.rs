@@ -1,7 +1,9 @@
 //! Rename: a parameter, with `name=` in every call to its function; a field, in its struct and in every function
 //! that takes it; a function or a shared struct, which renames its file and updates every `@./` reference to it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use lsp_types::{
     DocumentChangeOperation, DocumentChanges, OneOf, OptionalVersionedTextDocumentIdentifier, PrepareRenameResponse,
@@ -9,8 +11,9 @@ use lsp_types::{
 };
 use rein_core::ast::{is_struct, StructRef, STRUCT_SUFFIX};
 use rein_core::diagnostic::Span;
+use rein_core::flows::MAIN_FILE;
 use rein_core::lexer::KEYWORDS;
-use rein_core::project::Project;
+use rein_core::project::{skipped_folder, Project};
 
 use super::occurrences::{declaration, name_span, param_uses, refs, symbol_at, Symbol};
 use super::structs::{base as struct_base, field_sites, struct_decl, type_sites};
@@ -190,6 +193,10 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
             "the folder `{nested}` holds the entry `{entry}`; moving it would leave the program without its entry"
         ));
     }
+    check_folder(project, target)?;
+    for name in project.files.keys().filter(|name| moved(name).is_some()) {
+        check_references(project, name)?;
+    }
     let mut renames = Vec::new();
     for (name, file) in &project.files {
         let Some(to) = moved(name) else { continue };
@@ -236,6 +243,88 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
     Ok(edits.into_workspace_edit(&state.docs, project, renames))
 }
 
+/// Refuses a move that would leave something of the folder `<root>/<target>` behind, or that would go through a
+/// symbolic link. Only the `.rein` files the project loads move with their folder. Anything else in it stays:
+/// a file that is not `.rein` (such as `notes.md`), a folder the loader skips, or a folder with its own
+/// `main.rein`. A link is refused too, since renaming through it moves files out of the folder it points to.
+fn check_folder(project: &Project, target: &str) -> Result<(), String> {
+    let folder = project.root.join(target);
+    let Ok(meta) = fs::symlink_metadata(&folder) else { return Ok(()) };
+    if meta.file_type().is_symlink() {
+        return Err(symlink_error(&shown(project, &folder)));
+    }
+    if !meta.is_dir() {
+        return Ok(());
+    }
+    let loaded: BTreeSet<PathBuf> = project.files.values().filter_map(|f| fs::canonicalize(&f.path).ok()).collect();
+    left_behind(project, &folder, &loaded)
+}
+
+/// The first thing under `dir` that a move of its functions would not carry: see [`check_folder`].
+fn left_behind(project: &Project, dir: &Path, loaded: &BTreeSet<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(dir).map_err(|e| format!("cannot read `{}`: {e}", shown(project, dir)))?;
+    for entry in entries {
+        let path = entry.map_err(|e| format!("cannot read `{}`: {e}", shown(project, dir)))?.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        // `metadata` follows a link. A link to a folder is refused, as in `check_folder`.
+        let is_dir = fs::metadata(&path).is_ok_and(|m| m.is_dir());
+        let is_link = fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+        if is_dir && is_link {
+            return Err(symlink_error(&shown(project, &path)));
+        }
+        if is_dir {
+            if skipped_folder(&name) || path.join(MAIN_FILE).is_file() {
+                return Err(format!(
+                    "`{}` is a folder the project does not load (a hidden, `target` or `node_modules` folder, or one \
+                     with its own `main.rein`), so the move would leave it behind; move or remove it first",
+                    shown(project, &path)
+                ));
+            }
+            left_behind(project, &path, loaded)?;
+        } else if !fs::canonicalize(&path).is_ok_and(|p| loaded.contains(&p)) {
+            return Err(format!(
+                "`{}` is not a `.rein` file of the project, so the move would leave it behind; move or remove it first",
+                shown(project, &path)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn symlink_error(path: &str) -> String {
+    format!("`{path}` is a symbolic link; a move through it would take files out of the folder it points to")
+}
+
+/// The path of `path` under the project root, as the messages show it, such as `ci/fix/notes.md`.
+fn shown(project: &Project, path: &Path) -> String {
+    path.strip_prefix(&project.root).unwrap_or(path).to_string_lossy().replace('\\', "/")
+}
+
+/// Refuses a move of function `name` when one of its relative references does not resolve today. Its text would
+/// stay the same in the new folder, where it could point at another function, so the author fixes it first.
+fn check_references(project: &Project, name: &str) -> Result<(), String> {
+    let Some(sf) = project.get(name) else { return Ok(()) };
+    let f = &sf.function;
+    let broken = |source: &str| {
+        format!("`@{source}` in `{name}` does not resolve, so the move would leave it pointing at another function; fix it first")
+    };
+    for (r, _) in refs(f) {
+        let relative = r.value.starts_with("./") || r.value.starts_with("../");
+        if relative && project.resolve(name, &r.value).is_err() {
+            return Err(broken(&r.value));
+        }
+    }
+    let types = f.struct_param().map(|p| p.ty.clone()).into_iter().chain(f.answer_struct_refs().into_iter().map(|(_, t)| t));
+    for ty in types {
+        if let StructRef::Ref(r) = ty {
+            if project.struct_for(name, &r.value).is_err() {
+                return Err(broken(&r.value));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Each relative reference written in function `name` that resolves: its span, the project path of the file it
 /// names, and the suffix that path has beyond the written reference. A struct type names `<name>.struct.rein`
 /// without `.struct`, as the reference is written.
@@ -260,10 +349,13 @@ struct Edits(BTreeMap<String, Vec<TextEdit>>);
 
 impl Edits {
     fn add(&mut self, project: &Project, function: &str, span: Span, new_text: &str) {
-        if let Some(sf) = project.get(function) {
-            let edit = TextEdit { range: range(&sf.text, span), new_text: new_text.to_string() };
-            self.0.entry(function.to_string()).or_default().push(edit);
+        let Some(sf) = project.get(function) else { return };
+        // An edit that writes the text already there changes nothing, so it is left out.
+        if sf.text.get(span.start..span.end) == Some(new_text) {
+            return;
         }
+        let edit = TextEdit { range: range(&sf.text, span), new_text: new_text.to_string() };
+        self.0.entry(function.to_string()).or_default().push(edit);
     }
 
     /// The text edits of each file, then the file renames. The text edits use the old URIs, so they apply before
