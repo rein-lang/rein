@@ -1,0 +1,20 @@
+interface Pick {
+  /** The link of the pull request to merge next. */
+  pr: string;
+}
+
+/**
+ * Merge the pull requests in the queue, one at a time.
+ */
+export default async function main() {
+  /** Is a pull request waiting in the merge queue? */
+  const waiting: boolean = await request(
+    `Open the merge queue. Look for a pull request that waits.`,
+  );
+  if (!waiting) {
+    return `Stop. The merge queue is empty.`;
+  }
+  /** The next pull request in the queue. */
+  const pick: Pick = await request(`Pick the oldest pull request.`);
+  return @./merge(pr=pick.pr, then=@./main);
+}

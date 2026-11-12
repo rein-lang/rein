@@ -6,6 +6,7 @@ This folder acts like a repo. Its `rein/` folder holds the example programs, one
 - [incident-triage](rein/incident-triage): route a production alert to a page, a runbook, or a ticket.
 - [support-ticket](rein/support-ticket): route a customer ticket. Shows a template and an async request.
 - [pr-handling](rein/pr-handling): one pull request. Takes the link as the input `pr` and passes it on.
+- [pr-queue](rein/pr-queue): merge the pull requests in a queue, one at a time. Shows a callback: `then=@./main`.
 
 Run `rein list` from here to list them:
 
