@@ -14,6 +14,11 @@ Rein mimics TypeScript syntax and types, except `@` references. A reader who kno
 - A function name is the file path relative to the flow root, without `.rein`, using `/` as separator. `ci/fix.rein` defines `ci/fix`. The root `main.rein` defines `main`.
 - The name of the `export default function` inside a file is a TypeScript identifier. It need not match the file name.
 - Subdirectories are allowed.
+- A function that exactly one other function calls lives in a folder named after that caller, next to the caller's file. The only caller `<dir>/<name>.rein` puts the callee at `<dir>/<name>/<callee>.rein`. `merge.rein` is the only caller of `fix_ci.rein`, so the file is `merge/fix_ci.rein`. Then the folder structure shows the program.
+- The entry function (`main`, or `entry` in `rein.json`) is the exception. The program root already is its folder, so a function that only the entry calls stays next to it at the root.
+- A function with two or more callers is shared. It stays where it is. No rule puts it in a place yet. A later rule can put it at the nearest common folder of its callers.
+- The rule does not cover std items, `.struct.rein` files (a struct is not a function), functions with no caller (the reachability warning covers them), or references to other programs.
+- A function in the wrong place is a warning that names the target path. The language server has a quick fix, `Move to <path>`, that moves the file and rewrites every reference to it and every relative reference inside it. A callee keeps its file name when it moves.
 - A relative reference (`@./`, `@../`) resolves only inside the same flow root. A program reference (`@program/function`) hands off to another installed program (section 4, References).
 - The directory walk skips hidden directories (names starting with `.`), `target/` and `node_modules/`.
 - A subdirectory with its own `main.rein` is another flow. The walk does not enter it.
@@ -155,7 +160,7 @@ export default function handleTicket({ category, vip }: Ticket) {
 Parsing rules, for each doc block:
 
 - For each line, strip the leading whitespace, then one leading `*`, then one following space if present.
-- The text before the first line that starts with `@` is the description. It is trimmed. Line breaks are kept. Three or more line breaks in a row become one paragraph break.
+- The text before the first line that starts with `@` is the description. It is trimmed. The lines of one paragraph are joined with one space, so a doc comment over several lines is one line of text. A blank line starts a new paragraph; a run of blank lines is one paragraph break. Example: `/** Does the pull request wait for another pull request or change that is` + newline + `* not merged yet? */` is the description `Does the pull request wait for another pull request or change that is not merged yet?`.
 - Text after an `@` line is not part of the description.
 - A `@` tag is an error when it is `@param`: `describe each parameter in its own doc comment, right before it`. Any other tag gives a warning: `unknown tag`.
 - An empty function description is an error. An empty parameter doc comment is an error: `parameter `x` needs a doc comment: /** question */ x: ...`. A field gives `field `x` needs a doc comment: /** question */ x: ...`.
@@ -187,7 +192,7 @@ A struct is inline or shared.
 - When two functions take the same struct, use a shared struct. An inline struct belongs to one function.
 - A function reference, such as `return @./message;`, never names a `.struct.rein` file.
 
-Example: `templates/message.struct.rein`, a shared struct that two templates take.
+Example: `message.struct.rein`, a shared struct that two templates take.
 
 ```ts
 /**
@@ -201,18 +206,18 @@ export default interface Message {
 }
 ```
 
-`templates/tell_customer.rein` takes it. `templates/close_ticket.rein` takes it the same way.
+`refund/tell_customer.rein` takes it. `faq/close_ticket.rein` takes it the same way.
 
 ```ts
 /**
  * Tell the customer what happens next, in one sentence.
  */
-export default function tellCustomer({ opening, nextStep }: @./message) {
+export default function tellCustomer({ opening, nextStep }: @../message) {
   return `${opening} ${nextStep}`;
 }
 ```
 
-A caller gives each field by name: ``@../templates/tell_customer(opening=`...`, nextStep=`...`)``.
+A caller gives each field by name: ``@./refund/tell_customer(opening=`...`, nextStep=`...`)``.
 
 ### References
 
@@ -255,7 +260,7 @@ A template is a file whose function meets every rule below. It is like a Rust ma
 - Every parameter is given once, by name: `` missing argument `b` in call to `@./tpl`; write `b=value` ``.
 - A template is never run by itself: `rein eval <template>` is an error, `templates are called from functions, not run`.
 
-Section 4, Structs, shows a template, `templates/tell_customer.rein`, that takes a shared struct.
+Section 4, Structs, shows a template, `refund/tell_customer.rein`, that takes a shared struct.
 
 ### Inputs
 
@@ -465,6 +470,7 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | A reference cycle, such as `a -> b -> a`. A cycle acts as a loop. The checker gives one warning on every return of a reference that lies on the cycle |
 | A doc tag other than `@param` (`unknown tag `@x``) |
 | A function cannot be reached from `main` through references (`x is not reachable from main`). This warning is not given when `main` is missing or has a syntax error |
+| A function that exactly one other function calls is not in the folder named after that caller (`` `fix_ci` is only called by `merge`; move it to `merge/fix_ci.rein` so the folders show the flow ``). A function that only the entry calls belongs at the root. Section 1 has the rule and its exceptions |
 
 ## 9. Evaluation
 
@@ -499,6 +505,7 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | `rein uninstall [-g] <args>...` | Run `pnpm remove <args>` in the same folder rules. |
 | `rein update [-g] [<args>...]` | Run `pnpm update --ignore-scripts <args>` in the same folder rules. |
 | `rein lsp` | Run the language server over stdio. See [Language server](#language-server) for its features. |
+| `rein dap` | Run the debug adapter over stdio (Debug Adapter Protocol). See [Debug adapter](#debug-adapter). |
 
 Exit codes: 0 for a text or reference result, 1 for an error, 2 for a parameter needed, 3 for a request.
 
@@ -578,6 +585,10 @@ The code is in `crates/rein/src/lsp/`, one module per feature. It reads the tree
 - Quick fixes: add a doc comment to a function or a parameter that has none, and add `name=` to a positional argument.
 - Program references: `@program` and `@program/function` resolve through the scopes from the project root, as `rein check` run there resolves them. Go to definition opens the function in the installed program, or its entry for a bare `@program`. Hover adds the program name, version, scope and folder. Completion after `@` offers the visible programs, and after `@program/` the functions of that program. Signature help, `name=` completion and diagnostics read the target's parameters. References list the program references in the current program only; references from other programs are not searched. Rename refuses a symbol of another program.
 
+### Debug adapter
+
+The code is in `crates/rein/src/dap/`. `rein dap` speaks the Debug Adapter Protocol over stdio. It walks a program with the step engine (section 11), so it has no evaluator of its own. It stops at a line breakpoint on a question, a request, a hand-off, or the end. A question with no answer is sent to the client as a `rein/ask` event. The client answers with a `rein/answer` request, and the walk goes on. The editor side and the steps for the user are in the [VS Code extension README](https://github.com/rein-lang/vscode-rein#readme).
+
 ## 11. Stepping (agent interface)
 
 `rein step` steps the whole flow in one call. It is the interface for agents. `rein eval` evaluates one function, and is the debug command. Live runs (`rein run`, `rein serve --mcp`) call the same logic and keep the answers above it; see [interface.md](interface.md). The stepping logic lives in `rein_core::step`. It is pure: no I/O and no state. The CLI only parses flags, calls it, and prints.
@@ -602,7 +613,7 @@ Protocol version 1. A request and a response are JSON objects, each with a `vers
 - `flow`: optional. The name of a visible flow (section 1a). The CLI resolves it to a flow root and steps that root. Give `flow` or a root, not both.
 - `entry`: the function to start from, by its path. Default `main`.
 - `inputs`: optional. An object. Each key is the name of a `string` parameter of the entry function, and each value is its text. Default `{}`.
-- `answers`: the answers so far. Each key is `<function path>.<name>`, where `name` is a parameter or a `const` answer, such as `merge_pr.ci` or `answer/faq.solved`. A function of another program has the path `@program/function`, such as `@pr-handling/main.task`. Each value is as `--answer` takes it: `yes`, `no`, or a union member. The value of a struct answer is a JSON object, such as `{"pr": "https://example.com/pr/1", "task": "review"}`: with `--stdin` it is a real JSON object, and with `--answer` it is the JSON text (`--answer main.pick='{"pr":"https://example.com/pr/1","task":"review"}'`). The runtime checks it: it is an object, every field is present, no other field is, a `string` field is non-empty text, a `boolean` field is `true` or `false`, and a union field is a member. An error names the field, such as `` field `pick.pr` is empty; give some text ``. Responses echo a struct answer as a JSON object. Default `{}`.
+- `answers`: the answers so far. Each key is `<function path>.<name>`, where `name` is a parameter or a `const` answer, such as `merge_pr.ci` or `faq.solved`. A function of another program has the path `@program/function`, such as `@pr-handling/main.task`. Each value is as `--answer` takes it: `yes`, `no`, or a union member. The value of a struct answer is a JSON object, such as `{"pr": "https://example.com/pr/1", "task": "review"}`: with `--stdin` it is a real JSON object, and with `--answer` it is the JSON text (`--answer main.pick='{"pr":"https://example.com/pr/1","task":"review"}'`). The runtime checks it: it is an object, every field is present, no other field is, a `string` field is non-empty text, a `boolean` field is `true` or `false`, and a union field is a member. An error names the field, such as `` field `pick.pr` is empty; give some text ``. Responses echo a struct answer as a JSON object. Default `{}`.
 
 ### Response
 

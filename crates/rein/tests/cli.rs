@@ -86,7 +86,7 @@ fn eval_red_ci_returns_ref_to_the_project_path() {
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["kind"], "ref");
-    assert_eq!(v["function"], "ci/fix");
+    assert_eq!(v["function"], "merge_pr/fix");
     assert_eq!(v["inputs"][0]["name"], "fixPushed");
 }
 
@@ -365,6 +365,43 @@ fn text_output_uses_typescript_types() {
     );
 }
 
+#[test]
+fn step_question_keeps_every_line_of_a_multi_line_field_doc() {
+    let root = temp_dir("fielddoc");
+    fs::write(
+        root.join("main.rein"),
+        "interface Input {\n  /** The link. */\n  pr: string;\n  /** Does the pull request wait for another pull request or change that is\n   * not merged yet? */\n  blocked: boolean;\n  /** Which task? */\n  task: \"a\" | \"b\";\n}\n\n/**\n * Demo.\n */\nexport default function main({ pr, blocked, task }: Input) {\n  if (blocked) {\n    return `blocked ${pr}`;\n  }\n  return `ok`;\n}\n",
+    )
+    .unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--input", "pr=x", "--json"]);
+    let v = json(&out);
+    assert_eq!(v["key"], "main.blocked");
+    assert_eq!(
+        v["description"],
+        "Does the pull request wait for another pull request or change that is not merged yet?"
+    );
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn async_answer_doc_over_several_lines_keeps_every_line() {
+    let root = temp_dir("answerdoc");
+    fs::write(
+        root.join("main.rein"),
+        "/** Entry. */\nexport default async function main() {\n  /**\n   * Did the runbook steps\n   * clear the alert?\n   */\n  const fixed: boolean = await request(\n    `Run the steps.`,\n  );\n  if (fixed) {\n    return `closed`;\n  }\n  return `paged`;\n}\n",
+    )
+    .unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
+    let v = json(&out);
+    assert_eq!(v["kind"], "request");
+    assert_eq!(v["response"]["description"], "Did the runbook steps clear the alert?");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("rein-cli-{tag}-{}-{nanos}", std::process::id()));
@@ -374,14 +411,14 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 #[test]
 fn running_a_template_is_an_error() {
-    let out = rein(&["eval", "templates/tell_customer", "--root", "examples/rein/support-ticket"]);
+    let out = rein(&["eval", "refund/tell_customer", "--root", "examples/rein/support-ticket"]);
     assert_eq!(code(&out), 1);
     assert!(String::from_utf8_lossy(&out.stderr).contains("templates are called from functions, not run"));
 }
 
 #[test]
 fn describe_shows_template_params_as_strings() {
-    let out = rein(&["describe", "templates/tell_customer", "--root", "examples/rein/support-ticket"]);
+    let out = rein(&["describe", "refund/tell_customer", "--root", "examples/rein/support-ticket"]);
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["inputs"][0]["type"], "string");
@@ -390,26 +427,26 @@ fn describe_shows_template_params_as_strings() {
 
 #[test]
 fn review_code_delegates_by_risk() {
-    let out = rein(&["eval", "review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=yes", "--json"]);
+    let out = rein(&["eval", "merge_pr/review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=yes", "--json"]);
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["kind"], "text");
     assert!(v["value"].as_str().unwrap().contains("Model: use opus model"), "{v}");
 
-    let out = rein(&["eval", "review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=no", "--json"]);
+    let out = rein(&["eval", "merge_pr/review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=no", "--json"]);
     assert!(json(&out)["value"].as_str().unwrap().contains("Model: use haiku model"));
 }
 
 #[test]
 fn faq_asks_the_agent_for_the_answer_then_continues() {
-    let out = rein(&["eval", "answer/faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--json"]);
+    let out = rein(&["eval", "faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--json"]);
     assert_eq!(code(&out), 3);
     let v = json(&out);
     assert_eq!(v["kind"], "request");
     assert_eq!(v["response"]["name"], "solved");
     assert_eq!(v["response"]["type"], "boolean");
 
-    let out = rein(&["eval", "answer/faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--set", "solved=no"]);
+    let out = rein(&["eval", "faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--set", "solved=no"]);
     assert_eq!(code(&out), 0);
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("next: escalate"));
 }

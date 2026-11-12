@@ -6,7 +6,7 @@ export default async function answerFaq(
   articleFound: boolean,
 ) {
   if (!articleFound) {
-    return @../escalate;
+    return @./escalate;
   }
   /** Did the customer confirm the article solved the problem? */
   const solved: boolean = await request(
@@ -14,10 +14,10 @@ export default async function answerFaq(
     problem.`,
   );
   if (solved) {
-    return @../templates/close_ticket(
+    return @./faq/close_ticket(
       opening=`Glad the help article solved the problem.`,
       nextStep=`Reply to this ticket if it comes back.`,
     );
   }
-  return @../escalate;
+  return @./escalate;
 }

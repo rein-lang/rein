@@ -76,7 +76,7 @@ fn mcp_host_walks_support_ticket_to_done_and_keeps_the_run_on_a_bad_answer() {
     }
     assert_eq!(last["kind"], "done", "{last}");
     assert_eq!(last["instruction"], "Tell the customer: Glad the help article solved the problem. Reply to this ticket if it comes back. Then close the ticket as\nsolved.");
-    assert_eq!(last["trace"], json!(["main", "answer/faq"]));
+    assert_eq!(last["trace"], json!(["main", "faq"]));
 
     let stopped = client.call("rein_stop", json!({"run_id": run}));
     assert_eq!(stopped["stopped"], true);

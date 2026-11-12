@@ -815,3 +815,47 @@ fn struct_files_are_checked_for_line_length() {
     let project = project_of(&[("ticket.struct", text.as_str())]);
     assert!(project.check()["ticket.struct"].iter().any(|d| d.message.starts_with("line has 81 characters")));
 }
+
+/// A function named `name` with a boolean question `a`: it returns `yes` when `a` holds, else `no`.
+fn branch(name: &str, yes: &str, no: &str) -> String {
+    format!(
+        "/** {name} */\nexport default function {name}(\n  /** A? */\n  a: boolean,\n) {{\n  if (a) {{\n    return {yes};\n  }}\n  return {no};\n}}\n"
+    )
+}
+
+#[test]
+fn a_function_with_one_caller_belongs_in_the_caller_folder() {
+    let leaf = |body: &str| format!("/** l */\nexport default function leaf() {{ return {body} }}\n");
+    let ticket = "/** A ticket. */\nexport default interface Ticket {\n  /** The ticket id. */\n  id: string;\n}\n";
+    let files = [
+        ("main", branch("main", "@./merge", "@./shared")),
+        ("merge", branch("merge", "@./steps/fix_ci", "@./merge/done")),
+        ("merge/done", leaf("@../shared")),
+        ("steps/fix_ci", leaf("`fixed`")),
+        ("shared", leaf("`shared`")),
+        ("ticket.struct", ticket.to_string()),
+    ];
+    let files: Vec<(&str, &str)> = files.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    let project = project_of(&files);
+    let diags = project.check();
+    let warning = "`steps/fix_ci` is only called by `merge`; move it to `merge/fix_ci.rein` so the folders show the flow";
+    assert!(has(&diags["steps/fix_ci"], Severity::Warning, warning), "{:?}", diags["steps/fix_ci"]);
+    assert_eq!(project.nest_target("steps/fix_ci").as_deref(), Some("merge/fix_ci"));
+    // A callee of the entry stays at the root, a callee already in its caller's folder is in place, a function
+    // with two callers is shared, and a struct is not a function.
+    for name in ["main", "merge", "merge/done", "shared", "ticket.struct"] {
+        assert!(!has(&diags[name], Severity::Warning, "folders show the flow"), "{name}: {:?}", diags[name]);
+        assert_eq!(project.nest_target(name), None, "{name}");
+    }
+}
+
+#[test]
+fn a_function_called_only_by_the_entry_belongs_at_the_root() {
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./security/review }\n"),
+        ("security/review", "/** r */\nexport default function review() { return `ok` }\n"),
+    ]);
+    let warning = "`security/review` is only called by `main`; move it to `review.rein` so the folders show the flow";
+    assert!(has(&project.check()["security/review"], Severity::Warning, warning));
+    assert_eq!(project.nest_target("security/review").as_deref(), Some("review"));
+}

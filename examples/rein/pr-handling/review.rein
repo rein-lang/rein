@@ -23,10 +23,10 @@ export default async function review({ pr, ownPr, securitySensitive }: Input) {
       with a security focus and list each problem with file and line`),
     );
     if (securityProblem) {
-      return @./templates/post_review(kind=`request changes`,
+      return @./review/post_review(kind=`request changes`,
         body=`each security problem, with its file and line`, pr=pr);
     }
-    return @./templates/post_review(kind=`approve`,
+    return @./review/post_review(kind=`approve`,
       body=`the security checks you made`, pr=pr);
   }
   /** What is the result of the code review? */
@@ -37,13 +37,13 @@ export default async function review({ pr, ownPr, securitySensitive }: Input) {
     );
   switch (verdict) {
     case "clean":
-      return @./templates/post_review(kind=`approve`,
+      return @./review/post_review(kind=`approve`,
         body=`one line on what you checked`, pr=pr);
     case "small problems":
-      return @./templates/post_review(kind=`comment`,
+      return @./review/post_review(kind=`comment`,
         body=`each small problem, with its file and line`, pr=pr);
     case "blocking problems":
-      return @./templates/post_review(kind=`request changes`,
+      return @./review/post_review(kind=`request changes`,
         body=`each blocking problem, with its file and line`, pr=pr);
   }
 }

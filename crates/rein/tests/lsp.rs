@@ -530,11 +530,11 @@ fn at(uri: &str, line: u64, character: u64) -> Value {
 /// Every `@./escalate` in examples/rein/support-ticket.
 fn escalate_calls() -> Vec<Spot> {
     vec![
-        spot("answer/faq.rein", 8, 11, 8, 23),
-        spot("answer/faq.rein", 21, 9, 21, 21),
-        spot("billing/refund.rein", 8, 11, 8, 23),
+        spot("faq.rein", 8, 11, 8, 22),
+        spot("faq.rein", 21, 9, 21, 20),
         spot("main.rein", 12, 11, 12, 22),
         spot("main.rein", 18, 13, 18, 24),
+        spot("refund.rein", 8, 11, 8, 22),
     ]
 }
 
@@ -571,7 +571,7 @@ fn references_of_a_parameter_include_named_arguments() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
     // From `opening=` in the call: the argument, the struct field, each destructuring, and each `${opening}` use.
     let mut params = at(&refund, 11, 6);
@@ -580,13 +580,13 @@ fn references_of_a_parameter_include_named_arguments() {
     assert_eq!(
         spots(&root, &refs["result"]),
         vec![
-            spot("answer/faq.rein", 17, 6, 17, 13),
-            spot("billing/refund.rein", 11, 4, 11, 11),
-            spot("templates/close_ticket.rein", 3, 38, 3, 45),
-            spot("templates/close_ticket.rein", 4, 31, 4, 38),
-            spot("templates/message.struct.rein", 5, 2, 5, 9),
-            spot("templates/tell_customer.rein", 3, 39, 3, 46),
-            spot("templates/tell_customer.rein", 4, 12, 4, 19),
+            spot("faq.rein", 17, 6, 17, 13),
+            spot("faq/close_ticket.rein", 3, 38, 3, 45),
+            spot("faq/close_ticket.rein", 4, 31, 4, 38),
+            spot("message.struct.rein", 5, 2, 5, 9),
+            spot("refund.rein", 11, 4, 11, 11),
+            spot("refund/tell_customer.rein", 3, 39, 3, 46),
+            spot("refund/tell_customer.rein", 4, 12, 4, 19),
         ],
         "{refs}"
     );
@@ -625,17 +625,17 @@ fn definition_goes_to_functions_parameters_and_std() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
     // A reference goes to the name of the function it names.
     let def = server.request(2, "textDocument/definition", at(&refund, 10, 20));
-    assert_eq!(spot_of(&root, &def["result"]), spot("templates/tell_customer.rein", 3, 24, 3, 36), "{def}");
+    assert_eq!(spot_of(&root, &def["result"]), spot("refund/tell_customer.rein", 3, 24, 3, 36), "{def}");
     // `opening=` in a call goes to that field of the struct.
     let def = server.request(3, "textDocument/definition", at(&refund, 11, 6));
-    assert_eq!(spot_of(&root, &def["result"]), spot("templates/message.struct.rein", 5, 2, 5, 9), "{def}");
+    assert_eq!(spot_of(&root, &def["result"]), spot("message.struct.rein", 5, 2, 5, 9), "{def}");
     // A parameter used in the body goes to its declaration.
     let def = server.request(4, "textDocument/definition", at(&refund, 7, 8));
-    assert_eq!(spot_of(&root, &def["result"]), spot("billing/refund.rein", 5, 2, 5, 17), "{def}");
+    assert_eq!(spot_of(&root, &def["result"]), spot("refund.rein", 5, 2, 5, 17), "{def}");
 
     // A std template goes to its source. `request` is built in and has none.
     let tmp = temp_project("stddef");
@@ -660,7 +660,7 @@ fn hover_shows_function_docs_and_callee_parameters() {
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
     // On the function's own name: its doc comment.
     let hover = server.request(2, "textDocument/hover", at(&escalate, 3, 26));
@@ -710,9 +710,9 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     assert_eq!(
         calls_of(&root, &incoming["result"], "from"),
         vec![
-            ("answer/faq".to_string(), vec![spot("answer/faq.rein", 8, 11, 8, 23), spot("answer/faq.rein", 21, 9, 21, 21)]),
-            ("billing/refund".to_string(), vec![spot("billing/refund.rein", 8, 11, 8, 23)]),
+            ("faq".to_string(), vec![spot("faq.rein", 8, 11, 8, 22), spot("faq.rein", 21, 9, 21, 20)]),
             ("main".to_string(), vec![spot("main.rein", 12, 11, 12, 22), spot("main.rein", 18, 13, 18, 24)]),
+            ("refund".to_string(), vec![spot("refund.rein", 8, 11, 8, 22)]),
         ],
         "{incoming}"
     );
@@ -720,9 +720,9 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     let items = server.request(4, "textDocument/prepareCallHierarchy", at(&main, 10, 25));
     let outgoing = server.request(5, "callHierarchy/outgoingCalls", json!({"item": items["result"][0]}));
     let names: Vec<String> = calls_of(&root, &outgoing["result"], "to").into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, ["answer/faq", "billing/refund", "escalate"], "{outgoing}");
+    assert_eq!(names, ["escalate", "faq", "refund"], "{outgoing}");
     // Outgoing ranges are in the caller's file.
-    let ranges = &outgoing["result"][2]["fromRanges"];
+    let ranges = &outgoing["result"][0]["fromRanges"];
     assert_eq!(ranges[0], json!({"start": {"line": 12, "character": 11}, "end": {"line": 12, "character": 22}}));
     assert_eq!(ranges[1], json!({"start": {"line": 18, "character": 13}, "end": {"line": 18, "character": 24}}));
 
@@ -734,13 +734,13 @@ fn document_symbols_outline_the_function_and_its_names() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let faq = open_file(&mut server, &root, "answer/faq.rein");
+    let faq = open_file(&mut server, &root, "faq.rein");
 
     let symbols = server.request(2, "textDocument/documentSymbol", json!({"textDocument": {"uri": faq}}));
     let function = &symbols["result"][0];
-    assert_eq!(function["name"], "answer/faq");
+    assert_eq!(function["name"], "faq");
     assert_eq!(function["kind"], 12);
-    assert_eq!(spot_of(&root, &json!({"uri": faq, "range": function["selectionRange"]})), spot("answer/faq.rein", 3, 30, 3, 39));
+    assert_eq!(spot_of(&root, &json!({"uri": faq, "range": function["selectionRange"]})), spot("faq.rein", 3, 30, 3, 39));
     let children: Vec<(String, String, Spot)> = function["children"]
         .as_array()
         .unwrap()
@@ -753,8 +753,8 @@ fn document_symbols_outline_the_function_and_its_names() {
     assert_eq!(
         children,
         vec![
-            ("articleFound".to_string(), "boolean".to_string(), spot("answer/faq.rein", 5, 2, 5, 14)),
-            ("solved".to_string(), "boolean".to_string(), spot("answer/faq.rein", 11, 8, 11, 14)),
+            ("articleFound".to_string(), "boolean".to_string(), spot("faq.rein", 5, 2, 5, 14)),
+            ("solved".to_string(), "boolean".to_string(), spot("faq.rein", 11, 8, 11, 14)),
         ]
     );
 
@@ -772,18 +772,21 @@ fn workspace_symbols_search_every_program() {
 
     let found = server.request(2, "workspace/symbol", json!({"query": "refund"}));
     let found = found["result"].as_array().unwrap();
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0]["name"], "billing/refund");
-    assert_eq!(found[0]["containerName"], "support-ticket");
+    // The query also matches `refund/tell_customer`, which is inside the `refund` folder.
+    assert_eq!(found.len(), 2, "{found:?}");
+    let refund = found.iter().find(|s| s["name"] == "refund").expect("refund symbol");
+    assert_eq!(refund["containerName"], "support-ticket");
     let root = example("support-ticket");
-    assert_eq!(spot_of(&root, &found[0]["location"]), spot("billing/refund.rein", 3, 24, 3, 30));
+    assert_eq!(spot_of(&root, &refund["location"]), spot("refund.rein", 3, 24, 3, 30));
+    let tell = found.iter().find(|s| s["name"] == "refund/tell_customer").expect("tell_customer symbol");
+    assert_eq!(spot_of(&root, &tell["location"]), spot("refund/tell_customer.rein", 3, 24, 3, 36));
 
     // An empty query lists every function of the four example programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
     assert_eq!(all_symbols.len(), 22, "{all}");
     assert!(
-        all_symbols.iter().any(|s| s["name"] == "templates/message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
+        all_symbols.iter().any(|s| s["name"] == "message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"
     );
 
@@ -826,7 +829,7 @@ fn edits_of(root: &Path, edit: &Value) -> EditSummary {
 fn rename_a_parameter_updates_named_arguments() {
     let root = example("support-ticket");
     let mut server = start_with_file_renames();
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
     let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 11, 6));
     assert_eq!(prepared["result"]["placeholder"], "opening");
@@ -840,13 +843,13 @@ fn rename_a_parameter_updates_named_arguments() {
         edits_of(&root, &edit["result"]),
         (
             vec![
-                lead(spot("answer/faq.rein", 17, 6, 17, 13)),
-                lead(spot("billing/refund.rein", 11, 4, 11, 11)),
-                lead(spot("templates/close_ticket.rein", 3, 38, 3, 45)),
-                lead(spot("templates/close_ticket.rein", 4, 31, 4, 38)),
-                lead(spot("templates/message.struct.rein", 5, 2, 5, 9)),
-                lead(spot("templates/tell_customer.rein", 3, 39, 3, 46)),
-                lead(spot("templates/tell_customer.rein", 4, 12, 4, 19)),
+                lead(spot("faq.rein", 17, 6, 17, 13)),
+                lead(spot("faq/close_ticket.rein", 3, 38, 3, 45)),
+                lead(spot("faq/close_ticket.rein", 4, 31, 4, 38)),
+                lead(spot("message.struct.rein", 5, 2, 5, 9)),
+                lead(spot("refund.rein", 11, 4, 11, 11)),
+                lead(spot("refund/tell_customer.rein", 3, 39, 3, 46)),
+                lead(spot("refund/tell_customer.rein", 4, 12, 4, 19)),
             ],
             vec![]
         ),
@@ -881,12 +884,12 @@ fn rename_a_function_renames_its_file_and_references() {
         edits_of(&root, &edit["result"]),
         (
             vec![
-                handoff(spot("answer/faq.rein", 8, 15, 8, 23)),
-                handoff(spot("answer/faq.rein", 21, 13, 21, 21)),
-                handoff(spot("billing/refund.rein", 8, 15, 8, 23)),
                 handoff(spot("escalate.rein", 3, 24, 3, 32)),
+                handoff(spot("faq.rein", 8, 14, 8, 22)),
+                handoff(spot("faq.rein", 21, 12, 21, 20)),
                 handoff(spot("main.rein", 12, 14, 12, 22)),
                 handoff(spot("main.rein", 18, 16, 18, 24)),
+                handoff(spot("refund.rein", 8, 14, 8, 22)),
             ],
             vec![("escalate.rein".to_string(), "handoff.rein".to_string())]
         ),
@@ -919,9 +922,9 @@ fn labels(items: &Value) -> Vec<String> {
     items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
 }
 
-/// A buffer in support-ticket that calls the template with one argument given. Line 2, column 50 is after `, `.
+/// A buffer in support-ticket that calls the template with one argument given. Line 2, column 46 is after `, `.
 const PARTIAL_CALL: &str =
-    "/** R. */\nexport default function r() {\n  return @../templates/tell_customer(opening=`x`, );\n}\n";
+    "/** R. */\nexport default function r() {\n  return @./refund/tell_customer(opening=`x`, );\n}\n";
 
 #[test]
 fn completion_offers_argument_names_and_union_members() {
@@ -930,9 +933,9 @@ fn completion_offers_argument_names_and_union_members() {
     initialize(&mut server);
 
     // Inside the call, after one named argument: the parameter not given yet.
-    let partial = uri_of(&root, "billing/partial.rein");
+    let partial = uri_of(&root, "partial.rein");
     server.open(&partial, PARTIAL_CALL);
-    let items = server.request(2, "textDocument/completion", at(&partial, 2, 50));
+    let items = server.request(2, "textDocument/completion", at(&partial, 2, 46));
     assert_eq!(labels(&items), ["nextStep="], "{items}");
     assert_eq!(items["result"][0]["detail"], "nextStep: string");
 
@@ -998,19 +1001,19 @@ fn signature_help_shows_the_callee_parameters() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let partial = uri_of(&root, "billing/partial.rein");
+    let partial = uri_of(&root, "partial.rein");
     server.open(&partial, PARTIAL_CALL);
 
-    let help = server.request(2, "textDocument/signatureHelp", at(&partial, 2, 50));
+    let help = server.request(2, "textDocument/signatureHelp", at(&partial, 2, 46));
     let signature = &help["result"]["signatures"][0];
-    assert_eq!(signature["label"], "@../templates/tell_customer(opening: string, nextStep: string)");
-    assert_eq!(signature["parameters"][0]["label"], json!([28, 43]));
-    assert_eq!(signature["parameters"][1]["label"], json!([45, 61]));
+    assert_eq!(signature["label"], "@./refund/tell_customer(opening: string, nextStep: string)");
+    assert_eq!(signature["parameters"][0]["label"], json!([24, 39]));
+    assert_eq!(signature["parameters"][1]["label"], json!([41, 57]));
     assert_eq!(signature["parameters"][1]["documentation"], "The next step the customer can expect.");
     assert_eq!(help["result"]["activeParameter"], 1, "{help}");
 
     // In the first argument, the first parameter is active.
-    let help = server.request(3, "textDocument/signatureHelp", at(&partial, 2, 40));
+    let help = server.request(3, "textDocument/signatureHelp", at(&partial, 2, 36));
     assert_eq!(help["result"]["activeParameter"], 0, "{help}");
 
     server.shutdown();
@@ -1060,6 +1063,45 @@ fn quick_fixes_add_doc_comments_and_name_arguments() {
     let (title, edit) = quick_fix(&mut server, 4, &positional, "missing argument `model`");
     assert_eq!(title, "Name the argument `model=`");
     assert_eq!(edit, insert_at(2, 18, "model="));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_moves_a_function_into_the_folder_of_its_only_caller() {
+    // `temp_project` writes `target.rein`. Here only `steps/fix_ci` calls it, so it is a nested relative reference.
+    let root = fs::canonicalize(temp_project("nest")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fixCi() {\n  return @../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "`steps/fix_ci` is only called by `flow/merge`; move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    assert_eq!(diag["severity"], 2, "{diag}");
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![
+                (spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string()),
+                (spot("steps/fix_ci.rein", 2, 9, 2, 19), "@../../target".to_string()),
+            ],
+            vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();

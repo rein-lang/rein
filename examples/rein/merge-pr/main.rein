@@ -9,6 +9,6 @@ export default function main(
     case "merge":
       return @./merge_pr;
     case "security review":
-      return @./security/review;
+      return @./review;
   }
 }
