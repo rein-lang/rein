@@ -48,7 +48,7 @@ expression: text
       "id": "f1_0",
       "kind": "done",
       "function": "page_human",
-      "label": "Page the on-call engineer now. Post the alert summary in the incident channel. Wait for an acknowledgement before you take any other step."
+      "label": "Page the on-call engineer now. Post the alert summary in the incident\nchannel. Wait for an acknowledgement before you take any other step."
     },
     {
       "id": "f2",
@@ -60,7 +60,7 @@ expression: text
       "id": "f2_0",
       "kind": "request",
       "function": "runbook/follow",
-      "label": "request: \"Run the runbook steps for this alert. Then check the alert status and report whether it cleared.\""
+      "label": "request: `Run the runbook steps for this alert. Then check the alert status and\nreport whether it cleared.`"
     },
     {
       "id": "f2_1",
@@ -100,7 +100,7 @@ expression: text
       "id": "f3_2",
       "kind": "done",
       "function": "ticket/open",
-      "label": "Create a ticket with the alert name, severity, and first graph link. Assign it to the owning team."
+      "label": "Create a ticket with the alert name, severity, and first graph link.\nAssign it to the owning team."
     }
   ],
   "edges": [

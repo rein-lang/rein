@@ -65,7 +65,7 @@ fn merge_project() -> Project {
 fn faq_project() -> Project {
     project(&[
         ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./answer/faq;\n}\n"),
-        ("answer/faq.rein", "/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  articleFound: boolean,\n) {\n  if (!articleFound) {\n    return @../escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\"Send the article and ask if it solved the problem.\");\n  if (solved) {\n    return \"Close the ticket as solved.\";\n  }\n  return @../escalate;\n}\n"),
+        ("answer/faq.rein", "/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  articleFound: boolean,\n) {\n  if (!articleFound) {\n    return @../escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\n    \"Send the article and ask if it solved the problem.\",\n  );\n  if (solved) {\n    return \"Close the ticket as solved.\";\n  }\n  return @../escalate;\n}\n"),
         ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return \"Assign the ticket to tier 2.\";\n}\n"),
     ])
 }

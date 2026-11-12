@@ -2,5 +2,6 @@
  * Page the on-call engineer for an alert that needs a human now.
  */
 export default function pageHuman() {
-  return "Page the on-call engineer now. Post the alert summary in the incident channel. Wait for an acknowledgement before you take any other step.";
+  return `Page the on-call engineer now. Post the alert summary in the incident
+  channel. Wait for an acknowledgement before you take any other step.`;
 }

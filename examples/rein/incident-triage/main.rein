@@ -10,7 +10,11 @@ interface Alert {
 /**
  * Decide how the on-call agent handles a new production alert.
  */
-export default function main({ severity, customerImpact, knownRunbook }: Alert) {
+export default function main({
+  severity,
+  customerImpact,
+  knownRunbook,
+}: Alert) {
   if (customerImpact) {
     return @./page_human;
   }

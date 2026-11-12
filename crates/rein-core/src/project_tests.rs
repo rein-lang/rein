@@ -575,8 +575,8 @@ fn forty_one_lines_fails_on_the_header() {
     );
 }
 
-/// A flow root in a temp dir: `main.rein`, a `long.rein` of `lines` lines, and an optional `rein.json`.
-fn flow_with_manifest(tag: &str, manifest: Option<&str>, lines: usize) -> Project {
+/// A flow root in a temp dir: `main.rein`, the given `long.rein`, and an optional `rein.json`.
+fn flow_of(tag: &str, manifest: Option<&str>, long: &str) -> Project {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -588,13 +588,18 @@ fn flow_with_manifest(tag: &str, manifest: Option<&str>, lines: usize) -> Projec
         "/** m */\nexport default function main() { return @./long }\n",
     )
     .unwrap();
-    fs::write(root.join("long.rein"), function_of(lines)).unwrap();
+    fs::write(root.join("long.rein"), long).unwrap();
     if let Some(m) = manifest {
         fs::write(root.join("rein.json"), m).unwrap();
     }
     let project = Project::load(&root).unwrap();
     fs::remove_dir_all(&root).unwrap();
     project
+}
+
+/// A flow root in a temp dir: `main.rein`, a `long.rein` of `lines` lines, and an optional `rein.json`.
+fn flow_with_manifest(tag: &str, manifest: Option<&str>, lines: usize) -> Project {
+    flow_of(tag, manifest, &function_of(lines))
 }
 
 #[test]
@@ -702,4 +707,111 @@ fn program_references_are_not_in_project_edges() {
     let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
     assert!(p.references().is_empty());
     assert_eq!(p.program_refs(), [("main".to_string(), "pr-handling/main".to_string())]);
+}
+
+/// A function `long` whose return line has `width` characters. The string repeats `fill`.
+fn function_with_line(width: usize, fill: char) -> String {
+    // `  return "` is 10 characters and `";` is 2.
+    let text: String = std::iter::repeat_n(fill, width - 12).collect();
+    format!("/** Long. */\nexport default function long() {{\n  return \"{text}\";\n}}\n")
+}
+
+const WIDTH_81: &str = "line has 81 characters; the limit is 80. Break the line; a long text can be a template (backticks) that spans lines";
+
+/// Line-length errors of the file `long` in a project of `main` and `long`.
+fn width_errors(text: &str) -> Vec<Diagnostic> {
+    project_of(&[("long", text)])
+        .check()
+        .remove("long")
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.message.contains(" characters; the limit is "))
+        .collect()
+}
+
+/// The line-length error texts of the project's files.
+fn width_lines(project: &Project) -> Vec<String> {
+    project
+        .check()
+        .into_values()
+        .flatten()
+        .map(|d| d.message)
+        .filter(|m| m.contains(" characters; the limit is "))
+        .collect()
+}
+
+#[test]
+fn exactly_80_characters_pass_and_81_fail_on_the_overflow() {
+    assert!(width_errors(&function_with_line(80, 'a')).is_empty());
+    let text = function_with_line(81, 'a');
+    let errors = width_errors(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].severity, Severity::Error);
+    assert_eq!(errors[0].message, WIDTH_81);
+    assert_eq!(&text[errors[0].span.start..errors[0].span.end], ";");
+}
+
+#[test]
+fn line_length_counts_characters_not_bytes() {
+    // `é` is 2 bytes, so the 80-character line is 149 bytes.
+    assert!(width_errors(&function_with_line(80, 'é')).is_empty());
+    let text = function_with_line(81, 'é');
+    let errors = width_errors(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].message, WIDTH_81);
+    assert_eq!(&text[errors[0].span.start..errors[0].span.end], ";");
+    // A tab is one character.
+    assert!(width_errors(&function_with_line(80, '\t')).is_empty());
+}
+
+#[test]
+fn manifest_sets_the_line_length_limit() {
+    let manifest = Some(r#"{"maxLineLength": 120}"#);
+    let project = flow_of("width-ok", manifest, &function_with_line(120, 'a'));
+    assert_eq!(project.max_line_length, 120);
+    assert!(project.manifest_diagnostics().is_empty());
+    assert!(width_lines(&project).is_empty());
+
+    let project = flow_of("width-over", manifest, &function_with_line(121, 'a'));
+    let errors = width_lines(&project);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("line has 121 characters; the limit is 120. Break the line"), "{errors:?}");
+}
+
+#[test]
+fn invalid_line_length_is_a_manifest_error_and_the_default_applies() {
+    for value in ["0", "-1", "1.5", "\"120\"", "null"] {
+        let manifest = format!(r#"{{"maxLineLength": {value}}}"#);
+        let project = flow_of("width-bad", Some(&manifest), &function_with_line(81, 'a'));
+        assert_eq!(project.max_line_length, 80, "{value}");
+        let errors = project.manifest_diagnostics();
+        assert_eq!(errors.len(), 1, "{value}: {errors:?}");
+        assert!(
+            errors[0].message.starts_with("`maxLineLength` in rein.json must be a positive integer, such as 80; found "),
+            "{value}: {}",
+            errors[0].message
+        );
+        assert_eq!(width_lines(&project), [WIDTH_81], "{value}");
+    }
+}
+
+#[test]
+fn one_manifest_sets_both_limits() {
+    let manifest = Some(r#"{"maxFunctionLines": 60, "maxLineLength": 0}"#);
+    let project = flow_of("both", manifest, &function_of(41));
+    assert_eq!(project.max_function_lines, 60);
+    assert_eq!(project.max_line_length, 80);
+    assert_eq!(project.manifest_diagnostics().len(), 1);
+}
+
+#[test]
+fn struct_files_are_checked_for_line_length() {
+    let doc = "x".repeat(70);
+    let text = format!("/** Ticket. */\nexport default interface Ticket {{\n  /** {doc} */\n  category: boolean;\n}}\n");
+    let project = project_of(&[("ticket.struct", text.as_str())]);
+    let errors: Vec<_> = project.check()["ticket.struct"].iter().map(|d| d.message.clone()).collect();
+    assert!(!errors.iter().any(|m| m.contains(" characters; the limit is ")), "{errors:?}");
+    let text = text.replace(&doc, &"x".repeat(72));
+    let project = project_of(&[("ticket.struct", text.as_str())]);
+    assert!(project.check()["ticket.struct"].iter().any(|d| d.message.starts_with("line has 81 characters")));
 }

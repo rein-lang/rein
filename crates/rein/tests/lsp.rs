@@ -226,6 +226,30 @@ fn a_function_over_the_line_limit_is_an_error_on_its_header() {
 }
 
 #[test]
+fn a_line_over_the_length_limit_is_an_error_on_its_overflow() {
+    let root = temp_project("width");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // Line 3 is `  return "` + 69 letters + `";`: 81 characters, so the overflow is the `;`.
+    let wide = uri_of(&root, "wide.rein");
+    let text = format!("/** Wide. */\nexport default function wide() {{\n  return \"{}\";\n}}\n", "a".repeat(69));
+    server.open(&wide, &text);
+    let diags = server.wait_diagnostics(&wide, |d| has_message(d, "line has 81 characters; the limit is 80."));
+    let error = diags
+        .iter()
+        .find(|d| d["message"].as_str().is_some_and(|m| m.starts_with("line has 81 characters")))
+        .expect("line length error");
+    assert_eq!(error["severity"], 1);
+    assert_eq!(error["range"]["start"], json!({"line": 2, "character": 80}));
+    assert_eq!(error["range"]["end"], json!({"line": 2, "character": 81}));
+    assert_eq!(error["source"], "rein");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn fixing_one_file_clears_errors_in_another() {
     let root = temp_project("clear");
     let mut server = Server::start();
@@ -501,7 +525,7 @@ fn at(uri: &str, line: u64, character: u64) -> Value {
 fn escalate_calls() -> Vec<Spot> {
     vec![
         spot("answer/faq.rein", 8, 11, 8, 23),
-        spot("answer/faq.rein", 17, 9, 17, 21),
+        spot("answer/faq.rein", 21, 9, 21, 21),
         spot("billing/refund.rein", 8, 11, 8, 23),
         spot("main.rein", 12, 11, 12, 22),
         spot("main.rein", 18, 13, 18, 24),
@@ -544,14 +568,14 @@ fn references_of_a_parameter_include_named_arguments() {
     let refund = open_file(&mut server, &root, "billing/refund.rein");
 
     // From `opening=` in the call: the argument, the struct field, each destructuring, and each `${opening}` use.
-    let mut params = at(&refund, 10, 40);
+    let mut params = at(&refund, 11, 6);
     params["context"] = json!({"includeDeclaration": true});
     let refs = server.request(2, "textDocument/references", params);
     assert_eq!(
         spots(&root, &refs["result"]),
         vec![
-            spot("answer/faq.rein", 15, 38, 15, 45),
-            spot("billing/refund.rein", 10, 37, 10, 44),
+            spot("answer/faq.rein", 17, 6, 17, 13),
+            spot("billing/refund.rein", 11, 4, 11, 11),
             spot("templates/close_ticket.rein", 3, 38, 3, 45),
             spot("templates/close_ticket.rein", 4, 31, 4, 38),
             spot("templates/message.struct.rein", 5, 2, 5, 9),
@@ -601,7 +625,7 @@ fn definition_goes_to_functions_parameters_and_std() {
     let def = server.request(2, "textDocument/definition", at(&refund, 10, 20));
     assert_eq!(spot_of(&root, &def["result"]), spot("templates/tell_customer.rein", 3, 24, 3, 36), "{def}");
     // `opening=` in a call goes to that field of the struct.
-    let def = server.request(3, "textDocument/definition", at(&refund, 10, 40));
+    let def = server.request(3, "textDocument/definition", at(&refund, 11, 6));
     assert_eq!(spot_of(&root, &def["result"]), spot("templates/message.struct.rein", 5, 2, 5, 9), "{def}");
     // A parameter used in the body goes to its declaration.
     let def = server.request(4, "textDocument/definition", at(&refund, 7, 8));
@@ -639,7 +663,7 @@ fn hover_shows_function_docs_and_callee_parameters() {
     assert_eq!(hover["result"]["range"], json!({"start": {"line": 3, "character": 24}, "end": {"line": 3, "character": 32}}));
 
     // On `opening=` in a call: the callee's parameter type and question.
-    let hover = server.request(3, "textDocument/hover", at(&refund, 10, 40));
+    let hover = server.request(3, "textDocument/hover", at(&refund, 11, 6));
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
     assert!(text.contains("opening: string"), "{text}");
     assert!(text.contains("The first part of the sentence, such as the action taken."), "{text}");
@@ -680,7 +704,7 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     assert_eq!(
         calls_of(&root, &incoming["result"], "from"),
         vec![
-            ("answer/faq".to_string(), vec![spot("answer/faq.rein", 8, 11, 8, 23), spot("answer/faq.rein", 17, 9, 17, 21)]),
+            ("answer/faq".to_string(), vec![spot("answer/faq.rein", 8, 11, 8, 23), spot("answer/faq.rein", 21, 9, 21, 21)]),
             ("billing/refund".to_string(), vec![spot("billing/refund.rein", 8, 11, 8, 23)]),
             ("main".to_string(), vec![spot("main.rein", 12, 11, 12, 22), spot("main.rein", 18, 13, 18, 24)]),
         ],
@@ -798,11 +822,11 @@ fn rename_a_parameter_updates_named_arguments() {
     let mut server = start_with_file_renames();
     let refund = open_file(&mut server, &root, "billing/refund.rein");
 
-    let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 10, 40));
+    let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 11, 6));
     assert_eq!(prepared["result"]["placeholder"], "opening");
-    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 10, "character": 37}, "end": {"line": 10, "character": 44}}));
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 11, "character": 4}, "end": {"line": 11, "character": 11}}));
 
-    let mut params = at(&refund, 10, 40);
+    let mut params = at(&refund, 11, 6);
     params["newName"] = json!("lead");
     let edit = server.request(3, "textDocument/rename", params);
     let lead = |s: Spot| (s, "lead".to_string());
@@ -810,8 +834,8 @@ fn rename_a_parameter_updates_named_arguments() {
         edits_of(&root, &edit["result"]),
         (
             vec![
-                lead(spot("answer/faq.rein", 15, 38, 15, 45)),
-                lead(spot("billing/refund.rein", 10, 37, 10, 44)),
+                lead(spot("answer/faq.rein", 17, 6, 17, 13)),
+                lead(spot("billing/refund.rein", 11, 4, 11, 11)),
                 lead(spot("templates/close_ticket.rein", 3, 38, 3, 45)),
                 lead(spot("templates/close_ticket.rein", 4, 31, 4, 38)),
                 lead(spot("templates/message.struct.rein", 5, 2, 5, 9)),
@@ -824,7 +848,7 @@ fn rename_a_parameter_updates_named_arguments() {
     );
 
     // A name that is not an identifier fails the request.
-    let mut params = at(&refund, 10, 40);
+    let mut params = at(&refund, 11, 6);
     params["newName"] = json!("2x");
     let failed = server.request(4, "textDocument/rename", params);
     assert_eq!(failed["error"]["code"], -32803, "{failed}");
@@ -852,7 +876,7 @@ fn rename_a_function_renames_its_file_and_references() {
         (
             vec![
                 handoff(spot("answer/faq.rein", 8, 15, 8, 23)),
-                handoff(spot("answer/faq.rein", 17, 13, 17, 21)),
+                handoff(spot("answer/faq.rein", 21, 13, 21, 21)),
                 handoff(spot("billing/refund.rein", 8, 15, 8, 23)),
                 handoff(spot("escalate.rein", 3, 24, 3, 32)),
                 handoff(spot("main.rein", 12, 14, 12, 22)),
