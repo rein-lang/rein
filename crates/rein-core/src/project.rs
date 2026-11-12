@@ -45,6 +45,8 @@ pub struct Project {
     pub max_line_length: u64,
     /// Errors in `rein.json`. They apply to every file of the project.
     manifest_diagnostics: Vec<Diagnostic>,
+    /// The entry function: `entry` in `rein.json` without `.rein`, else [`ENTRY`].
+    entry: String,
 }
 
 /// The `rein.json` field that sets the line limit of a function.
@@ -74,6 +76,15 @@ fn read_limits(root: &Path) -> (u64, u64, Vec<Diagnostic>) {
     let lines = limit(MAX_LINES_FIELD, crate::check::DEFAULT_MAX_FUNCTION_LINES);
     let length = limit(MAX_LINE_LENGTH_FIELD, crate::check::DEFAULT_MAX_LINE_LENGTH);
     (lines, length, errors)
+}
+
+/// The entry function of the program at `root`: `entry` in `rein.json` without `.rein`, else [`ENTRY`].
+fn read_entry(root: &Path) -> String {
+    fs::read_to_string(root.join(crate::flows::MANIFEST))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|m| Some(m.get("entry")?.as_str()?.trim_end_matches(".rein").to_string()))
+        .unwrap_or_else(|| ENTRY.to_string())
 }
 
 impl Project {
@@ -125,8 +136,16 @@ impl Project {
             files.insert(name, SourceFile { path, text, function, parse_diagnostics });
         }
         let (max_function_lines, max_line_length, manifest_diagnostics) = read_limits(&root);
-        let mut project =
-            Self { root, files, programs: BTreeMap::new(), max_function_lines, max_line_length, manifest_diagnostics };
+        let entry = read_entry(&root);
+        let mut project = Self {
+            root,
+            files,
+            programs: BTreeMap::new(),
+            max_function_lines,
+            max_line_length,
+            manifest_diagnostics,
+            entry,
+        };
         project.bind_structs();
         project
     }
@@ -359,6 +378,7 @@ impl Project {
     pub fn check(&self) -> BTreeMap<String, Vec<Diagnostic>> {
         let adj = self.adjacency();
         let reachable = self.reachable_from_entry(&adj);
+        let callers = callers_of(&adj);
         self.files
             .iter()
             .map(|(name, sf)| {
@@ -379,10 +399,37 @@ impl Project {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
                     diags.push(Diagnostic::warning(span, format!("`{name}` is not reachable from main")));
                 }
+                if let Some((caller, home)) = self.misplaced(name, &callers) {
+                    let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
+                    let msg = format!(
+                        "`{name}` is only called by `{caller}`; move it to `{home}.rein` so the folders show the flow"
+                    );
+                    diags.push(Diagnostic::warning(span, msg));
+                }
                 diags.sort_by_key(|d| (d.span.start, d.span.end));
                 (name.clone(), diags)
             })
             .collect()
+    }
+
+    /// Where function `name` belongs when one other function calls it: in a folder named after that caller,
+    /// next to the caller's file. Callees of the entry stay in the entry's folder, the program root.
+    /// None when `name` is a struct, the entry, has no caller or more than one, or is already in place.
+    pub fn nest_target(&self, name: &str) -> Option<String> {
+        self.misplaced(name, &callers_of(&self.adjacency())).map(|(_, home)| home)
+    }
+
+    /// The only caller of `name` and the project path `name` should have, when it is not there yet.
+    fn misplaced<'a>(&self, name: &str, callers: &'a BTreeMap<String, BTreeSet<String>>) -> Option<(&'a str, String)> {
+        if is_struct(name) || name == self.entry {
+            return None;
+        }
+        let mut only = callers.get(name)?.iter();
+        let (Some(caller), None) = (only.next(), only.next()) else { return None };
+        let base = name.rsplit('/').next().unwrap_or(name);
+        let folder = if *caller == self.entry { caller.rsplit_once('/').map(|(d, _)| d) } else { Some(caller.as_str()) };
+        let home = folder.map_or_else(|| base.to_string(), |d| format!("{d}/{base}"));
+        (home != name).then_some((caller.as_str(), home))
     }
 
     /// Distinct `(function, reference)` pairs for every `@program` or `@program/function` in the project.
@@ -455,6 +502,17 @@ impl Project {
             })
             .collect()
     }
+}
+
+/// The callers of each function, from the edges. A function that calls itself is not its own caller.
+fn callers_of(adj: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String, BTreeSet<String>> {
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (from, tos) in adj {
+        for to in tos.iter().filter(|t| *t != from) {
+            out.entry(to.clone()).or_default().insert(from.clone());
+        }
+    }
+    out
 }
 
 /// The project path that `@<source>`, written in function `from`, points to. The path starts with `./` or

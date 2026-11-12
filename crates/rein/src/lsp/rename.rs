@@ -7,12 +7,12 @@ use lsp_types::{
     DocumentChangeOperation, DocumentChanges, OneOf, OptionalVersionedTextDocumentIdentifier, PrepareRenameResponse,
     RenameFile, RenameParams, ResourceOp, TextDocumentEdit, TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
 };
-use rein_core::ast::is_struct;
+use rein_core::ast::{is_struct, StructRef, STRUCT_SUFFIX};
 use rein_core::diagnostic::Span;
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
 
-use super::occurrences::{callers, declaration, name_span, param_uses, symbol_at, Symbol};
+use super::occurrences::{callers, declaration, name_span, param_uses, refs, symbol_at, Symbol};
 use super::structs::{base as struct_base, field_sites, struct_decl, type_sites};
 use super::text::{is_identifier, offset, range, relative_import};
 use super::workspace::{locate, uri_for, Docs, State};
@@ -22,6 +22,9 @@ pub fn prepare(state: &State, p: &TextDocumentPositionParams) -> Result<Option<P
     let Some((project, name)) = locate(&state.docs, &p.text_document.uri) else { return Ok(None) };
     let Some(sf) = project.get(&name) else { return Ok(None) };
     let Some((symbol, span)) = symbol_at(&project, &name, offset(&sf.text, p.position)) else { return Ok(None) };
+    if let Some(program) = other_program(&symbol) {
+        return Err(program_error(program));
+    }
     let (span, placeholder) = match symbol {
         Symbol::Std(n) => return Err(std_error(&n)),
         Symbol::Param { name: n, .. } => (span, n),
@@ -48,6 +51,9 @@ pub fn rename(state: &State, p: &RenameParams) -> Result<Option<WorkspaceEdit>, 
     let Some((project, name)) = locate(&state.docs, &pos.text_document.uri) else { return Ok(None) };
     let Some(sf) = project.get(&name) else { return Ok(None) };
     let Some((symbol, _)) = symbol_at(&project, &name, offset(&sf.text, pos.position)) else { return Ok(None) };
+    if let Some(program) = other_program(&symbol) {
+        return Err(program_error(program));
+    }
     let new = p.new_name.as_str();
     if !is_identifier(new) || KEYWORDS.contains(&new) {
         return Err(format!("`{new}` is not a valid name: use letters, digits and `_`, and start with a letter"));
@@ -63,6 +69,20 @@ pub fn rename(state: &State, p: &RenameParams) -> Result<Option<WorkspaceEdit>, 
 
 fn std_error(n: &str) -> String {
     format!("`{n}` is a std item; it cannot be renamed")
+}
+
+/// The program that holds `symbol`, when it is another installed program (its path is `@program/...`).
+fn other_program(symbol: &Symbol) -> Option<&str> {
+    let path = match symbol {
+        Symbol::Function(f) | Symbol::Param { function: f, .. } => f,
+        Symbol::Struct { file, .. } | Symbol::Field { file, .. } => file,
+        Symbol::Std(_) => return None,
+    };
+    path.strip_prefix('@')?.split('/').next()
+}
+
+fn program_error(program: &str) -> String {
+    format!("`{program}` is another program; rename does not cross programs")
 }
 
 /// The file name of a function, such as `refund` for `billing/refund`.
@@ -136,29 +156,47 @@ fn rename_struct(state: &State, project: &Project, file: &str, old: &str, new: &
     Ok(edits.into_workspace_edit(&state.docs, project, Some((old_uri, new_uri))))
 }
 
-/// Renames the file of `target` to `<new>.rein` in the same folder. Every reference to it changes its last
-/// segment. The name after `export default function` changes too when it was the file name.
+/// Renames the file of `target` to `<new>.rein` in the same folder.
 fn rename_function(state: &State, project: &Project, target: &str, new: &str) -> Result<WorkspaceEdit, String> {
-    if !state.renames_files {
-        return Err("this editor cannot rename files, so a function cannot be renamed".to_string());
-    }
-    let sf = project.get(target).ok_or_else(|| format!("cannot find function `{target}`"))?;
-    let old = basename(target);
-    let new_path = sf.path.with_file_name(format!("{new}.rein"));
-    if new_path.exists() {
-        return Err(format!("{} already exists", new_path.display()));
-    }
     let new_target = match target.rsplit_once('/') {
         Some((dir, _)) => format!("{dir}/{new}"),
         None => new.to_string(),
     };
+    move_function(state, project, target, &new_target)
+}
+
+/// Moves the file of `target` to the project path `new_target`. Every reference to it is rewritten; in the same
+/// folder, only its last segment changes. When the folder changes, every relative reference inside the moved file
+/// is rewritten from its new folder. The name after `export default function` changes when it was the file name.
+pub fn move_function(state: &State, project: &Project, target: &str, new_target: &str) -> Result<WorkspaceEdit, String> {
+    if !state.renames_files {
+        return Err("this editor cannot rename files, so a function cannot be renamed".to_string());
+    }
+    let sf = project.get(target).ok_or_else(|| format!("cannot find function `{target}`"))?;
+    let (old, new) = (basename(target), basename(new_target));
+    let new_path = project.root.join(format!("{new_target}.rein"));
+    if new_path.exists() {
+        return Err(format!("{} already exists", new_path.display()));
+    }
+    let folder = |f: &str| f.rsplit_once('/').map(|(d, _)| d.to_string());
+    let same_folder = folder(target) == folder(new_target);
     let mut edits = Edits::default();
     for (caller, span) in callers(project, target) {
+        // A reference of the moved file to itself is rewritten with its other references, below.
+        if caller == target && !same_folder {
+            continue;
+        }
         let Some(text) = project.get(&caller).map(|c| &c.text) else { continue };
-        if text[span.start..span.end].ends_with(&format!("/{old}")) {
+        if same_folder && text[span.start..span.end].ends_with(&format!("/{old}")) {
             edits.add(project, &caller, Span::new(span.end - old.len(), span.end), new);
         } else {
-            edits.add(project, &caller, span, &format!("@{}", relative_import(&caller, &new_target)));
+            edits.add(project, &caller, span, &format!("@{}", relative_import(&caller, new_target)));
+        }
+    }
+    if !same_folder {
+        for (span, to) in outgoing(project, target) {
+            let to = if to == target { new_target.to_string() } else { to };
+            edits.add(project, target, span, &format!("@{}", relative_import(new_target, &to)));
         }
     }
     if let Some(span) = name_span(&sf.text).filter(|s| &sf.text[s.start..s.end] == old) {
@@ -167,6 +205,23 @@ fn rename_function(state: &State, project: &Project, target: &str, new: &str) ->
     let old_uri = uri_for(&state.docs, &sf.path).ok_or("the file has no URI")?;
     let new_uri = Url::from_file_path(&new_path).map_err(|()| "the new path has no URI".to_string())?;
     Ok(edits.into_workspace_edit(&state.docs, project, Some((old_uri, new_uri))))
+}
+
+/// Each relative reference written in function `name` that resolves: its span, and the project path it names.
+/// A struct type names its file without `.struct`, as the reference is written.
+fn outgoing(project: &Project, name: &str) -> Vec<(Span, String)> {
+    let Some(sf) = project.get(name) else { return Vec::new() };
+    let f = &sf.function;
+    let functions = refs(f).into_iter().filter_map(|(r, _)| Some((r.span, project.resolve(name, &r.value).ok()?)));
+    let types = f.struct_param().map(|p| p.ty.clone()).into_iter().chain(f.answer_struct_refs().into_iter().map(|(_, t)| t));
+    let structs = types.filter_map(|t| match t {
+        StructRef::Ref(r) => {
+            let (file, _) = project.struct_for(name, &r.value).ok()?;
+            Some((r.span, file.strip_suffix(STRUCT_SUFFIX)?.to_string()))
+        }
+        StructRef::Local(_) => None,
+    });
+    functions.chain(structs).collect()
 }
 
 /// Text edits per function file.

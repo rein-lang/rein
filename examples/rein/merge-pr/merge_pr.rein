@@ -16,9 +16,9 @@ export default function mergePr({ docsOnly, ci }: Input) {
   }
   switch (ci) {
     case "green":
-      return @./review_code;
+      return @./merge_pr/review_code;
     case "red":
-      return @./ci/fix;
+      return @./merge_pr/fix;
     case "pending":
       return `wait for CI, then run merge_pr again`;
   }

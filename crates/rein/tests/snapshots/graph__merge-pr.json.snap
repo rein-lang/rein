@@ -10,38 +10,12 @@ expression: text
     {
       "id": "f0",
       "kind": "function",
-      "function": "ci/fix",
-      "label": "ci/fix"
-    },
-    {
-      "id": "f0_0",
-      "kind": "question",
-      "function": "ci/fix",
-      "label": "Did you push a fix for the failing job?\nfixPushed: boolean",
-      "name": "fixPushed",
-      "type": "boolean"
-    },
-    {
-      "id": "f0_1",
-      "kind": "done",
-      "function": "ci/fix",
-      "label": "Wait for CI to finish. Then start this program again with the task\nmerge."
-    },
-    {
-      "id": "f0_2",
-      "kind": "done",
-      "function": "ci/fix",
-      "label": "Read the CI log. Fix the failing test or code. Push the fix. Then run\nci/fix again."
-    },
-    {
-      "id": "f1",
-      "kind": "function",
       "function": "main",
       "label": "main",
       "entry": true
     },
     {
-      "id": "f1_0",
+      "id": "f0_0",
       "kind": "question",
       "function": "main",
       "label": "Which task does the agent do?\ntask: \"merge\" | \"security review\"",
@@ -49,13 +23,13 @@ expression: text
       "type": "\"merge\" | \"security review\""
     },
     {
-      "id": "f2",
+      "id": "f1",
       "kind": "function",
       "function": "merge_pr",
       "label": "merge_pr"
     },
     {
-      "id": "f2_0",
+      "id": "f1_0",
       "kind": "question",
       "function": "merge_pr",
       "label": "Does the PR change only documentation files?\ndocsOnly: boolean",
@@ -63,13 +37,13 @@ expression: text
       "type": "boolean"
     },
     {
-      "id": "f2_1",
+      "id": "f1_1",
       "kind": "done",
       "function": "merge_pr",
       "label": "approved"
     },
     {
-      "id": "f2_2",
+      "id": "f1_2",
       "kind": "question",
       "function": "merge_pr",
       "label": "What is the CI status of the PR?\nci: \"green\" | \"red\" | \"pending\"",
@@ -77,21 +51,47 @@ expression: text
       "type": "\"green\" | \"red\" | \"pending\""
     },
     {
-      "id": "f2_3",
+      "id": "f1_3",
       "kind": "done",
       "function": "merge_pr",
       "label": "wait for CI, then run merge_pr again"
     },
     {
+      "id": "f2",
+      "kind": "function",
+      "function": "merge_pr/fix",
+      "label": "merge_pr/fix"
+    },
+    {
+      "id": "f2_0",
+      "kind": "question",
+      "function": "merge_pr/fix",
+      "label": "Did you push a fix for the failing job?\nfixPushed: boolean",
+      "name": "fixPushed",
+      "type": "boolean"
+    },
+    {
+      "id": "f2_1",
+      "kind": "done",
+      "function": "merge_pr/fix",
+      "label": "Wait for CI to finish. Then start this program again with the task\nmerge."
+    },
+    {
+      "id": "f2_2",
+      "kind": "done",
+      "function": "merge_pr/fix",
+      "label": "Read the CI log. Fix the failing test or code. Push the fix. Then run\nmerge_pr/fix again."
+    },
+    {
       "id": "f3",
       "kind": "function",
-      "function": "review_code",
-      "label": "review_code"
+      "function": "merge_pr/review_code",
+      "label": "merge_pr/review_code"
     },
     {
       "id": "f3_0",
       "kind": "question",
-      "function": "review_code",
+      "function": "merge_pr/review_code",
       "label": "Does the PR change authentication, payments, or permissions code?\nsecuritySensitive: boolean",
       "name": "securitySensitive",
       "type": "boolean"
@@ -99,25 +99,25 @@ expression: text
     {
       "id": "f3_1",
       "kind": "delegate",
-      "function": "review_code",
+      "function": "merge_pr/review_code",
       "label": "delegate(model=`use opus model`, task=`code review the pr with a security focus`)"
     },
     {
       "id": "f3_2",
       "kind": "delegate",
-      "function": "review_code",
+      "function": "merge_pr/review_code",
       "label": "delegate(model=`use haiku model`, task=`code review the pr`)"
     },
     {
       "id": "f4",
       "kind": "function",
-      "function": "security/review",
-      "label": "security/review"
+      "function": "review",
+      "label": "review"
     },
     {
       "id": "f4_0",
       "kind": "question",
-      "function": "security/review",
+      "function": "review",
       "label": "Does the PR add or change a secret, token, or key?\nsecretsAdded: boolean",
       "name": "secretsAdded",
       "type": "boolean"
@@ -125,13 +125,13 @@ expression: text
     {
       "id": "f4_1",
       "kind": "done",
-      "function": "security/review",
+      "function": "review",
       "label": "Stop. Remove the secret from the diff. Rotate the secret. Then run\nmerge_pr again."
     },
     {
       "id": "f4_2",
       "kind": "done",
-      "function": "security/review",
+      "function": "review",
       "label": "Check the auth and permission changes. Ask the security owner to\napprove. Then run merge_pr again."
     }
   ],
@@ -143,15 +143,15 @@ expression: text
     },
     {
       "from": "f0_0",
-      "to": "f0_1",
-      "kind": "flow",
-      "label": "yes"
+      "to": "f1",
+      "kind": "handoff",
+      "label": "merge"
     },
     {
       "from": "f0_0",
-      "to": "f0_2",
-      "kind": "flow",
-      "label": "no"
+      "to": "f4",
+      "kind": "handoff",
+      "label": "security review"
     },
     {
       "from": "f1",
@@ -160,15 +160,33 @@ expression: text
     },
     {
       "from": "f1_0",
-      "to": "f2",
-      "kind": "handoff",
-      "label": "merge"
+      "to": "f1_1",
+      "kind": "flow",
+      "label": "yes"
     },
     {
       "from": "f1_0",
-      "to": "f4",
+      "to": "f1_2",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f1_2",
+      "to": "f3",
       "kind": "handoff",
-      "label": "security review"
+      "label": "green"
+    },
+    {
+      "from": "f1_2",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "red"
+    },
+    {
+      "from": "f1_2",
+      "to": "f1_3",
+      "kind": "flow",
+      "label": "pending"
     },
     {
       "from": "f2",
@@ -186,24 +204,6 @@ expression: text
       "to": "f2_2",
       "kind": "flow",
       "label": "no"
-    },
-    {
-      "from": "f2_2",
-      "to": "f3",
-      "kind": "handoff",
-      "label": "green"
-    },
-    {
-      "from": "f2_2",
-      "to": "f0",
-      "kind": "handoff",
-      "label": "red"
-    },
-    {
-      "from": "f2_2",
-      "to": "f2_3",
-      "kind": "flow",
-      "label": "pending"
     },
     {
       "from": "f3",

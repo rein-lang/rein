@@ -10,5 +10,5 @@ export default async function followRunbook() {
   if (fixed) {
     return `Close the alert. Write a one-line note with the steps you ran.`;
   }
-  return @../page_human;
+  return @./page_human;
 }

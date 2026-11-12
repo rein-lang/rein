@@ -38,14 +38,23 @@ pub fn parse_doc(inner: &str, base: usize) -> DocBlock {
     doc
 }
 
-/// The description: lines joined with `\n`, trimmed, with runs of blank lines cut to one.
+/// The description: the lines of each paragraph joined with one space, paragraphs joined with a blank line.
+/// A blank line ends a paragraph; a run of blank lines counts as one.
 fn description(lines: &[Line], base: usize) -> Spanned<String> {
     let rows: Vec<Option<Spanned<String>>> = lines.iter().map(|l| spanned(l.text, l.start)).collect();
-    let joined = rows.iter().map(|r| r.as_ref().map_or("", |s| s.value.as_str())).collect::<Vec<_>>().join("\n");
-    let mut value = joined.trim().to_string();
-    while value.contains("\n\n\n") {
-        value = value.replace("\n\n\n", "\n\n");
+    let mut paragraphs = Vec::new();
+    let mut words: Vec<&str> = Vec::new();
+    for row in rows.iter() {
+        match row {
+            Some(s) => words.push(&s.value),
+            None if !words.is_empty() => paragraphs.push(std::mem::take(&mut words).join(" ")),
+            None => {}
+        }
     }
+    if !words.is_empty() {
+        paragraphs.push(words.join(" "));
+    }
+    let value = paragraphs.join("\n\n");
     let span = match (rows.iter().flatten().next(), rows.iter().flatten().last()) {
         (Some(first), Some(last)) => first.span.to(last.span),
         _ => Span::new(base, base),
