@@ -9,7 +9,7 @@ use rein_core::project::Project;
 use rein_core::step::{invalid_request, step, Answers, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::Value;
 
-use crate::cli::{exit_code, load_flow, print_step, shown_type};
+use crate::cli::{exit_code, field_lines, load_flow, print_step, shown_type};
 
 /// One live run. It keeps its answers and the step it waits on.
 pub struct Run {
@@ -105,7 +105,9 @@ fn parse_answer(line: &str, json: bool) -> Result<(Option<String>, String), Stri
     let value = match v.get("value") {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Bool(b)) => b.to_string(),
-        _ => return Err("an answer line needs a string or boolean `value`".into()),
+        // A struct answer: the object is the value, as the JSON text `rein step --answer` takes.
+        Some(object @ Value::Object(_)) => object.to_string(),
+        _ => return Err("an answer line needs a string, boolean or object `value`".into()),
     };
     Ok((key, value))
 }
@@ -116,21 +118,38 @@ fn show(response: &StepResponse, json: bool) {
         println!("{}", serde_json::to_string(response).unwrap_or_default());
         return;
     }
-    match response {
-        StepResponse::Question { key, r#type, options, description, .. } => {
-            println!("question: {key}: {} - {description}", shown_type(r#type, options));
-        }
-        StepResponse::Request { key, instruction, response, .. } => {
-            println!("request: {instruction}");
-            println!("then answer: {key}: {} - {}", shown_type(&response.r#type, &response.options), response.description);
-        }
-        StepResponse::Done { instruction, trace, .. } => {
-            println!("{instruction}");
-            println!("trace: {}", trace.join(" -> "));
-            return;
-        }
-        StepResponse::Error { .. } => return print_step(response, false),
+    let Some(lines) = prompt_lines(response) else {
+        return print_step(response, false);
+    };
+    for line in &lines {
+        println!("{line}");
+    }
+    if matches!(response, StepResponse::Done { .. }) {
+        return;
     }
     print!("> ");
     let _ = io::stdout().flush();
 }
+
+/// The text lines of one step. `None` for an error step, which `print_step` shows.
+fn prompt_lines(response: &StepResponse) -> Option<Vec<String>> {
+    Some(match response {
+        StepResponse::Question { key, r#type, options, description, .. } => {
+            vec![format!("question: {key}: {} - {description}", shown_type(r#type, options))]
+        }
+        StepResponse::Request { key, instruction, response, .. } => {
+            let mut lines = vec![
+                format!("request: {instruction}"),
+                format!("then answer: {key}: {} - {}", shown_type(&response.r#type, &response.options), response.description),
+            ];
+            lines.extend(field_lines(response.fields.as_deref().unwrap_or_default()));
+            lines
+        }
+        StepResponse::Done { instruction, trace, .. } => vec![instruction.clone(), format!("trace: {}", trace.join(" -> "))],
+        StepResponse::Error { .. } => return None,
+    })
+}
+
+#[cfg(test)]
+#[path = "live_run_tests.rs"]
+mod tests;
