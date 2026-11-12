@@ -128,6 +128,36 @@ fn check_reports_errors_in_broken_project() {
 }
 
 #[test]
+fn check_applies_the_function_line_limit() {
+    // 41 lines: the header, 38 comment lines, the return and the closing brace.
+    let root = temp_dir("lines");
+    let text = format!("/** Entry. */\nexport default function main() {{\n{}  return \"done\";\n}}\n", "  // a step\n".repeat(38));
+    fs::write(root.join("main.rein"), &text).unwrap();
+    let main = root.join("main.rein");
+
+    let out = rein(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("main.rein:2:1: error: function `main` has 41 lines; the limit is 40."),
+        "{stdout}"
+    );
+    assert_eq!(code(&rein(&["check", main.to_str().unwrap()])), 1);
+
+    fs::write(root.join("rein.json"), r#"{"maxFunctionLines": 60}"#).unwrap();
+    assert_eq!(code(&rein(&["check", root.to_str().unwrap()])), 0);
+    assert_eq!(code(&rein(&["check", main.to_str().unwrap()])), 0);
+
+    fs::write(root.join("rein.json"), r#"{"maxFunctionLines": 0}"#).unwrap();
+    let out = rein(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("rein.json:1:1: error: `maxFunctionLines` in rein.json must be a positive integer"), "{stdout}");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn syntax_error_is_reported_with_its_position() {
     let root = temp_dir("syntax");
     fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  for (;;) { }\n}\n").unwrap();

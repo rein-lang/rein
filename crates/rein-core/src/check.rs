@@ -6,7 +6,7 @@ use crate::ast::{
     Binding, Callee, Call, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
     StructParam, StructRef, TemplateLit, Value, STRUCT_SUFFIX,
 };
-use crate::diagnostic::{Diagnostic, Span};
+use crate::diagnostic::{line_col, Diagnostic, Span};
 use crate::lexer::{KEYWORDS, RESERVED};
 use crate::stdlib;
 
@@ -79,6 +79,30 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
         }
     }
     c.out
+}
+
+/// The line limit of a function when `rein.json` sets none.
+pub const DEFAULT_MAX_FUNCTION_LINES: u64 = 40;
+
+/// Checks the length of one function file. The function's lines run from its `export default` line to its
+/// closing `}`, both included. Blank and comment lines count. The doc comment above it does not.
+/// `text` is the file's source, and `max` the limit. Longer than `max` is an error on the function header.
+pub fn check_length(f: &Function, name: &str, text: &str, max: u64) -> Vec<Diagnostic> {
+    if f.name.is_none() {
+        return Vec::new();
+    }
+    let (first, _) = line_col(text, f.span.start);
+    let (last, _) = line_col(text, f.span.end);
+    let lines = (last - first + 1) as u64;
+    if lines <= max {
+        return Vec::new();
+    }
+    vec![Diagnostic::error(
+        f.header,
+        format!(
+            "function `{name}` has {lines} lines; the limit is {max}. Move part of it into its own function and call it with `@./name`"
+        ),
+    )]
 }
 
 fn has_request(stmts: &[Stmt]) -> bool {

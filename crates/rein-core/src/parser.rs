@@ -143,7 +143,7 @@ impl Parser {
                         format!("expected end of file, found {found}; a file holds one `export default function`"),
                     ));
                 }
-                self.function(f, doc)?;
+                self.function(f, doc, export)?;
                 continue;
             }
             if let Some(doc) = doc {
@@ -178,8 +178,8 @@ impl Parser {
         matches!(self.peek(), Tok::Ident(w) if w == word)
     }
 
-    /// `function NAME(params) block`, after `export default`.
-    fn function(&mut self, f: &mut Function, doc: Option<DocBlock>) -> Result<(), Diagnostic> {
+    /// `function NAME(params) block`, after `export default`. `export` is the span of the `export` keyword.
+    fn function(&mut self, f: &mut Function, doc: Option<DocBlock>, export: Span) -> Result<(), Diagnostic> {
         if let Some(doc) = doc {
             f.description = Some(doc.description.clone());
             f.doc = Some(doc);
@@ -189,7 +189,9 @@ impl Parser {
             f.is_async = true;
         }
         self.expect(Tok::Function, "`function`")?;
-        f.name = Some(self.ident("function name")?);
+        let name = self.ident("function name")?;
+        f.header = export.to(name.span);
+        f.name = Some(name);
         self.expect(Tok::LParen, "`(`")?;
         while *self.peek() != Tok::RParen {
             let doc = self.doc_block();
@@ -213,6 +215,7 @@ impl Parser {
         }
         self.expect(Tok::RParen, "`)`")?;
         f.body = self.block()?;
+        f.span = export.to(self.last_span());
         Ok(())
     }
 

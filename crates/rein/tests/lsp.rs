@@ -206,6 +206,26 @@ fn diagnostics_hover_and_shutdown() {
 }
 
 #[test]
+fn a_function_over_the_line_limit_is_an_error_on_its_header() {
+    let root = temp_project("long");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // 41 lines from `export default` to `}`: the header, 38 comment lines, the return and the brace.
+    let long = uri_of(&root, "long.rein");
+    let text = format!("/** Long. */\nexport default function long() {{\n{}  return \"done\";\n}}\n", "  // a step\n".repeat(38));
+    server.open(&long, &text);
+    let diags = server.wait_diagnostics(&long, |d| has_message(d, "has 41 lines; the limit is 40."));
+    let error = diags.iter().find(|d| d["severity"] == 1).expect("error diagnostic");
+    assert_eq!(error["range"]["start"], json!({"line": 1, "character": 0}));
+    assert_eq!(error["range"]["end"]["line"], 1);
+    assert_eq!(error["source"], "rein");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn fixing_one_file_clears_errors_in_another() {
     let root = temp_project("clear");
     let mut server = Server::start();
