@@ -646,7 +646,7 @@ fn callers_of(adj: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String, BTre
 
 /// The project path that `@<source>`, written in function `from`, points to. The path starts with `./` or
 /// `../`, has no extension, is relative to the folder of `from`, and stays inside the root.
-fn join(from: &str, source: &str) -> Result<String, String> {
+pub fn join(from: &str, source: &str) -> Result<String, String> {
     if !(source.starts_with("./") || source.starts_with("../")) {
         return Err(format!("references are relative: write `@./{source}`"));
     }
