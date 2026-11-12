@@ -191,12 +191,17 @@ fn npm_programs(npm_dir: &Path, scope: Scope) -> Vec<Flow> {
         .collect()
 }
 
+/// Whether `dir` is a program root: a folder, not a hidden one, that holds a `rein.json` or a `main.rein`.
+pub fn is_program_dir(dir: &Path) -> bool {
+    let hidden = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.'));
+    !hidden && dir.is_dir() && (dir.join(MANIFEST).is_file() || dir.join(MAIN_FILE).is_file())
+}
+
 /// The program in `root`: a folder with a manifest or a `main.rein`. `None` for any other folder,
 /// and for a hidden one. `package.json` wins over `rein.json` for `name` and `description`.
 pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
     let folder = root.file_name()?.to_str()?.to_string();
-    let has_manifest = root.join(MANIFEST).is_file();
-    if folder.starts_with('.') || !root.is_dir() || !(has_manifest || root.join(MAIN_FILE).is_file()) {
+    if !is_program_dir(&root) {
         return None;
     }
     // ponytail: a manifest that does not parse falls back to the defaults; `rein check` could report it.
