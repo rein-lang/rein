@@ -22,7 +22,7 @@ Programs are named apps. To install, list, and remove them, see [Install a progr
 
 An agent can write a program, then use it:
 
-1. The agent writes a folder with a `rein.json` and a `main.rein`.
+1. The agent writes a program folder with a `main.rein` and a manifest. The [install page](docs/install-programs.md) describes the manifest.
 2. The agent runs `rein check <folder>`.
 3. The agent installs the folder as described in [Install a program](docs/install-programs.md).
 4. The agent, or another agent, starts it with `rein_start` or `rein run <name>`.
