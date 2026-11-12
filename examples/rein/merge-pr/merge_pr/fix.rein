@@ -10,5 +10,5 @@ export default function fixCi(
     merge.`;
   }
   return `Read the CI log. Fix the failing test or code. Push the fix. Then run
-  ci/fix again.`;
+  merge_pr/fix again.`;
 }
