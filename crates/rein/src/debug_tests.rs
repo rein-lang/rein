@@ -102,6 +102,21 @@ fn page_keeps_the_state_in_the_url_and_has_a_copy_button() {
 }
 
 #[test]
+fn page_has_the_dark_mode_and_the_theme_switch() {
+    let html = page(&first(&[]));
+    for part in [
+        "@media (prefers-color-scheme: dark)",
+        ":root[data-theme=\"dark\"]",
+        "id=\"theme\"",
+        "localStorage.getItem(\"rein-theme\")",
+        "theme: dark ? \"dark\" : \"default\"",
+        "applyTheme(theme.value)",
+    ] {
+        assert!(html.contains(part), "{part}");
+    }
+}
+
+#[test]
 fn start_url_carries_the_starting_state_as_its_query() {
     let url = start_url(&first(&[("main.draft", "no")]), 4000);
     assert_eq!(url, "http://127.0.0.1:4000/?entry=main&in.pr=https%3A%2F%2Fx%2Fpr%2F1&a.main.draft=no");

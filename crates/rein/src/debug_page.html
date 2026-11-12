@@ -4,43 +4,78 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rein debug</title>
+<script>
+  // Sets the saved theme before first paint, so a dark choice does not flash light.
+  try { const t = localStorage.getItem("rein-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <style>
+  /* Colors are tokens. The OS sets the dark set unless data-theme says light. */
+  :root {
+    color-scheme: light;
+    --bg: #fff; --fg: #111; --muted: #666; --line: #ddd; --field-bg: #fff;
+    --ok: #15803d; --on-ok: #fff; --ok-bg: #dcfce7; --ok-line: #16a34a;
+    --hot: #d97706; --hot-bg: #fde68a;
+    --wait-bg: #fef3c7; --error-bg: #fee2e2; --needed-bg: #fffbeb;
+    --unresolved: #c00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0f1115; --fg: #e5e7eb; --muted: #a3a3a3; --line: #3f3f46; --field-bg: #1c1f26;
+      --ok: #4ade80; --on-ok: #052e16; --ok-bg: #14532d; --ok-line: #22c55e;
+      --hot: #fbbf24; --hot-bg: #78350f;
+      --wait-bg: #713f12; --error-bg: #7f1d1d; --needed-bg: #422006;
+      --unresolved: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f1115; --fg: #e5e7eb; --muted: #a3a3a3; --line: #3f3f46; --field-bg: #1c1f26;
+    --ok: #4ade80; --on-ok: #052e16; --ok-bg: #14532d; --ok-line: #22c55e;
+    --hot: #fbbf24; --hot-bg: #78350f;
+    --wait-bg: #713f12; --error-bg: #7f1d1d; --needed-bg: #422006;
+    --unresolved: #f87171;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: #fff; color: #111; }
-  header { padding: 8px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 8px; align-items: center; }
+  body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  header { padding: 8px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
   header h1 { font-size: 16px; margin: 0 auto 0 0; }
   main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 45px); }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
-  aside { border-right: 1px solid #ddd; padding: 12px 16px; overflow-y: auto; }
-  h2 { font-size: 12px; text-transform: uppercase; color: #666; margin: 16px 0 6px; }
+  aside { border-right: 1px solid var(--line); padding: 12px 16px; overflow-y: auto; }
+  h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 16px 0 6px; }
   .control { margin: 0 0 12px; }
   .control label { display: block; font-weight: 600; }
-  .control small { display: block; color: #666; }
-  .control.set label::after { content: " (set)"; color: #16a34a; font-weight: 400; }
-  .control.focus { outline: 2px solid #d97706; outline-offset: 4px; }
-  .control.needed input { border: 2px solid #d97706; background: #fffbeb; }
-  input[type=text], select { width: 100%; font: inherit; padding: 4px 6px; }
+  .control small { display: block; color: var(--muted); }
+  .control.set label::after { content: " (set)"; color: var(--ok); font-weight: 400; }
+  .control.focus { outline: 2px solid var(--hot); outline-offset: 4px; }
+  .control.needed input { border: 2px solid var(--hot); background: var(--needed-bg); }
+  input[type=text], select { width: 100%; font: inherit; padding: 4px 6px; background: var(--field-bg); color: var(--fg); border: 1px solid var(--line); }
   button { font: inherit; margin: 2px 4px 2px 0; }
-  button[aria-pressed=true] { background: #16a34a; color: #fff; border-color: #16a34a; }
-  #step { padding: 12px 16px; border-bottom: 1px solid #ddd; }
+  button[aria-pressed=true] { background: var(--ok); color: var(--on-ok); border-color: var(--ok); }
+  #step { padding: 12px 16px; border-bottom: 1px solid var(--line); }
   #step .kind { font-weight: 700; text-transform: uppercase; font-size: 12px; }
-  #step.done { background: #dcfce7; }
-  #step.question, #step.request { background: #fef3c7; }
-  #step.error { background: #fee2e2; }
+  #step.done { background: var(--ok-bg); }
+  #step.question, #step.request { background: var(--wait-bg); }
+  #step.error { background: var(--error-bg); }
   #step pre { white-space: pre-wrap; font: inherit; margin: 4px 0; }
-  .trace { color: #666; }
+  .trace { color: var(--muted); }
   .legend { padding: 0 16px; }
   .legend span { margin-right: 12px; }
   .legend i { display: inline-block; width: 12px; height: 12px; border: 2px solid; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
-  .legend .taken { background: #dcfce7; border-color: #16a34a; }
-  .legend .current { background: #fde68a; border-color: #d97706; }
-  .legend .dimmed { border-color: #999; opacity: 0.4; }
+  .legend .taken { background: var(--ok-bg); border-color: var(--ok-line); }
+  .legend .current { background: var(--hot-bg); border-color: var(--hot); }
+  .legend .dimmed { border-color: var(--muted); opacity: 0.4; }
   #diagram { padding: 12px 16px; overflow: auto; }
   #diagram .question-node { cursor: pointer; }
+  /* Mermaid draws taken and current nodes with light fills. Their text stays dark in both themes. */
+  #diagram .taken *, #diagram .current * { color: #111 !important; }
+  #diagram .unresolved * { color: var(--unresolved) !important; }
+  #theme { width: auto; }
 </style>
 </head>
 <body>
-<header><h1>rein debug</h1><label>Entry <select id="entry"></select></label><button id="back" type="button">Back</button><button id="reset" type="button">Reset</button><button id="copy" type="button">Copy link</button></header>
+<header><h1>rein debug</h1><label>Entry <select id="entry"></select></label><label>Theme <select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button id="back" type="button">Back</button><button id="reset" type="button">Reset</button><button id="copy" type="button">Copy link</button></header>
 <main>
 <aside id="controls" aria-label="Inputs and answers"></aside>
 <section>
@@ -51,12 +86,12 @@
 </main>
 <script type="module">
 import mermaid from "__MERMAID__";
-mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
 const initial = __INITIAL__;
 const state = { entry: initial.entry, inputs: {}, answers: {}, order: [], placeholders: [] };
 let schema = { functions: [], inputs: {}, answers: [] };
 let renders = 0;
 let pending = 0;
+let lastDiagram = null;
 const $ = (id) => document.getElementById(id);
 
 // The query string holds the whole state: `entry`, `in.<name>` per input, `a.<key>` per answer. A link that
@@ -87,6 +122,19 @@ function writeUrl() {
 }
 
 readUrl(initial);
+
+// Auto follows the OS. Light and Dark set data-theme, and the choice is kept in localStorage if the browser allows.
+const osDark = matchMedia("(prefers-color-scheme: dark)");
+function savedTheme() {
+  try { const t = localStorage.getItem("rein-theme"); return ["light", "dark"].includes(t) ? t : "auto"; } catch (e) { return "auto"; }
+}
+function applyTheme(choice) {
+  document.documentElement.dataset.theme = choice;
+  const dark = choice === "dark" || (choice === "auto" && osDark.matches);
+  mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default" });
+  if (lastDiagram) drawDiagram(lastDiagram.text, lastDiagram.keys);
+}
+osDark.addEventListener("change", () => { if (savedTheme() === "auto") applyTheme("auto"); });
 
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
@@ -190,6 +238,7 @@ function drawStep(step) {
 }
 
 async function drawDiagram(text, keys) {
+  lastDiagram = { text, keys };
   const { svg } = await mermaid.render("flow" + renders++, text);
   const box = $("diagram");
   box.innerHTML = svg;
@@ -235,6 +284,13 @@ const pick = $("entry");
 pick.append(...schema.functions.map((f) => el("option", { value: f }, f)));
 pick.value = state.entry;
 pick.addEventListener("change", () => { state.entry = pick.value; state.inputs = {}; walk(); });
+const theme = $("theme");
+theme.value = savedTheme();
+theme.addEventListener("change", () => {
+  try { localStorage.setItem("rein-theme", theme.value); } catch (e) {}
+  applyTheme(theme.value);
+});
+applyTheme(theme.value);
 walk();
 </script>
 </body>
