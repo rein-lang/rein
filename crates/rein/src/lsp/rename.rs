@@ -183,6 +183,16 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
     let (old, new) = (basename(target), basename(new_target));
     // Each moved file, by its old project path: the target, and every file in its folder.
     let nested = format!("{target}/");
+    // A case-only move (`target` to `Target`) on a case-insensitive file system renames each file of the folder into
+    // the same folder, and the folder keeps its old name, so the references would name a folder that is gone.
+    if target != new_target
+        && target.eq_ignore_ascii_case(new_target)
+        && fs::symlink_metadata(project.root.join(target)).is_ok_and(|m| m.is_dir())
+    {
+        return Err(format!(
+            "a rename that only changes case cannot move the folder `{nested}`; rename it in two steps through another name"
+        ));
+    }
     let moved = |name: &str| -> Option<String> {
         if name == target {
             return Some(new_target.to_string());
@@ -361,25 +371,33 @@ fn symlink_error(path: &str) -> String {
     )
 }
 
-/// Whether a move to `new` would overwrite a file other than `old`. On a case-insensitive file system a case-only
-/// rename, such as `a.rein` to `A.rein`, finds its own source at `new`, and that is not a clash.
+/// Whether a move to `new` would overwrite a file other than `old`. The destination is the source itself only when
+/// its path equals the source path ignoring ASCII case (a case-only rename on a case-insensitive file system, where
+/// `a.rein` to `A.rein` finds its own source) and it is the same file. Any other file at `new`, including a hard link
+/// or a symbolic link to the source, is a clash. A link is checked as a link, so it is never taken for its target.
 fn taken(new: &Path, old: &Path) -> bool {
-    new.exists() && !same_file(new, old)
+    if fs::symlink_metadata(new).is_err() {
+        return false;
+    }
+    !(new.to_string_lossy().eq_ignore_ascii_case(&old.to_string_lossy()) && same_file(new, old))
 }
 
-/// Whether `a` and `b` are the same file: the same device and inode on Unix, the same canonical path elsewhere.
+/// Whether `a` and `b` are the same file: the same device and inode on Unix, with no link followed, so a hard link
+/// to the file is the same file and a symbolic link is not. Elsewhere, both must be files that are not links with the
+/// same canonical path.
 fn same_file(a: &Path, b: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        match (fs::metadata(a), fs::metadata(b)) {
+        match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
             (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
             _ => false,
         }
     }
     #[cfg(not(unix))]
     {
-        matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+        let is_link = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+        !is_link(a) && !is_link(b) && matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
     }
 }
 
