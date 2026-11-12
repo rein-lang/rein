@@ -344,8 +344,8 @@ pub struct Case {
 /// What a function hands back to the agent.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReturnValue {
-    /// Final answer or instruction for the agent.
-    Text(String),
+    /// Final answer or instruction for the agent. The span is the quoted string.
+    Text(Spanned<String>),
     /// A reference to another function, such as `@./ci/fix`. The project resolves it.
     Ref(Spanned<String>),
     /// A template literal, such as `return `Pick ${c}`;`.

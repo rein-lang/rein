@@ -144,7 +144,7 @@ fn temp_project(tag: &str) -> PathBuf {
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("target.rein"),
-        "/** Target function does X. */\nexport default function target() {\n  return \"done\";\n}\n",
+        "/** Target function does X. */\nexport default function target() {\n  return `done`;\n}\n",
     )
     .unwrap();
     fs::write(
@@ -213,7 +213,7 @@ fn a_function_over_the_line_limit_is_an_error_on_its_header() {
 
     // 41 lines from `export default` to `}`: the header, 38 comment lines, the return and the brace.
     let long = uri_of(&root, "long.rein");
-    let text = format!("/** Long. */\nexport default function long() {{\n{}  return \"done\";\n}}\n", "  // a step\n".repeat(38));
+    let text = format!("/** Long. */\nexport default function long() {{\n{}  return `done`;\n}}\n", "  // a step\n".repeat(38));
     server.open(&long, &text);
     let diags = server.wait_diagnostics(&long, |d| has_message(d, "has 41 lines; the limit is 40."));
     let error = diags.iter().find(|d| d["severity"] == 1).expect("error diagnostic");
@@ -233,7 +233,7 @@ fn a_line_over_the_length_limit_is_an_error_on_its_overflow() {
 
     // Line 3 is `  return "` + 69 letters + `";`: 81 characters, so the overflow is the `;`.
     let wide = uri_of(&root, "wide.rein");
-    let text = format!("/** Wide. */\nexport default function wide() {{\n  return \"{}\";\n}}\n", "a".repeat(69));
+    let text = format!("/** Wide. */\nexport default function wide() {{\n  return `{}`;\n}}\n", "a".repeat(69));
     server.open(&wide, &text);
     let diags = server.wait_diagnostics(&wide, |d| has_message(d, "line has 81 characters; the limit is 80."));
     let error = diags
@@ -260,7 +260,7 @@ fn fixing_one_file_clears_errors_in_another() {
     server.wait_diagnostics(&start, |d| has_message(d, "cannot find function `@./fresh`"));
 
     // Creating `fresh` in an open buffer must clear the error in `start`.
-    server.open(&uri_of(&root, "fresh.rein"), "/** Fresh. */\nexport default function fresh() {\n  return \"ok\";\n}\n");
+    server.open(&uri_of(&root, "fresh.rein"), "/** Fresh. */\nexport default function fresh() {\n  return `ok`;\n}\n");
     let cleared = server.wait_diagnostics(&start, |d| !has_message(d, "cannot find module"));
     assert!(!has_message(&cleared, "cannot find module"));
 
@@ -277,7 +277,7 @@ fn hover_on_parameter_shows_its_type_and_doc() {
     let start = uri_of(&root, "start.rein");
     server.open(
         &start,
-        "interface Input {\n  /** Does it change docs? */\n  docsOnly: boolean;\n  /** Which CI status? */\n  ci: \"green\" | \"red\";\n}\n\n/** Start. */\nexport default function start({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return \"x\";\n  } else {\n    return \"y\";\n  }\n}\n",
+        "interface Input {\n  /** Does it change docs? */\n  docsOnly: boolean;\n  /** Which CI status? */\n  ci: \"green\" | \"red\";\n}\n\n/** Start. */\nexport default function start({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return `x`;\n  } else {\n    return `y`;\n  }\n}\n",
     );
     let hover = server.request(
         2,
@@ -330,7 +330,7 @@ fn missing_main_is_reported_on_an_open_file() {
     initialize(&mut server);
 
     let target = uri_of(&root, "target.rein");
-    server.open(&target, "/** Target function does X. */\nexport default function target() {\n  return \"done\";\n}\n");
+    server.open(&target, "/** Target function does X. */\nexport default function target() {\n  return `done`;\n}\n");
     let diags = server.wait_diagnostics(&target, |d| has_message(d, "project has no main.rein"));
     assert!(has_message(&diags, "project has no main.rein"));
 
@@ -366,7 +366,7 @@ fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
     let sub = root.join("sub");
     fs::create_dir_all(&sub).unwrap();
     fs::write(sub.join("main.rein"), "/** Sub. */\nexport default function sub() {\n  return @./x;\n}\n").unwrap();
-    fs::write(root.join("outside.rein"), "/** Outside. */\nexport default function outside() {\n  return \"o\";\n}\n").unwrap();
+    fs::write(root.join("outside.rein"), "/** Outside. */\nexport default function outside() {\n  return `o`;\n}\n").unwrap();
     let x_text = "/** X. */\nexport default function x() {\n  return @../outside;\n}\n";
     fs::write(sub.join("x.rein"), x_text).unwrap();
     let mut server = Server::start();
@@ -420,7 +420,7 @@ fn a_nested_project_is_not_checked_as_part_of_the_outer_one() {
 fn reference_completion_replaces_the_whole_token() {
     let root = temp_project("complete");
     fs::create_dir_all(root.join("ci")).unwrap();
-    fs::write(root.join("ci/fix.rein"), "/** Fix. */\nexport default function fix() {\n  return \"f\";\n}\n").unwrap();
+    fs::write(root.join("ci/fix.rein"), "/** Fix. */\nexport default function fix() {\n  return `f`;\n}\n").unwrap();
     let mut server = Server::start();
     initialize(&mut server);
 
@@ -454,7 +454,7 @@ fn hover_and_completion_know_the_std_library() {
     let start = uri_of(&root, "start.rein");
     server.open(
         &start,
-        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return delegate(model=\"a\", task=\"b\");\n  }\n  return \"z\";\n}\n",
+        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return delegate(model=`a`, task=`b`);\n  }\n  return `z`;\n}\n",
     );
     let hover = server.request(
         2,
@@ -636,7 +636,7 @@ fn definition_goes_to_functions_parameters_and_std() {
     let start = uri_of(&tmp, "start.rein");
     server.open(
         &start,
-        "/** Start. */\nexport default async function start() {\n  /** Ok? */\n  const ok: boolean = await request(\"a\");\n  return delegate(model=\"a\", task=\"b\");\n}\n",
+        "/** Start. */\nexport default async function start() {\n  /** Ok? */\n  const ok: boolean = await request(`a`);\n  return delegate(model=`a`, task=`b`);\n}\n",
     );
     let def = server.request(5, "textDocument/definition", at(&start, 4, 12));
     assert!(def["result"]["uri"].as_str().unwrap().ends_with("/rein-std/delegate.rein"), "{def}");
@@ -915,7 +915,7 @@ fn labels(items: &Value) -> Vec<String> {
 
 /// A buffer in support-ticket that calls the template with one argument given. Line 2, column 50 is after `, `.
 const PARTIAL_CALL: &str =
-    "/** R. */\nexport default function r() {\n  return @../templates/tell_customer(opening=\"x\", );\n}\n";
+    "/** R. */\nexport default function r() {\n  return @../templates/tell_customer(opening=`x`, );\n}\n";
 
 #[test]
 fn completion_offers_argument_names_and_union_members() {
@@ -942,7 +942,7 @@ fn completion_offers_argument_names_and_union_members() {
     let start = uri_of(&tmp, "start.rein");
     server.open(
         &start,
-        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return \"a\";\n  }\n  return \"z\";\n}\n",
+        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return `a`;\n  }\n  return `z`;\n}\n",
     );
     let items = server.request(4, "textDocument/completion", at(&start, 4, 13));
     assert_eq!(labels(&items), ["\"x\"", "\"y\""], "{items}");
@@ -1001,7 +1001,7 @@ fn quick_fixes_add_doc_comments_and_name_arguments() {
     initialize(&mut server);
 
     let undocumented = uri_of(&root, "undocumented.rein");
-    server.open(&undocumented, "export default function undocumented() {\n  return \"x\";\n}\n");
+    server.open(&undocumented, "export default function undocumented() {\n  return `x`;\n}\n");
     let (title, edit) = quick_fix(&mut server, 2, &undocumented, "missing doc comment");
     assert_eq!(title, "Add a doc comment");
     assert_eq!(edit, insert_at(0, 0, "/**\n * TODO: say what this function decides.\n */\n"));
@@ -1009,14 +1009,14 @@ fn quick_fixes_add_doc_comments_and_name_arguments() {
     let param = uri_of(&root, "param.rein");
     server.open(
         &param,
-        "/** P. */\nexport default function param(\n  c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return \"a\";\n  }\n  return \"b\";\n}\n",
+        "/** P. */\nexport default function param(\n  c: \"x\" | \"y\",\n) {\n  if (c === \"x\") {\n    return `a`;\n  }\n  return `b`;\n}\n",
     );
     let (title, edit) = quick_fix(&mut server, 3, &param, "parameter `c` needs a doc comment");
     assert_eq!(title, "Add a doc comment to `c`");
     assert_eq!(edit, insert_at(2, 2, "/** TODO: ask the question. */ "));
 
     let positional = uri_of(&root, "positional.rein");
-    server.open(&positional, "/** P. */\nexport default function positional() {\n  return delegate(\"a\", task=\"b\");\n}\n");
+    server.open(&positional, "/** P. */\nexport default function positional() {\n  return delegate(\"a\", task=`b`);\n}\n");
     let (title, edit) = quick_fix(&mut server, 4, &positional, "missing argument `model`");
     assert_eq!(title, "Name the argument `model=`");
     assert_eq!(edit, insert_at(2, 18, "model="));
@@ -1031,7 +1031,7 @@ fn structs_hover_define_reference_rename_and_list() {
     let root = fs::canonicalize(temp_project("structs")).unwrap();
     let ticket_text = "/** A support ticket. */\nexport default interface Ticket {\n  /** The ticket title. */\n  title: string;\n  /** Is the customer a VIP? */\n  vip: boolean;\n}\n";
     let a_text = "/** A. */\nexport default function a({ title, vip }: @./ticket) {\n  if (vip) {\n    return `VIP: ${title}`;\n  }\n  return `Answer ${title}`;\n}\n";
-    let b_text = "/** B. */\nexport default function b({ title, vip }: @./ticket) {\n  if (vip) {\n    return \"x\";\n  }\n  return @./a(title=title);\n}\n";
+    let b_text = "/** B. */\nexport default function b({ title, vip }: @./ticket) {\n  if (vip) {\n    return `x`;\n  }\n  return @./a(title=title);\n}\n";
     fs::write(root.join("ticket.struct.rein"), ticket_text).unwrap();
     fs::write(root.join("a.rein"), a_text).unwrap();
     fs::write(root.join("b.rein"), b_text).unwrap();
@@ -1120,7 +1120,7 @@ fn structs_hover_define_reference_rename_and_list() {
 
     // Two parameters are reported, and the message says to use a struct.
     let d = uri_of(&root, "d.rein");
-    server.open(&d, "/** D. */\nexport default function d(\n  /** A? */ a: boolean,\n  /** B? */ b: boolean,\n) {\n  if (a && b) { return \"x\" }\n  return \"y\"\n}\n");
+    server.open(&d, "/** D. */\nexport default function d(\n  /** A? */ a: boolean,\n  /** B? */ b: boolean,\n) {\n  if (a && b) { return `x` }\n  return `y`\n}\n");
     server.wait_diagnostics(&d, |diags| has_message(diags, "a function takes one parameter; put `a` and `b` in a struct"));
 
     server.shutdown();

@@ -71,7 +71,7 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     let home = std::env::temp_dir().join(format!("rein-handoff-struct-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     program(&home, "pr-handling", TARGET);
-    program(&home, "picker", "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n}\n/** Picks a PR. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(\"Pick the next pull request notification.\");\n  return @pr-handling/main(pr=pick.pr);\n}\n");
+    program(&home, "picker", "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n}\n/** Picks a PR. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`Pick the next pull request notification.`);\n  return @pr-handling/main(pr=pick.pr);\n}\n");
     let out = rein(&home, &["check", home.join("picker").to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 

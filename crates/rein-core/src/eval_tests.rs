@@ -32,7 +32,7 @@ const TWO_BOOLS: &str =
 
 #[test]
 fn text_return() {
-    let f = func("/** d */\nexport default function f() { return \"done\" }");
+    let f = func("/** d */\nexport default function f() { return `done` }");
     assert_eq!(run_plain(&f, &[]), Ok(Outcome::Text("done".into())));
 }
 
@@ -52,7 +52,7 @@ fn ref_return_resolves_the_import_to_its_project_path() {
 #[test]
 fn and_does_not_need_right_side_when_left_is_false() {
     let f = func(&format!(
-        "{TWO_BOOLS}  if (a && b) {{ return \"both\" }}\n  return \"neither\"\n}}"
+        "{TWO_BOOLS}  if (a && b) {{ return `both` }}\n  return `neither`\n}}"
     ));
     assert_eq!(
         run_plain(&f, &[("a", "false")]),
@@ -67,7 +67,7 @@ fn and_does_not_need_right_side_when_left_is_false() {
 #[test]
 fn or_short_circuits() {
     let f = func(&format!(
-        "{TWO_BOOLS}  if (a || b) {{ return \"either\" }}\n  return \"none\"\n}}"
+        "{TWO_BOOLS}  if (a || b) {{ return `either` }}\n  return `none`\n}}"
     ));
     assert_eq!(
         run_plain(&f, &[("a", "true")]),
@@ -77,7 +77,7 @@ fn or_short_circuits() {
 
 #[test]
 fn invalid_bool_value_is_error() {
-    let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return \"2\"  }");
+    let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `1` } return `2`  }");
     let err = run_plain(&f, &[("a", "maybe")]).unwrap_err();
     assert!(err.contains("expected true, false, yes or no"), "{err}");
 }
@@ -85,7 +85,7 @@ fn invalid_bool_value_is_error() {
 #[test]
 fn invalid_union_value_is_error() {
     let f = func(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c === \"x\") { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c === \"x\") { return `1` } return `2`  }",
     );
     let err = run_plain(&f, &[("c", "purple")]).unwrap_err();
     assert!(err.contains("expected one of: `x`, `y`"), "{err}");
@@ -93,7 +93,7 @@ fn invalid_union_value_is_error() {
 
 #[test]
 fn unknown_input_is_error() {
-    let f = func("/** d */\nexport default function f() { return \"x\" }");
+    let f = func("/** d */\nexport default function f() { return `x` }");
     assert_eq!(
         run_plain(&f, &[("zzz", "1")]),
         Err("unknown input `zzz`".into())
@@ -104,7 +104,7 @@ fn unknown_input_is_error() {
 fn switch_runs_the_matching_case() {
     let f = func(
         "/** d */\nexport default function f(\n  /** C */ c: \"green\" | \"red\" | \"pending\",\n) {\n\
-         switch (c) {\n  case \"green\":\n    return \"go\";\n  case \"red\":\n    return \"fix\";\n  case \"pending\":\n    return \"wait\";\n}\n}",
+         switch (c) {\n  case \"green\":\n    return `go`;\n  case \"red\":\n    return `fix`;\n  case \"pending\":\n    return `wait`;\n}\n}",
     );
     assert_eq!(
         run_plain(&f, &[("c", "green")]),
@@ -124,7 +124,7 @@ fn switch_runs_the_matching_case() {
 #[test]
 fn grouped_labels_run_one_body() {
     let f = func(
-        "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"b\" | \"c\",\n) {\n switch (c) {\n  case \"a\":\n  case \"b\":\n    return \"ab\";\n  case \"c\":\n    return \"other\";\n}\n}",
+        "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"b\" | \"c\",\n) {\n switch (c) {\n  case \"a\":\n  case \"b\":\n    return `ab`;\n  case \"c\":\n    return `other`;\n}\n}",
     );
     assert_eq!(run_plain(&f, &[("c", "a")]), Ok(Outcome::Text("ab".into())));
     assert_eq!(run_plain(&f, &[("c", "b")]), Ok(Outcome::Text("ab".into())));
@@ -137,7 +137,7 @@ fn grouped_labels_run_one_body() {
 #[test]
 fn not_equal_comparison() {
     let f = func(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c !== \"x\") { return \"not x\" } return \"x\"  }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c !== \"x\") { return `not x` } return `x`  }",
     );
     assert_eq!(
         run_plain(&f, &[("c", "y")]),
@@ -148,7 +148,7 @@ fn not_equal_comparison() {
 
 #[test]
 fn yes_no_and_case_insensitive_bools() {
-    let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"t\" } return \"f\"  }");
+    let f = func("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `t` } return `f`  }");
     assert_eq!(
         run_plain(&f, &[("a", "YES")]),
         Ok(Outcome::Text("t".into()))
@@ -168,8 +168,8 @@ export default function f(
   /** C */ c: "x" | "y",
 ) {
   if (c === "x") {
-    return delegate(model="use opus model", task=`code review ${c}`);
-  } return delegate(model="use haiku model", task="code review the pr"); 
+    return delegate(model=`use opus model`, task=`code review ${c}`);
+  } return delegate(model=`use haiku model`, task=`code review the pr`); 
 }"#,
     );
     let bindings = BTreeMap::from([std_binding("delegate")]);
@@ -202,7 +202,7 @@ export default function tpl(
     let f = func(
         r#"/** d */
 export default function f() {
-  return @./tpl(a="one", b="two");
+  return @./tpl(a=`one`, b=`two`);
 }"#,
     );
     let bindings = BTreeMap::from([(
@@ -244,9 +244,9 @@ fn request_without_an_answer_stops_for_it() {
         r#"/** d */
 export default async function f() {
   /** Did it work? */
-  const ok: boolean = await request("Do the thing.");
-  if (ok) { return "y" }
-  return "n"
+  const ok: boolean = await request(`Do the thing.`);
+  if (ok) { return `y` }
+  return `n`
 }"#,
     );
     assert_eq!(
@@ -272,8 +272,8 @@ fn request_instruction_can_be_a_std_template_call() {
         r#"/** d */
 export default async function f() {
   /** Did it work? */
-  const ok: boolean = await request(delegate(model="use opus model", task="code review the pr"));
-  return "y"
+  const ok: boolean = await request(delegate(model=`use opus model`, task=`code review the pr`));
+  return `y`
 }"#,
     );
     let bindings = BTreeMap::from([std_binding("delegate")]);
@@ -297,7 +297,7 @@ export default async function f(
 ) {
   /** Did it work? */
   const ok: boolean = await request(`fix ${c}`);
-  return "y"
+  return `y`
 }"#,
     );
     assert_eq!(run_plain(&f, &[]), Ok(Outcome::NeedInput("c".into())));
@@ -316,8 +316,8 @@ fn request_answer_is_validated_when_used() {
         r#"/** d */
 export default async function f() {
   /** Did it work? */
-  const ok: boolean = await request("Do it.");
-  return "y"
+  const ok: boolean = await request(`Do it.`);
+  return `y`
 }"#,
     );
     let err = run_plain(&f, &[("ok", "maybe")]).unwrap_err();
@@ -333,11 +333,11 @@ export default async function f(
 ) {
   if (c === "x") {
     /** Did it work? */
-    const ok: boolean = await request("fix it");
-    if (ok) { return "fixed" }
-    return "not fixed"
+    const ok: boolean = await request(`fix it`);
+    if (ok) { return `fixed` }
+    return `not fixed`
   }
-  return "other"
+  return `other`
 }"#,
     );
     assert_eq!(
@@ -401,7 +401,7 @@ fn string_input_is_interpolated_in_a_template_literal() {
 
 #[test]
 fn string_input_is_a_bare_argument_of_a_std_template() {
-    let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  return delegate(model=\"use opus model\", task=pr);\n}");
+    let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  return delegate(model=`use opus model`, task=pr);\n}");
     let bindings = BTreeMap::from([std_binding("delegate")]);
     assert_eq!(
         run(&f, &inputs(&[("pr", "L")]), &bindings),
@@ -413,7 +413,7 @@ fn string_input_is_a_bare_argument_of_a_std_template() {
 
 #[test]
 fn string_input_in_a_condition_is_an_error() {
-    let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  if (pr) { return \"a\" }\n  return \"b\"\n}");
+    let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  if (pr) { return `a` }\n  return `b`\n}");
     assert_eq!(
         run_plain(&f, &[("pr", "x")]),
         Err("`pr` is a string input; a condition cannot read it".into())

@@ -17,7 +17,7 @@ const TEMPLATES: &[(&str, &str)] = &[
     ("delegate", include_str!("../std/delegate.rein")),
 ];
 
-const REQUEST_DOC: &str = "Ask the agent to do a step, then wait for its answer. Use it in an async function, as `/** question */ const ok: boolean = await request(\"...\");`. The answer is a parameter for the rest of its block.";
+const REQUEST_DOC: &str = "Ask the agent to do a step, then wait for its answer. Use it in an async function, as ``/** question */ const ok: boolean = await request(`...`);``. The answer is a parameter for the rest of its block.";
 
 fn templates() -> &'static [(&'static str, Function)] {
     static PARSED: OnceLock<Vec<(&'static str, Function)>> = OnceLock::new();

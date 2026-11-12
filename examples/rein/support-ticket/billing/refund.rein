@@ -11,6 +11,6 @@ export default function refund(
   return @../templates/tell_customer(
     opening=`Refund the amount the customer asked for and confirm it in the
     ticket.`,
-    nextStep="Then tell the customer the refund takes 5 business days.",
+    nextStep=`Then tell the customer the refund takes 5 business days.`,
   );
 }

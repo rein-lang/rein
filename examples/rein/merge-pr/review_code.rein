@@ -7,9 +7,9 @@ export default function reviewCode(
 ) {
   if (securitySensitive) {
     return delegate(
-      model="use opus model",
-      task="code review the pr with a security focus",
+      model=`use opus model`,
+      task=`code review the pr with a security focus`,
     );
   }
-  return delegate(model="use haiku model", task="code review the pr");
+  return delegate(model=`use haiku model`, task=`code review the pr`);
 }

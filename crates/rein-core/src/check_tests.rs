@@ -18,6 +18,27 @@ fn tpl() -> &'static Function {
     F.get_or_init(|| parse(TPL).0)
 }
 
+#[test]
+fn a_quoted_string_as_text_is_an_error() {
+    // Each source has exactly one quoted string in a text position.
+    for src in [
+        "/** F. */\nexport default function f() {\n  return \"done\";\n}\n",
+        "/** F. */\nexport default function f() {\n  return delegate(model=\"a\", task=`b`);\n}\n",
+        "/** F. */\nexport default async function f() {\n  /** Ok? */\n  const ok: boolean = await request(\"do it\");\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n",
+        "/** F. */\nexport default async function f() {\n  /** Ok? */\n  const ok: boolean = await request(delegate(model=\"a\", task=`b`));\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n",
+    ] {
+        let (f, parse_errors) = crate::parser::parse(src);
+        assert!(parse_errors.is_empty(), "{src}: {parse_errors:?}");
+        let errors: Vec<_> = quoted_text(&f.body).into_iter().map(|d| (d.message.clone(), src[d.span.start..d.span.end].to_string())).collect();
+        assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+        assert_eq!(errors[0].0, TEXT_QUOTES);
+        assert!(errors[0].1.starts_with('"'), "{src}: {errors:?}");
+    }
+    let ok = "/** F. */\nexport default function f(/** C? */ c: \"a\" | 'b') {\n  if (c === \"a\") {\n    return `x`;\n  }\n  return delegate(model=`m`, task=`t`);\n}\n";
+    let (f, _) = crate::parser::parse(ok);
+    assert!(quoted_text(&f.body).is_empty());
+}
+
 /// Test resolver: `./tpl` is a template with parameters `a` and `b`, paths with `missing` do not resolve,
 /// `./merge` is a function with one `string` parameter `pr`, and every other path is a function with none.
 fn resolves(path: &str) -> Result<Kind, String> {
@@ -69,13 +90,13 @@ fn clean_sample_has_no_diagnostics() {
 #[test]
 fn missing_doc_comment() {
     expect_diag(
-        "export default function f() { return \"x\" }",
+        "export default function f() { return `x` }",
         Severity::Error,
         "missing doc comment on `test`; put /** description */ right before `export default function`",
     );
     // A plain line comment is not a doc comment.
     expect_diag(
-        "// Says x.\nexport default function f() { return \"x\" }",
+        "// Says x.\nexport default function f() { return `x` }",
         Severity::Error,
         "missing doc comment on `test`",
     );
@@ -84,18 +105,18 @@ fn missing_doc_comment() {
 #[test]
 fn empty_description() {
     expect_diag(
-        "/**/\nexport default function f() { return \"x\" }",
+        "/**/\nexport default function f() { return `x` }",
         Severity::Error,
         "empty description",
     );
     expect_diag(
-        "/**   */\nexport default function f() { return \"x\" }",
+        "/**   */\nexport default function f() { return `x` }",
         Severity::Error,
         "empty description on `test`",
     );
     // Tags alone leave the description empty.
     expect_diag(
-        "/** @since 1 */\nexport default function f() { return \"x\" }",
+        "/** @since 1 */\nexport default function f() { return `x` }",
         Severity::Error,
         "empty description on `test`",
     );
@@ -103,13 +124,13 @@ fn empty_description() {
 
 #[test]
 fn documented_function_is_clean() {
-    clean("/** Say x. */\nexport default function f() { return \"x\" }");
+    clean("/** Say x. */\nexport default function f() { return `x` }");
 }
 
 #[test]
 fn param_without_doc_comment() {
     expect_diag(
-        "/** d */\nexport default function f(a: boolean) { if (a) { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(a: boolean) { if (a) { return `1` } return `2`  }",
         Severity::Error,
         "parameter `a` needs a doc comment: /** question */ a: ...",
     );
@@ -118,7 +139,7 @@ fn param_without_doc_comment() {
 #[test]
 fn empty_param_doc_comment_counts_as_missing() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /**  */\n  a: boolean,\n) { if (a) { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /**  */\n  a: boolean,\n) { if (a) { return `1` } return `2`  }",
         Severity::Error,
         "needs a doc comment",
     );
@@ -127,12 +148,12 @@ fn empty_param_doc_comment_counts_as_missing() {
 #[test]
 fn param_tag_anywhere_is_an_error() {
     expect_diag(
-        "/** d\n * @param a A?\n */\nexport default function f(\n  /** A? */\n  a: boolean,\n) { if (a) { return \"1\" } return \"2\"  }",
+        "/** d\n * @param a A?\n */\nexport default function f(\n  /** A? */\n  a: boolean,\n) { if (a) { return `1` } return `2`  }",
         Severity::Error,
         "describe each parameter in its own doc comment, right before it",
     );
     expect_diag(
-        "/** d */\nexport default function f(\n  /** a\n   * @param a A\n   */\n  a: boolean,\n) { if (a) { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** a\n   * @param a A\n   */\n  a: boolean,\n) { if (a) { return `1` } return `2`  }",
         Severity::Error,
         "describe each parameter in its own doc comment, right before it",
     );
@@ -141,14 +162,14 @@ fn param_tag_anywhere_is_an_error() {
 #[test]
 fn multi_line_param_doc_is_clean() {
     clean(
-        "/** d */\nexport default function f(\n  /**\n   * Is the customer a VIP?\n   * Check the CRM.\n   */\n  vip: boolean,\n) { if (vip) { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /**\n   * Is the customer a VIP?\n   * Check the CRM.\n   */\n  vip: boolean,\n) { if (vip) { return `1` } return `2`  }",
     );
 }
 
 #[test]
 fn unknown_tag_is_a_warning() {
     expect_diag(
-        "/** d\n * @returns Something.\n */\nexport default function f() { return \"x\" }",
+        "/** d\n * @returns Something.\n */\nexport default function f() { return `x` }",
         Severity::Warning,
         "unknown tag `@returns`",
     );
@@ -157,7 +178,7 @@ fn unknown_tag_is_a_warning() {
 #[test]
 fn duplicate_parameter() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** A */ a: boolean,\n) { if (a) { return `1` } return `2`  }",
         Severity::Error,
         "duplicate parameter `a`",
     );
@@ -165,14 +186,14 @@ fn duplicate_parameter() {
 
 #[test]
 fn param_without_name_is_a_syntax_error() {
-    let (_, diags) = parse("/** d */\nexport default function f(: boolean) { return \"x\" }");
+    let (_, diags) = parse("/** d */\nexport default function f(: boolean) { return `x` }");
     assert_eq!(diags.len(), 1, "{diags:?}");
 }
 
 #[test]
 fn union_with_too_few_members() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"only\",\n) { if (c === \"only\") { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"only\",\n) { if (c === \"only\") { return `1` } return `2`  }",
         Severity::Error,
         "needs at least 2 members",
     );
@@ -181,7 +202,7 @@ fn union_with_too_few_members() {
 #[test]
 fn duplicate_member() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"a\",\n) { if (c === \"a\") { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"a\",\n) { if (c === \"a\") { return `1` } return `2`  }",
         Severity::Error,
         "duplicate member `a` in union parameter `c`",
     );
@@ -190,7 +211,7 @@ fn duplicate_member() {
 #[test]
 fn empty_member() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"\",\n) { if (c === \"a\") { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"a\" | \"\",\n) { if (c === \"a\") { return `1` } return `2`  }",
         Severity::Error,
         "empty member",
     );
@@ -199,7 +220,7 @@ fn empty_member() {
 #[test]
 fn unknown_parameter_in_condition() {
     expect_diag(
-        "/** d */\nexport default function f() { if (nope) { return \"a\" } return \"b\"  }",
+        "/** d */\nexport default function f() { if (nope) { return `a` } return `b`  }",
         Severity::Error,
         "unknown parameter `nope`",
     );
@@ -208,7 +229,7 @@ fn unknown_parameter_in_condition() {
 #[test]
 fn unknown_parameter_in_switch_subject() {
     expect_diag(
-        "/** d */\nexport default function f() { switch (nope) { case \"a\": return \"a\" } }",
+        "/** d */\nexport default function f() { switch (nope) { case \"a\": return `a` } }",
         Severity::Error,
         "unknown parameter `nope`",
     );
@@ -217,7 +238,7 @@ fn unknown_parameter_in_switch_subject() {
 #[test]
 fn boolean_parameter_compared() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a === \"x\") { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a === \"x\") { return `1` } return `2`  }",
         Severity::Error,
         "boolean parameter `a` cannot be compared; use `if (a)` or `if (!a)`",
     );
@@ -226,7 +247,7 @@ fn boolean_parameter_compared() {
 #[test]
 fn boolean_parameter_as_switch_subject() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { switch (a) { case \"x\": return \"1\" } }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { switch (a) { case \"x\": return `1` } }",
         Severity::Error,
         "boolean parameter `a` cannot be used in a switch",
     );
@@ -235,7 +256,7 @@ fn boolean_parameter_as_switch_subject() {
 #[test]
 fn union_parameter_used_bare() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c) { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c) { return `1` } return `2`  }",
         Severity::Error,
         "union parameter `c` needs a comparison, like `c === \"...\"`",
     );
@@ -244,7 +265,7 @@ fn union_parameter_used_bare() {
 #[test]
 fn compared_value_not_a_member() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c === \"z\") { return \"1\" } return \"2\"  }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c === \"z\") { return `1` } return `2`  }",
         Severity::Error,
         "`z` is not a member of `c`; members are `x`, `y`",
     );
@@ -253,7 +274,7 @@ fn compared_value_not_a_member() {
 #[test]
 fn case_value_not_a_member() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"z\": return \"1\"; case \"x\": return \"2\" } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"z\": return `1`; case \"x\": return `2` } }",
         Severity::Error,
         "`z` is not a member of `c`",
     );
@@ -262,7 +283,7 @@ fn case_value_not_a_member() {
 #[test]
 fn duplicate_case_value_across_groups() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return \"1\"; case \"x\": return \"2\"; case \"y\": return \"3\" } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return `1`; case \"x\": return `2`; case \"y\": return `3` } }",
         Severity::Error,
         "duplicate case `x`",
     );
@@ -271,7 +292,7 @@ fn duplicate_case_value_across_groups() {
 #[test]
 fn case_with_statements_must_end_in_return() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": if (c === \"x\") { return \"1\" } case \"y\": return \"2\" } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": if (c === \"x\") { return `1` } case \"y\": return `2` } }",
         Severity::Error,
         "case falls through; end it with return",
     );
@@ -280,7 +301,7 @@ fn case_with_statements_must_end_in_return() {
 #[test]
 fn grouped_labels_without_return_fall_through() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\" | \"z\",\n) { switch (c) { case \"x\": return \"1\"; case \"y\": case \"z\": } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\" | \"z\",\n) { switch (c) { case \"x\": return `1`; case \"y\": case \"z\": } }",
         Severity::Error,
         "case falls through; end it with return",
     );
@@ -289,14 +310,14 @@ fn grouped_labels_without_return_fall_through() {
 #[test]
 fn grouped_cases_share_one_return() {
     clean(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\" | \"z\",\n) { switch (c) { case \"x\": case \"y\": return \"1\"; case \"z\": return \"2\" } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\" | \"z\",\n) { switch (c) { case \"x\": case \"y\": return `1`; case \"z\": return `2` } }",
     );
 }
 
 #[test]
 fn not_all_paths_return() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `1` } }",
         Severity::Error,
         "every path must return something",
     );
@@ -304,13 +325,13 @@ fn not_all_paths_return() {
 
 #[test]
 fn if_with_else_terminates_when_both_branches_return() {
-    clean("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return \"2\"  }");
+    clean("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `1` } return `2`  }");
 }
 
 #[test]
 fn if_block_that_falls_through_is_an_error() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { if (a) { return \"2\" } } return \"1\" }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { if (a) { return `2` } } return `1` }",
         Severity::Error,
         "every `if` block must end in a return",
     );
@@ -318,20 +339,20 @@ fn if_block_that_falls_through_is_an_error() {
 
 #[test]
 fn guard_chain_is_clean() {
-    clean("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return \"2\" }");
+    clean("/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `1` } return `2` }");
 }
 
 #[test]
 fn switch_covering_all_members_terminates() {
     clean(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return \"1\"; case \"y\": return \"2\" } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return `1`; case \"y\": return `2` } }",
     );
 }
 
 #[test]
 fn switch_missing_a_member_is_an_error() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return \"1\" } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return `1` } }",
         Severity::Error,
         "switch on `c` needs a case for every member; missing: `y`",
     );
@@ -340,7 +361,7 @@ fn switch_missing_a_member_is_an_error() {
 #[test]
 fn switch_missing_several_members_lists_them_all() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\" | \"z\",\n) { switch (c) { case \"x\": return \"1\" } }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\" | \"z\",\n) { switch (c) { case \"x\": return `1` } }",
         Severity::Error,
         "missing: `y`, `z`",
     );
@@ -349,7 +370,7 @@ fn switch_missing_several_members_lists_them_all() {
 #[test]
 fn code_after_return_in_a_guard_chain_is_an_error() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } return \"2\"  return \"3\" }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `1` } return `2`  return `3` }",
         Severity::Error,
         "unreachable statement",
     );
@@ -358,7 +379,7 @@ fn code_after_return_in_a_guard_chain_is_an_error() {
 #[test]
 fn code_after_switch_is_an_error() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return \"1\"; case \"y\": return \"2\" } return \"3\" }",
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { switch (c) { case \"x\": return `1`; case \"y\": return `2` } return `3` }",
         Severity::Error,
         "unreachable statement",
     );
@@ -376,7 +397,7 @@ fn reference_that_does_not_resolve_is_an_error_on_the_reference() {
 #[test]
 fn unused_parameter() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { return \"x\" }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { return `x` }",
         Severity::Warning,
         "unused parameter `a`",
     );
@@ -385,7 +406,7 @@ fn unused_parameter() {
 #[test]
 fn unreachable_statement() {
     expect_diag(
-        "/** d */\nexport default function f() { return \"a\"; return \"b\" }",
+        "/** d */\nexport default function f() { return `a`; return `b` }",
         Severity::Error,
         "unreachable statement",
     );
@@ -393,7 +414,7 @@ fn unreachable_statement() {
 
 #[test]
 fn invalid_file_name() {
-    let (f, _) = parse("/** d */\nexport default function f() { return \"x\" }");
+    let (f, _) = parse("/** d */\nexport default function f() { return `x` }");
     let diags = check_function(&f, "bad-name", &resolves);
     assert!(
         diags
@@ -406,7 +427,7 @@ fn invalid_file_name() {
 
 #[test]
 fn keyword_or_reserved_word_in_file_name() {
-    let (f, _) = parse("/** d */\nexport default function f() { return \"x\" }");
+    let (f, _) = parse("/** d */\nexport default function f() { return `x` }");
     for name in ["if", "ci/return", "for", "ci/const"] {
         let diags = check_function(&f, name, &resolves);
         assert!(
@@ -433,9 +454,9 @@ export default function f(
   /** C */ c: "x" | "y",
 ) {
   if (c === "x") {
-    return @./tpl(a="one", b=`x ${c}`);
+    return @./tpl(a=`one`, b=`x ${c}`);
   }
-  return @./tpl(b=`y ${c}`, a="two");
+  return @./tpl(b=`y ${c}`, a=`two`);
 }"#,
     ));
 }
@@ -458,7 +479,7 @@ fn template_call_missing_argument_is_checked() {
         &with(
             TPL_IMPORT,
             r#"/** d */
-export default function f() { return @./tpl(a="only one") }"#,
+export default function f() { return @./tpl(a=`only one`) }"#,
         ),
         Severity::Error,
         "missing argument `b` in call to `@./tpl`; write `b=value`",
@@ -473,7 +494,7 @@ fn hand_off_cannot_be_a_request_argument() {
 export default async function f() {
   /** Ok? */
   const ok: boolean = await request(@./other("a"));
-  return "y"
+  return `y`
 }"#,
         Severity::Error,
         "A hand-off cannot be an argument of a call.",
@@ -483,12 +504,12 @@ export default async function f() {
 #[test]
 fn nested_template_call_arity_is_checked() {
     expect_diag(
-        &with_pr(r#"return @./tpl(a=pr, b=@./tpl(a="only one"));"#),
+        &with_pr(r#"return @./tpl(a=pr, b=@./tpl(a=`only one`));"#),
         Severity::Error,
         "missing argument `b` in call to `@./tpl`; write `b=value`",
     );
     expect_diag(
-        &with_pr(r#"return @./tpl(a=delegate(model="m"), b=pr);"#),
+        &with_pr(r#"return @./tpl(a=delegate(model=`m`), b=pr);"#),
         Severity::Error,
         "missing argument `task` in call to `delegate`; write `task=value`",
     );
@@ -502,7 +523,7 @@ fn hand_off_cannot_be_an_argument() {
         "A hand-off cannot be an argument of a call.",
     );
     expect_diag(
-        &with_pr("return delegate(model=@./merge(pr=pr), task=\"task\");"),
+        &with_pr("return delegate(model=@./merge(pr=pr), task=`task`);"),
         Severity::Error,
         "A hand-off cannot be an argument of a call.",
     );
@@ -511,7 +532,7 @@ fn hand_off_cannot_be_an_argument() {
 #[test]
 fn std_template_call_inside_a_user_template_call_is_clean() {
     clean(&with_pr(
-        r#"return @./tpl(a=delegate(model="use opus model", task=pr), b="b");"#,
+        r#"return @./tpl(a=delegate(model=`use opus model`, task=pr), b=`b`);"#,
     ));
 }
 
@@ -557,7 +578,7 @@ fn boolean_parameter_cannot_be_interpolated() {
         r#"/** d */
 export default function f(
   /** A */ a: boolean,
-) { if (a) { return `x ${a}` } return "y"  }"#,
+) { if (a) { return `x ${a}` } return `y`  }"#,
         Severity::Error,
         "boolean parameter `a` cannot be interpolated",
     );
@@ -583,7 +604,7 @@ fn boolean_cannot_be_a_call_argument() {
             r#"/** d */
 export default function f(
   /** A */ a: boolean,
-) { if (a) { return @./tpl(a="x", b=`${a}`) } return "y"  }"#,
+) { if (a) { return @./tpl(a=`x`, b=`${a}`) } return `y`  }"#,
         ),
         Severity::Error,
         "boolean parameter `a` cannot be interpolated",
@@ -664,8 +685,8 @@ export default function f(
   /** C */ c: "x" | "y",
 ) {
   if (c === "x") {
-    return delegate(model="use opus model", task=`task ${c}`);
-  } return delegate(task="code review", model="use haiku model"); 
+    return delegate(model=`use opus model`, task=`task ${c}`);
+  } return delegate(task=`code review`, model=`use haiku model`); 
 }"#,
     ));
 }
@@ -676,9 +697,9 @@ fn await_needs_an_async_function() {
         r#"/** d */
 export default function f() {
   /** Ok? */
-  const ok: boolean = await request("x");
-  if (ok) { return "y" }
-  return "n"
+  const ok: boolean = await request(`x`);
+  if (ok) { return `y` }
+  return `n`
 }"#,
         Severity::Error,
         "`await` needs `export default async function`",
@@ -689,7 +710,7 @@ export default function f() {
 fn async_without_await_is_a_warning() {
     expect_diag(
         r#"/** d */
-export default async function f() { return "x" }"#,
+export default async function f() { return `x` }"#,
         Severity::Warning,
         "`async` function has no `await`; drop `async`",
     );
@@ -704,8 +725,8 @@ export default async function f(
 ) {
   /** Ok? */
   const ok: boolean = await request(`pick ${c}`);
-  if (!ok) { return @./tpl(a="a", b="b") }
-  return "y"
+  if (!ok) { return @./tpl(a=`a`, b=`b`) }
+  return `y`
 }"#,
     );
 }
@@ -718,9 +739,9 @@ export default async function f(
   /** C */ c: "x" | "y",
 ) {
   /** Ok? */
-  const c: boolean = await request("x");
-  if (c) { return "y" }
-  return "n"
+  const c: boolean = await request(`x`);
+  if (c) { return `y` }
+  return `n`
 }"#,
         Severity::Error,
         "duplicate name `c`",
@@ -735,29 +756,29 @@ export default async function f() {
   /** First */
   const first: "x" | "y" = await request(`${second}`);
   /** Second */
-  const second: "x" | "y" = await request("q");
-  return "b"
+  const second: "x" | "y" = await request(`q`);
+  return `b`
 }"#,
         Severity::Error,
         "`second` is used before it is declared",
     );
 }
 
-const PICK: &str = "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** d */\nexport default async function f() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(\"pick a PR\");\n";
+const PICK: &str = "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** d */\nexport default async function f() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n";
 
 #[test]
 fn struct_answer_is_used_in_a_hand_off_a_template_a_switch_and_a_condition() {
     clean(&format!("{PICK}  return @./merge(pr=pick.pr);\n}}"));
-    clean(&format!("{PICK}  return @./tpl(a=pick.pr, b=\"x\");\n}}"));
+    clean(&format!("{PICK}  return @./tpl(a=pick.pr, b=`x`);\n}}"));
     clean(&format!("{PICK}  return `Handle ${{pick.pr}}.`;\n}}"));
-    clean(&format!("{PICK}  if (pick.urgent) {{\n    return \"now\";\n  }}\n  return \"later\";\n}}"));
-    clean(&format!("{PICK}  switch (pick.task) {{\n    case \"review\":\n      return @./merge(pr=pick.pr);\n    case \"merge\":\n      return \"merge it\";\n  }}\n}}"));
+    clean(&format!("{PICK}  if (pick.urgent) {{\n    return `now`;\n  }}\n  return `later`;\n}}"));
+    clean(&format!("{PICK}  switch (pick.task) {{\n    case \"review\":\n      return @./merge(pr=pick.pr);\n    case \"merge\":\n      return `merge it`;\n  }}\n}}"));
 }
 
 #[test]
 fn bare_string_answer_is_an_error() {
     expect_diag(
-        "/** d */\nexport default async function f() {\n  /** The link. */\n  const pr: string = await request(\"pick a PR\");\n  return @./merge(pr=pr);\n}",
+        "/** d */\nexport default async function f() {\n  /** The link. */\n  const pr: string = await request(`pick a PR`);\n  return @./merge(pr=pr);\n}",
         Severity::Error,
         "a `string` answer is not allowed; answer a struct with a `string` field",
     );
@@ -767,14 +788,14 @@ fn bare_string_answer_is_an_error() {
 fn unknown_field_of_a_struct_answer_is_an_error() {
     let msg = "`z` is not a field of `Pick`; fields are pr, task, urgent";
     expect_diag(&format!("{PICK}  return @./merge(pr=pick.z);\n}}"), Severity::Error, msg);
-    expect_diag(&format!("{PICK}  if (pick.z) {{\n    return \"a\";\n  }}\n  return \"b\";\n}}"), Severity::Error, msg);
+    expect_diag(&format!("{PICK}  if (pick.z) {{\n    return `a`;\n  }}\n  return `b`;\n}}"), Severity::Error, msg);
     expect_diag(&format!("{PICK}  return `${{pick.z}}`;\n}}"), Severity::Error, msg);
 }
 
 #[test]
 fn string_field_cannot_decide_a_branch() {
     expect_diag(
-        &format!("{PICK}  if (pick.pr) {{\n    return \"a\";\n  }}\n  return \"b\";\n}}"),
+        &format!("{PICK}  if (pick.pr) {{\n    return `a`;\n  }}\n  return `b`;\n}}"),
         Severity::Error,
         "`pick.pr` is a string input; a condition cannot read it",
     );
@@ -783,7 +804,7 @@ fn string_field_cannot_decide_a_branch() {
 #[test]
 fn struct_answer_itself_is_not_a_value() {
     expect_diag(
-        &format!("{PICK}  if (pick) {{\n    return \"a\";\n  }}\n  return \"b\";\n}}"),
+        &format!("{PICK}  if (pick) {{\n    return `a`;\n  }}\n  return `b`;\n}}"),
         Severity::Error,
         "`pick` is a struct answer; read one of its fields, like `pick.field`",
     );
@@ -792,7 +813,7 @@ fn struct_answer_itself_is_not_a_value() {
 #[test]
 fn struct_answer_must_name_a_struct() {
     expect_diag(
-        "/** d */\nexport default async function f() {\n  /** The pick. */\n  const pick: Missing = await request(\"pick\");\n  return \"x\";\n}",
+        "/** d */\nexport default async function f() {\n  /** The pick. */\n  const pick: Missing = await request(`pick`);\n  return `x`;\n}",
         Severity::Error,
         "cannot find struct `Missing`",
     );
@@ -804,10 +825,10 @@ fn union_answer_needs_every_case() {
         r#"/** d */
 export default async function f() {
   /** Pick */
-  const c: "x" | "y" = await request("pick");
+  const c: "x" | "y" = await request(`pick`);
   switch (c) {
     case "x":
-      return "1";
+      return `1`;
   }
 }"#,
         Severity::Error,
@@ -827,7 +848,7 @@ fn empty_function_must_return_something() {
 #[test]
 fn body_that_can_end_without_return_says_every_path() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return \"1\" } }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a) { return `1` } }",
         Severity::Error,
         "every path must return something",
     );
@@ -854,19 +875,19 @@ fn string_input_is_used_in_a_template_literal() {
 #[test]
 fn string_input_is_passed_to_a_std_template() {
     clean(&with_pr(
-        "return delegate(model=\"use opus model\", task=pr);",
+        "return delegate(model=`use opus model`, task=pr);",
     ));
 }
 
 #[test]
 fn string_input_cannot_be_a_condition() {
     for cond in [
-        "if (pr) { return \"a\" }",
-        "if (pr === \"x\") { return \"a\" }",
-        "if (!pr) { return \"a\" }",
+        "if (pr) { return `a` }",
+        "if (pr === \"x\") { return `a` }",
+        "if (!pr) { return `a` }",
     ] {
         let src = format!(
-            "/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {{\n  {cond}\n  return \"b\"\n}}"
+            "/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {{\n  {cond}\n  return `b`\n}}"
         );
         expect_diag(
             &src,
@@ -879,7 +900,7 @@ fn string_input_cannot_be_a_condition() {
 #[test]
 fn string_input_cannot_be_a_switch_subject() {
     expect_diag(
-        &with_pr("switch (pr) { case \"x\": return \"a\"; case \"y\": return \"b\" }"),
+        &with_pr("switch (pr) { case \"x\": return `a`; case \"y\": return `b` }"),
         Severity::Error,
         "`pr` is a string input; a condition cannot read it",
     );
@@ -928,7 +949,7 @@ fn unknown_argument_name_is_an_error() {
         "`link` is not a parameter of `@./merge`; parameters are pr",
     );
     expect_diag(
-        &with_pr("return delegate(model=\"m\", tasks=pr);"),
+        &with_pr("return delegate(model=`m`, tasks=pr);"),
         Severity::Error,
         "`tasks` is not a parameter of `delegate`; parameters are model, task",
     );
@@ -949,7 +970,7 @@ fn missing_named_argument_is_an_error() {
         &with(
             TPL_IMPORT,
             r#"/** d */
-export default function f() { return @./tpl(b="only two") }"#,
+export default function f() { return @./tpl(b=`only two`) }"#,
         ),
         Severity::Error,
         "missing argument `a` in call to `@./tpl`; write `a=value`",
@@ -980,7 +1001,7 @@ fn argument_that_is_not_a_string_input_is_an_error() {
         "`zz` is not a string input",
     );
     expect_diag(
-        &with_pr("return delegate(model=\"m\", task=c);"),
+        &with_pr("return delegate(model=`m`, task=c);"),
         Severity::Error,
         "`c` is not a string input",
     );
@@ -989,7 +1010,7 @@ fn argument_that_is_not_a_string_input_is_an_error() {
 #[test]
 fn template_call_accepts_a_string_input_as_an_argument() {
     // `./tpl` takes two `string` parameters.
-    clean(&with_pr("return @./tpl(a=pr, b=\"b\");"));
+    clean(&with_pr("return @./tpl(a=pr, b=`b`);"));
 }
 
 #[test]
@@ -1004,7 +1025,7 @@ fn string_input_not_used_is_a_warning() {
 /// A function file with one inline struct `Input` (fields `a` and `c`) and the given body.
 fn with_input_struct(body: &str) -> String {
     format!(
-        "interface Input {{\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}}\n/** d */\nexport default function f({body}) {{ if (a) {{ return \"1\" }} if (c === \"x\") {{ return \"2\" }} return \"3\" }}"
+        "interface Input {{\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}}\n/** d */\nexport default function f({body}) {{ if (a) {{ return `1` }} if (c === \"x\") {{ return `2` }} return `3` }}"
     )
 }
 
@@ -1018,12 +1039,12 @@ fn check_struct_file(src: &str) -> Vec<Diagnostic> {
 #[test]
 fn a_function_takes_one_parameter() {
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** B */ b: boolean,\n) { if (a) { return \"1\" } if (b) { return \"2\" } return \"3\" }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** B */ b: boolean,\n) { if (a) { return `1` } if (b) { return `2` } return `3` }",
         Severity::Error,
         "a function takes one parameter; put `a` and `b` in a struct",
     );
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** B */ b: boolean,\n  /** C */ c: boolean,\n) { if (a) { return \"1\" } if (b) { return \"2\" } if (c) { return \"3\" } return \"4\" }",
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** B */ b: boolean,\n  /** C */ c: boolean,\n) { if (a) { return `1` } if (b) { return `2` } if (c) { return `3` } return `4` }",
         Severity::Error,
         "a function takes one parameter; put `a`, `b` and `c` in a struct",
     );
@@ -1031,12 +1052,12 @@ fn a_function_takes_one_parameter() {
 
 #[test]
 fn inline_struct_parameter_is_clean() {
-    clean("interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a, c }: Input) {\n  if (a) { return \"1\" }\n  if (c === \"x\") { return \"2\" }\n  return \"3\"\n}");
+    clean("interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a, c }: Input) {\n  if (a) { return `1` }\n  if (c === \"x\") { return `2` }\n  return `3`\n}");
 }
 
 #[test]
 fn an_inline_struct_cannot_be_exported() {
-    let src = "interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a, c }: Input) {\n  if (a) { return \"1\" }\n  if (c === \"x\") { return \"2\" }\n  return \"3\"\n}";
+    let src = "interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a, c }: Input) {\n  if (a) { return `1` }\n  if (c === \"x\") { return `2` }\n  return `3`\n}";
     let msg = "input struct `Input` cannot be exported; to share it, move it to its own `.struct.rein` file";
     expect_diag(
         &src.replacen("interface Input", "export interface Input", 1),
@@ -1058,7 +1079,7 @@ fn destructuring_names_every_field_once() {
         "`z` is not a field of `Input`; fields are a, c",
     );
     expect_diag(
-        "interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a }: Input) { if (a) { return \"1\" } return \"3\" }",
+        "interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a }: Input) { if (a) { return `1` } return `3` }",
         Severity::Error,
         "destructure every field of `Input`; missing: `c`",
     );
@@ -1072,7 +1093,7 @@ fn destructuring_names_every_field_once() {
 #[test]
 fn an_inline_struct_must_exist() {
     expect_diag(
-        "/** d */\nexport default function f({ a }: Nope) { return \"x\" }",
+        "/** d */\nexport default function f({ a }: Nope) { return `x` }",
         Severity::Error,
         "cannot find struct `Nope`; declare `interface Nope { ... }` in this file",
     );
@@ -1081,7 +1102,7 @@ fn an_inline_struct_must_exist() {
 #[test]
 fn an_unused_inline_struct_is_a_warning() {
     expect_diag(
-        "interface Extra {\n  /** A */ a: boolean;\n}\n/** d */\nexport default function f() { return \"x\" }",
+        "interface Extra {\n  /** A */ a: boolean;\n}\n/** d */\nexport default function f() { return `x` }",
         Severity::Warning,
         "unused struct `Extra`; an inline struct is the input of the function in its file",
     );
@@ -1090,7 +1111,7 @@ fn an_unused_inline_struct_is_a_warning() {
 #[test]
 fn a_field_needs_a_doc_comment() {
     expect_diag(
-        "interface Input {\n  a: boolean;\n}\n/** d */\nexport default function f({ a }: Input) { if (a) { return \"1\" } return \"2\" }",
+        "interface Input {\n  a: boolean;\n}\n/** d */\nexport default function f({ a }: Input) { if (a) { return `1` } return `2` }",
         Severity::Error,
         "field `a` needs a doc comment: /** question */ a: ...",
     );
@@ -1102,7 +1123,7 @@ fn struct_file_rules() {
     let diags = check_struct_file(ticket);
     assert!(diags.is_empty(), "{diags:?}");
 
-    let with_fn = format!("{ticket}\n/** d */\nexport default function f() {{ return \"x\" }}");
+    let with_fn = format!("{ticket}\n/** d */\nexport default function f() {{ return `x` }}");
     let diags = check_struct_file(&with_fn);
     assert!(
         diags.iter().any(|d| d.severity == Severity::Error

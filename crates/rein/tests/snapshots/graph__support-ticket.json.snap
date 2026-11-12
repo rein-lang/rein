@@ -39,7 +39,7 @@ expression: text
       "id": "f0_3",
       "kind": "done",
       "function": "answer/faq",
-      "label": "@../templates/close_ticket(opening=\"Glad the help article solved the problem.\", nextStep=\"Reply to this ticket if it comes back.\")"
+      "label": "@../templates/close_ticket(opening=`Glad the help article solved the problem.`, nextStep=`Reply to this ticket if it comes back.`)"
     },
     {
       "id": "f1",
@@ -59,7 +59,7 @@ expression: text
       "id": "f1_1",
       "kind": "done",
       "function": "billing/refund",
-      "label": "@../templates/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\nticket.`, nextStep=\"Then tell the customer the refund takes 5 business days.\")"
+      "label": "@../templates/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\nticket.`, nextStep=`Then tell the customer the refund takes 5 business days.`)"
     },
     {
       "id": "f2",

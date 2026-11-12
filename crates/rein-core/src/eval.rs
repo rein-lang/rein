@@ -88,7 +88,7 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                 None
             }
             Stmt::Return(r) => Some(match &r.value {
-                ReturnValue::Text(t) => Outcome::Text(t.clone()),
+                ReturnValue::Text(t) => Outcome::Text(t.value.clone()),
                 ReturnValue::Ref(reference) => Outcome::Ref { target: target(env, &reference.value)?, args: Vec::new() },
                 ReturnValue::Template(lit) => Outcome::Text(expand_template(env, lit)?),
                 ReturnValue::Call(call) => match env.bindings.get(call.callee.key()) {

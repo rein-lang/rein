@@ -25,7 +25,7 @@ interface Input {
  */
 export default function mergePr({ docsOnly, ci }: Input) {
   if (docsOnly) {
-    return "approved";
+    return `approved`;
   }
   switch (ci) {
     case "green":
@@ -33,7 +33,7 @@ export default function mergePr({ docsOnly, ci }: Input) {
     case "red":
       return @./ci/fix;
     case "pending":
-      return "wait for CI, then run merge_pr again";
+      return `wait for CI, then run merge_pr again`;
   }
 }
 ```

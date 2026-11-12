@@ -17,7 +17,7 @@ interface Input {
  */
 export default function mergePr({ docsOnly, ci }: Input) {
   if (docsOnly) {
-    return "approved";
+    return `approved`;
   }
   switch (ci) {
     case "green":
@@ -25,7 +25,7 @@ export default function mergePr({ docsOnly, ci }: Input) {
     case "red":
       return @./ci/fix;
     case "pending":
-      return "wait for CI, then run mergePr again";
+      return `wait for CI, then run mergePr again`;
   }
 }
 "#;
@@ -40,6 +40,20 @@ fn one_error(src: &str) -> String {
     let (_, diags) = parse(src);
     assert_eq!(diags.len(), 1, "{diags:?}");
     diags[0].message.clone()
+}
+
+#[test]
+fn a_template_as_a_tag_is_an_error_with_the_quoted_form() {
+    for (src, want) in [
+        ("/** F. */\nexport default function f(/** C? */ c: `green` | \"red\") {\n  return `x`;\n}\n", "a tag uses quotes: write \"green\" instead of `green`"),
+        ("/** F. */\nexport default function f(/** C? */ c: \"green\" | \"red\") {\n  if (c === `red`) {\n    return `x`;\n  }\n  return `y`;\n}\n", "a tag uses quotes: write \"red\" instead of `red`"),
+        ("/** F. */\nexport default function f(/** C? */ c: \"green\" | \"red\") {\n  switch (c) {\n    case `green`:\n      return `x`;\n    case \"red\":\n      return `y`;\n  }\n}\n", "a tag uses quotes: write \"green\" instead of `green`"),
+        ("/** F. */\nexport default function f(/** C? */ c: `a ${b}` | \"red\") {\n  return `x`;\n}\n", "a tag uses quotes: write \"...\" instead of `...`"),
+    ] {
+        let (_, diags) = parse(src);
+        assert_eq!(diags.len(), 1, "{src}: {diags:?}");
+        assert_eq!(diags[0].message, want, "{src}");
+    }
 }
 
 #[test]

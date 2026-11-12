@@ -100,13 +100,13 @@ expression: text
       "id": "f3_1",
       "kind": "delegate",
       "function": "review_code",
-      "label": "delegate(model=\"use opus model\", task=\"code review the pr with a security focus\")"
+      "label": "delegate(model=`use opus model`, task=`code review the pr with a security focus`)"
     },
     {
       "id": "f3_2",
       "kind": "delegate",
       "function": "review_code",
-      "label": "delegate(model=\"use haiku model\", task=\"code review the pr\")"
+      "label": "delegate(model=`use haiku model`, task=`code review the pr`)"
     },
     {
       "id": "f4",
