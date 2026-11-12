@@ -118,8 +118,30 @@ impl Project {
         let mut sources = Vec::new();
         collect(root, &mut sources, &mut BTreeSet::new())?;
         // A later pair for the same name replaces the disk copy, as `build` keeps the last one.
-        sources.extend(open.iter().map(|(path, text)| (path.clone(), Ok(text.clone()))));
+        sources.extend(
+            open.iter().filter_map(|(path, text)| Some((Self::loaded_path(root, path)?, Ok(text.clone())))),
+        );
         Ok(Self::build(root.to_path_buf(), sources))
+    }
+
+    /// The path that the loader gives the file at `path` under `root`, or `None` when the loader would not load that
+    /// file. `path` may name the file through a symlink, as a program folder reached through one does, so it is
+    /// matched against the canonical root and returned under `root` as the disk walk spells it. A file in a folder
+    /// the loader skips, or in a nested flow, is not loaded.
+    pub fn loaded_path(root: &Path, path: &Path) -> Option<PathBuf> {
+        let spelled = if path.starts_with(root) {
+            path.to_path_buf()
+        } else {
+            let canonical = fs::canonicalize(root).ok()?;
+            root.join(path.strip_prefix(canonical).ok()?)
+        };
+        let rel = spelled.strip_prefix(root).ok()?;
+        for dir in rel.ancestors().skip(1).take_while(|d| !d.as_os_str().is_empty()) {
+            if skips_folder(&root.join(dir), dir.file_name()?.to_str()?) {
+                return None;
+            }
+        }
+        Some(spelled)
     }
 
     /// Builds a project from (path, text) pairs. The LSP uses this to overlay open buffers.
@@ -655,8 +677,7 @@ fn collect(
         // `metadata` follows symlinks. A broken link fails here and is skipped.
         let Ok(meta) = fs::metadata(&path) else { continue };
         if meta.is_dir() {
-            // A subdirectory with its own main.rein is another flow. Skip it.
-            if skipped_folder(&file_name) || path.join(MAIN_FILE).is_file() {
+            if skips_folder(&path, &file_name) {
                 continue;
             }
             let _ = collect(&path, out, seen);
@@ -671,6 +692,12 @@ fn collect(
 /// Whether the loader skips a folder of this name: hidden folders, `target` and `node_modules`.
 fn skipped_folder(name: &str) -> bool {
     name.starts_with('.') || name == "target" || name == "node_modules"
+}
+
+/// Whether the loader skips the folder `dir` named `name`: [`skipped_folder`], or a folder with its own `main.rein`,
+/// which is another flow.
+fn skips_folder(dir: &Path, name: &str) -> bool {
+    skipped_folder(name) || dir.join(MAIN_FILE).is_file()
 }
 
 /// Whether the loader finds a function at the project path `path`, such as `merge/fix`: no folder on the way is

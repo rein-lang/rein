@@ -1492,3 +1492,64 @@ fn an_unsaved_buffer_of_an_installed_program_shows_in_the_hand_off() {
     fs::remove_dir_all(&root).unwrap();
     fs::remove_dir_all(&home).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn an_unsaved_buffer_of_a_program_reached_through_a_symlink_shows_in_the_hand_off() {
+    let root = temp_project("overlay-link");
+    let home = root.with_extension("home");
+    let store = root.with_extension("store");
+    // pnpm links `node_modules/<name>` to the package folder, so the program's folder is reached through a symlink.
+    let program = install_pr_handling(&store);
+    fs::create_dir_all(&home).unwrap();
+    std::os::unix::fs::symlink(&program, home.join("pr-handling")).unwrap();
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    let edited = PR_HANDLING.replace("Handle a PR.", "Handle a PR, unsaved.");
+    server.open(&uri_of(&home.join("pr-handling"), "main.rein"), &edited);
+
+    // The hand-off shows the unsaved buffer, not the copy on disk.
+    let hover = server.request(2, "textDocument/hover", at(&handoff, 5, 12));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("Handle a PR, unsaved."), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+    fs::remove_dir_all(&store).unwrap();
+}
+
+#[test]
+fn an_unsaved_buffer_the_loader_skips_is_not_a_function_of_the_program() {
+    let root = temp_project("overlay-skip");
+    let home = root.with_extension("home");
+    let program = install_pr_handling(&home);
+    // `sub` is a nested flow, as it has its own main.rein. `.cache` is hidden, and `target` is build output.
+    fs::create_dir_all(program.join("sub")).unwrap();
+    fs::write(program.join("sub/main.rein"), PR_HANDLING).unwrap();
+    fs::create_dir_all(program.join(".cache")).unwrap();
+    fs::create_dir_all(program.join("target")).unwrap();
+    fs::create_dir_all(program.join("helpers")).unwrap();
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    let stray = "/** Stray. */\nexport default function stray() {\n  return `stray`;\n}\n";
+    for file in ["sub/extra.rein", ".cache/extra.rein", "target/extra.rein"] {
+        server.open(&uri_of(&program, file), stray);
+    }
+    // A folder the loader does load still shows its open buffer as a function.
+    server.open(&uri_of(&program, "helpers/extra.rein"), stray);
+
+    // Completion after `@pr-handling/` lists what the loader finds on disk, plus the open buffer that it would load.
+    let items = server.request(3, "textDocument/completion", at(&handoff, 5, 22));
+    assert_eq!(labels(&items), ["@pr-handling/helpers/extra", "@pr-handling/main", "@pr-handling/review"], "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+}

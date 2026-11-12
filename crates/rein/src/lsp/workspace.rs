@@ -47,15 +47,15 @@ impl State {
 }
 
 /// Project under `root`: files on disk, with open buffers replacing their disk copies.
-/// A buffer in a nested project is left out, as its file is left out of this one.
+/// A buffer the loader would skip, such as one in a nested project, is left out, as its file is left out of this one.
 pub fn build_project(docs: &Docs, root: &Path) -> Project {
     let mut by_path: BTreeMap<PathBuf, String> = BTreeMap::new();
     if let Ok(disk) = Project::load(root) {
         by_path.extend(disk.files.into_values().map(|sf| (sf.path, sf.text)));
     }
     by_path.extend(docs.iter().filter_map(|(uri, text)| {
-        let path = doc_path(uri)?;
-        (Project::find_root(&path) == root).then(|| (path, text.clone()))
+        let path = Project::loaded_path(root, &doc_path(uri)?)?;
+        Some((path, text.clone()))
     }));
     let mut project = Project::from_sources(root.to_path_buf(), by_path.into_iter().collect());
     // The scopes are searched only when a `@program` reference names a program. Scopes resolve from the project root,
