@@ -80,7 +80,7 @@ expression: text
       "id": "f2_2",
       "kind": "done",
       "function": "merge_pr/fix",
-      "label": "Read the CI log. Fix the failing test or code. Push the fix. Then run\nci/fix again."
+      "label": "Read the CI log. Fix the failing test or code. Push the fix. Then run\nmerge_pr/fix again."
     },
     {
       "id": "f3",

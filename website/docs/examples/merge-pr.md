@@ -25,7 +25,7 @@ flowchart TD
         f2[["merge_pr/fix"]]
         f2_0{"Did you push a fix for the failing job?<br/>fixPushed: boolean"}
         f2_1("Wait for CI to finish. Then start this program again with the task<br/>merge.")
-        f2_2("Read the CI log. Fix the failing test or code. Push the fix. Then run<br/>ci/fix again.")
+        f2_2("Read the CI log. Fix the failing test or code. Push the fix. Then run<br/>merge_pr/fix again.")
     end
     subgraph s3 ["merge_pr/review_code.rein"]
         f3[["merge_pr/review_code"]]
