@@ -88,7 +88,7 @@ Each choice can change. The reason is one line.
 - Only a hand-off in `return`, with the same argument rules as a local hand-off. Why: one rule for all hand-offs. The target asks its other inputs itself.
 - The programs are found by name through the scopes when a command loads the project. Why: the same lookup as `rein list` and `rein step NAME`; the core crate reads no environment.
 - One shared run. The target functions are named `@program/function`, so answer keys are `@pr-handling/main.task`. Why: the interface stays the same, and a local `pr-handling/main.rein` cannot give the same key.
-- Not built: a `rein.lock` with the content hash of each called program, so a changed program is seen before the run. Why: it needs `rein install` changes and its own review. A program reference inside a called program is not followed.
+- No `rein.lock`. pnpm pins each called program: `pnpm-lock.yaml` records its version and integrity hash, and `node_modules` holds the installed copy. Why: a second lock would repeat what pnpm already does. A program reference inside a called program is not followed.
 
 ## Struct answers
 
