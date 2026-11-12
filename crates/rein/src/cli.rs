@@ -312,6 +312,9 @@ fn rows(project: &Project, scope: &Path) -> Vec<Row> {
         let file = display_path(&project.marker_path());
         rows.extend(project.project_diagnostics().iter().map(|d| row(&file, 0, 0, d)));
     }
+    // A bad manifest applies to every file, so it shows for any scope.
+    let manifest = display_path(&project.root.join(rein_core::flows::MANIFEST));
+    rows.extend(project.manifest_diagnostics().iter().map(|d| row(&manifest, 0, 0, d)));
     rows.sort_by(|a, b| (&a.file, a.start).cmp(&(&b.file, b.start)));
     rows
 }

@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
-use crate::check::{check_function, Kind};
+use crate::check::{check_function, check_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::parser::parse;
 
@@ -27,6 +27,38 @@ pub struct Project {
     pub root: PathBuf,
     /// Key = function name.
     pub files: BTreeMap<String, SourceFile>,
+    /// The most lines a function may have: `maxFunctionLines` in `rein.json`, else the default.
+    pub max_function_lines: u64,
+    /// Errors in `rein.json`. They apply to every file of the project.
+    manifest_diagnostics: Vec<Diagnostic>,
+}
+
+/// The `rein.json` field that sets the line limit of a function.
+const MAX_LINES_FIELD: &str = "maxFunctionLines";
+
+/// The line limit from `root/rein.json`, and an error when the field is not a positive integer. A missing or
+/// unreadable manifest, or one that is not JSON, gives the default, as the program reader does.
+fn read_line_limit(root: &Path) -> (u64, Option<Diagnostic>) {
+    let default = crate::check::DEFAULT_MAX_FUNCTION_LINES;
+    let Some(value) = fs::read_to_string(root.join(crate::flows::MANIFEST))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    else {
+        return (default, None);
+    };
+    match value.get(MAX_LINES_FIELD) {
+        None => (default, None),
+        Some(v) => match v.as_u64().filter(|n| *n > 0) {
+            Some(n) => (n, None),
+            None => (
+                default,
+                Some(Diagnostic::error(
+                    Span::default(),
+                    format!("`{MAX_LINES_FIELD}` in {} must be a positive integer, such as 40; found {v}", crate::flows::MANIFEST),
+                )),
+            ),
+        },
+    }
 }
 
 impl Project {
@@ -77,7 +109,8 @@ impl Project {
             };
             files.insert(name, SourceFile { path, text, function, parse_diagnostics });
         }
-        let mut project = Self { root, files };
+        let (max_function_lines, limit_error) = read_line_limit(&root);
+        let mut project = Self { root, files, max_function_lines, manifest_diagnostics: limit_error.into_iter().collect() };
         project.bind_structs();
         project
     }
@@ -131,6 +164,11 @@ impl Project {
             return Vec::new();
         }
         vec![Diagnostic::error(Span::default(), "project has no main.rein; it is the agent's entry point")]
+    }
+
+    /// Errors in `rein.json`, such as a `maxFunctionLines` that is not a positive integer.
+    pub fn manifest_diagnostics(&self) -> &[Diagnostic] {
+        &self.manifest_diagnostics
     }
 
     /// The entry file, `main.rein` in the root. Project errors point here.
@@ -199,6 +237,9 @@ impl Project {
                 let mut diags = Vec::new();
                 let resolve = |path: &str| self.kind_for(name, path);
                 diags.extend(check_function(&sf.function, name, &resolve));
+                if !is_struct(name) {
+                    diags.extend(check_length(&sf.function, name, &sf.text, self.max_function_lines));
+                }
                 let bindings = self.bindings(name);
                 diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &adj));
                 if !is_struct(name) && reachable.as_ref().is_some_and(|r| !r.contains(name)) {
@@ -748,5 +789,119 @@ mod tests {
             Severity::Error,
             "cannot find struct `@./nope`; a shared struct is a `nope.struct.rein` file"
         ));
+    }
+
+    /// A function file of exactly `lines` lines: the `export default` line, comment lines, a return, and `}`.
+    fn function_of(lines: usize) -> String {
+        let mut text = String::from("/** Long. */\nexport default function long() {\n");
+        for _ in 0..lines - 3 {
+            text.push_str("  // a step\n");
+        }
+        text.push_str("  return \"done\";\n}\n");
+        text
+    }
+
+    /// Line-limit errors of the function `long` in a project of `main` and `long`.
+    fn length_errors(text: &str) -> Vec<Diagnostic> {
+        project_of(&[("long", text)])
+            .check()
+            .remove("long")
+            .unwrap()
+            .into_iter()
+            .filter(|d| d.message.contains(" lines; the limit is "))
+            .collect()
+    }
+
+    #[test]
+    fn exactly_40_lines_passes_and_the_doc_comment_does_not_count() {
+        assert!(length_errors(&function_of(40)).is_empty());
+        let with_doc = format!("/**\n * One.\n * Two.\n * Three.\n */\n{}", function_of(40));
+        assert!(length_errors(&with_doc).is_empty());
+    }
+
+    #[test]
+    fn forty_one_lines_fails_on_the_header() {
+        let text = function_of(41);
+        let errors = length_errors(&text);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        let d = &errors[0];
+        assert_eq!(d.severity, Severity::Error);
+        assert_eq!(
+            d.message,
+            "function `long` has 41 lines; the limit is 40. Move part of it into its own function and call it with `@./name`"
+        );
+        assert_eq!(&text[d.span.start..d.span.end], "export default function long");
+    }
+
+    /// A flow root in a temp dir: `main.rein`, a `long.rein` of `lines` lines, and an optional `rein.json`.
+    fn flow_with_manifest(tag: &str, manifest: Option<&str>, lines: usize) -> Project {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("rein-core-{tag}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("main.rein"), "/** m */\nexport default function main() { return @./long }\n").unwrap();
+        fs::write(root.join("long.rein"), function_of(lines)).unwrap();
+        if let Some(m) = manifest {
+            fs::write(root.join("rein.json"), m).unwrap();
+        }
+        let project = Project::load(&root).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        project
+    }
+
+    #[test]
+    fn manifest_sets_the_line_limit() {
+        let project = flow_with_manifest("limit-ok", Some(r#"{"maxFunctionLines": 60}"#), 41);
+        assert_eq!(project.max_function_lines, 60);
+        assert!(project.manifest_diagnostics().is_empty());
+        assert!(length_lines(&project).is_empty());
+
+        let project = flow_with_manifest("limit-over", Some(r#"{"maxFunctionLines": 60}"#), 61);
+        let errors = length_lines(&project);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("function `long` has 61 lines; the limit is 60."), "{errors:?}");
+    }
+
+    #[test]
+    fn no_manifest_uses_the_default_limit() {
+        let project = flow_with_manifest("limit-none", None, 41);
+        assert_eq!(project.max_function_lines, 40);
+        assert_eq!(length_lines(&project).len(), 1);
+    }
+
+    #[test]
+    fn invalid_line_limit_is_a_manifest_error_and_the_default_applies() {
+        for value in ["0", "-1", "1.5", "\"60\"", "null"] {
+            let manifest = format!(r#"{{"maxFunctionLines": {value}}}"#);
+            let project = flow_with_manifest("limit-bad", Some(&manifest), 41);
+            assert_eq!(project.max_function_lines, 40, "{value}");
+            let errors = project.manifest_diagnostics();
+            assert_eq!(errors.len(), 1, "{value}: {errors:?}");
+            assert_eq!(errors[0].severity, Severity::Error);
+            assert!(
+                errors[0].message.starts_with("`maxFunctionLines` in rein.json must be a positive integer, such as 40; found "),
+                "{value}: {}",
+                errors[0].message
+            );
+        }
+    }
+
+    /// The line-limit error texts of the project's functions.
+    fn length_lines(project: &Project) -> Vec<String> {
+        project
+            .check()
+            .into_values()
+            .flatten()
+            .map(|d| d.message)
+            .filter(|m| m.contains(" lines; the limit is "))
+            .collect()
+    }
+
+    #[test]
+    fn struct_files_are_not_checked_for_length() {
+        let mut text = String::from("/** Ticket. */\nexport default interface Ticket {\n  /** Category? */\n  category: boolean;\n");
+        text.push_str(&"\n".repeat(60));
+        text.push_str("}\n");
+        let project = project_of(&[("ticket.struct", text.as_str())]);
+        assert!(!project.check()["ticket.struct"].iter().any(|d| d.message.contains(" lines; the limit is ")));
     }
 }

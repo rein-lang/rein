@@ -40,6 +40,10 @@ pub struct Function {
     pub is_async: bool,
     /// The `async` keyword, when the function has it.
     pub async_span: Option<Span>,
+    /// From `export` to the closing `}`. The function's lines are the lines this span covers. Empty when there is no function.
+    pub span: Span,
+    /// From `export` to the function name: the header the line-limit error points at.
+    pub header: Span,
 }
 
 /// A parsed `/** */` doc block.

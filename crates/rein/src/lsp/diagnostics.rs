@@ -40,7 +40,12 @@ pub fn refresh(connection: &Connection, docs: &Docs, published: &mut BTreeSet<Ur
         }
         // The client does not open main.rein, so project errors go on an open file of the project.
         // Without one, they go on the file that changed.
-        let extra: Vec<Diagnostic> = project.project_diagnostics().iter().map(|d| to_lsp("", d)).collect();
+        let extra: Vec<Diagnostic> = project
+            .project_diagnostics()
+            .iter()
+            .chain(project.manifest_diagnostics())
+            .map(|d| to_lsp("", d))
+            .collect();
         if !extra.is_empty() {
             let open = lists.keys().find(|u| docs.contains_key(u)).cloned();
             lists.entry(open.unwrap_or_else(|| changed.clone())).or_default().extend(extra);
