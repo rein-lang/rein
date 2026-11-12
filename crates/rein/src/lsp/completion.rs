@@ -5,7 +5,7 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit, Documentation, Range,
     TextDocumentPositionParams, TextEdit,
 };
-use rein_core::ast::Function;
+use rein_core::ast::{is_struct, Function, STRUCT_SUFFIX};
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
 
@@ -39,7 +39,7 @@ pub fn completion(state: &State, p: &TextDocumentPositionParams) -> Option<Compl
     Some(CompletionResponse::Array(items))
 }
 
-/// Completion of a reference path: the project functions, relative to this file, that match what is typed.
+/// Completion of a reference path: the project functions, or after `}: ` the shared structs, relative to this file, that match what is typed.
 /// Each item replaces the whole reference token, from its `@` to the end of its path.
 fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Option<Vec<CompletionItem>> {
     let before = line_before(text, off);
@@ -51,15 +51,18 @@ fn ref_completions(text: &str, off: usize, project: &Project, from: &str) -> Opt
     let at_abs = off - before.len() + at;
     let end = text[off..].find(|c: char| !is_path_char(c)).map_or(text.len(), |i| off + i);
     let range = Range::new(position(text, at_abs), position(text, end));
+    // After `}: ` a parameter type goes, so the shared structs are offered. Elsewhere, the functions.
+    let in_type = before[..at].trim_end().ends_with(':');
+    let kind = if in_type { CompletionItemKind::STRUCT } else { CompletionItemKind::FUNCTION };
     let items = project
         .files
         .keys()
-        .filter(|n| n.as_str() != from)
-        .map(|n| format!("@{}", relative_import(from, n)))
+        .filter(|n| n.as_str() != from && is_struct(n) == in_type)
+        .map(|n| format!("@{}", relative_import(from, n.strip_suffix(STRUCT_SUFFIX).unwrap_or(n))))
         .filter(|label| label.starts_with(typed))
         .map(|label| CompletionItem {
             label: label.clone(),
-            kind: Some(CompletionItemKind::FUNCTION),
+            kind: Some(kind),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: label })),
             ..Default::default()
         })

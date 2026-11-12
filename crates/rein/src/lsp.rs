@@ -17,6 +17,7 @@ mod occurrences;
 mod references;
 mod rename;
 mod signature_help;
+mod structs;
 mod sync;
 mod text;
 mod workspace;

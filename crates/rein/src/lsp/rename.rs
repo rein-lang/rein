@@ -1,5 +1,5 @@
-//! Rename: a parameter, with `name=` in every call to its function, or a function, which renames its file and
-//! updates every `@./` reference to it.
+//! Rename: a parameter, with `name=` in every call to its function; a field, in its struct and in every function
+//! that takes it; a function or a shared struct, which renames its file and updates every `@./` reference to it.
 
 use std::collections::BTreeMap;
 
@@ -7,11 +7,13 @@ use lsp_types::{
     DocumentChangeOperation, DocumentChanges, OneOf, OptionalVersionedTextDocumentIdentifier, PrepareRenameResponse,
     RenameFile, RenameParams, ResourceOp, TextDocumentEdit, TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
 };
+use rein_core::ast::is_struct;
 use rein_core::diagnostic::Span;
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
 
 use super::occurrences::{callers, declaration, name_span, param_uses, symbol_at, Symbol};
+use super::structs::{base as struct_base, field_sites, struct_decl, type_sites};
 use super::text::{is_identifier, offset, range, relative_import};
 use super::workspace::{locate, uri_for, Docs, State};
 
@@ -23,6 +25,14 @@ pub fn prepare(state: &State, p: &TextDocumentPositionParams) -> Result<Option<P
     let (span, placeholder) = match symbol {
         Symbol::Std(n) => return Err(std_error(&n)),
         Symbol::Param { name: n, .. } => (span, n),
+        Symbol::Field { name: n, .. } => (span, n),
+        Symbol::Struct { name: n, file } if !is_struct(&file) => (span, n),
+        Symbol::Struct { file, .. } => {
+            let base = struct_base(&file).to_string();
+            let written = &sf.text[span.start..span.end];
+            let span = if written.ends_with(&format!("/{base}")) { Span::new(span.end - base.len(), span.end) } else { span };
+            (span, base)
+        }
         Symbol::Function(target) => {
             let base = basename(&target).to_string();
             let written = &sf.text[span.start..span.end];
@@ -45,6 +55,8 @@ pub fn rename(state: &State, p: &RenameParams) -> Result<Option<WorkspaceEdit>, 
     match symbol {
         Symbol::Std(n) => Err(std_error(&n)),
         Symbol::Param { function, name: old } => rename_param(&state.docs, &project, &function, &old, new).map(Some),
+        Symbol::Field { file, strukt, name: old } => rename_field(&state.docs, &project, &file, &strukt, &old, new).map(Some),
+        Symbol::Struct { file, name: old } => rename_struct(state, &project, &file, &old, new).map(Some),
         Symbol::Function(target) => rename_function(state, &project, &target, new).map(Some),
     }
 }
@@ -70,6 +82,58 @@ fn rename_param(docs: &Docs, project: &Project, function: &str, old: &str, new: 
         edits.add(project, &file, span, new);
     }
     Ok(edits.into_workspace_edit(docs, project, None))
+}
+
+/// Renames a field in its `interface`, in `{ }` of each function that takes the struct, in their bodies, and
+/// `name=` in each call to them.
+fn rename_field(docs: &Docs, project: &Project, file: &str, strukt: &str, old: &str, new: &str) -> Result<WorkspaceEdit, String> {
+    let s = struct_decl(project, file, strukt).ok_or_else(|| format!("cannot find struct `{strukt}`"))?;
+    if s.field(new).is_some() {
+        return Err(format!("`{strukt}` already has `{new}`"));
+    }
+    let mut edits = Edits::default();
+    if let Some(field) = s.field(old) {
+        edits.add(project, file, field.name.span, new);
+    }
+    for (f, span) in field_sites(project, file, strukt, old) {
+        edits.add(project, &f, span, new);
+    }
+    Ok(edits.into_workspace_edit(docs, project, None))
+}
+
+/// An inline struct renames its `interface` and the parameter type. A shared struct renames its file to
+/// `<new>.struct.rein`, the last segment of each `@./` type, and its `interface` name when that was the file name.
+fn rename_struct(state: &State, project: &Project, file: &str, old: &str, new: &str) -> Result<WorkspaceEdit, String> {
+    let s = struct_decl(project, file, old).ok_or_else(|| format!("cannot find struct `{old}`"))?;
+    let mut edits = Edits::default();
+    if !is_struct(file) {
+        if struct_decl(project, file, new).is_some() {
+            return Err(format!("`{file}` already has a struct `{new}`"));
+        }
+        edits.add(project, file, s.name.span, new);
+        for (f, span) in type_sites(project, file, old) {
+            edits.add(project, &f, span, new);
+        }
+        return Ok(edits.into_workspace_edit(&state.docs, project, None));
+    }
+    if !state.renames_files {
+        return Err("this editor cannot rename files, so a shared struct cannot be renamed".to_string());
+    }
+    let sf = project.get(file).ok_or_else(|| format!("cannot find `{file}`"))?;
+    let base = struct_base(file);
+    let new_path = sf.path.with_file_name(format!("{new}.struct.rein"));
+    if new_path.exists() {
+        return Err(format!("{} already exists", new_path.display()));
+    }
+    for (f, span) in type_sites(project, file, old) {
+        edits.add(project, &f, Span::new(span.end - base.len(), span.end), new);
+    }
+    if s.name.value == base {
+        edits.add(project, file, s.name.span, new);
+    }
+    let old_uri = uri_for(&state.docs, &sf.path).ok_or("the file has no URI")?;
+    let new_uri = Url::from_file_path(&new_path).map_err(|()| "the new path has no URI".to_string())?;
+    Ok(edits.into_workspace_edit(&state.docs, project, Some((old_uri, new_uri))))
 }
 
 /// Renames the file of `target` to `<new>.rein` in the same folder. Every reference to it changes its last

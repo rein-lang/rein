@@ -1,5 +1,5 @@
-//! Go to definition: a reference goes to its function, a parameter name to its declaration, and a std name to
-//! its source.
+//! Go to definition: a reference goes to its function, a parameter name to its declaration, a struct type or a
+//! field name to its `interface`, and a std name to its source.
 
 use std::env;
 use std::fs;
@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use lsp_types::{Location, TextDocumentPositionParams, Url};
 
 use super::occurrences::{declaration, header_span, name_span, symbol_at, Symbol};
+use super::structs::{field_span, struct_decl};
 use super::text::{offset, range};
 use super::workspace::{canonical, locate, location, State};
 
@@ -20,6 +21,12 @@ pub fn definition(state: &State, p: &TextDocumentPositionParams) -> Option<Locat
         Symbol::Param { function, name: n } => {
             let input = declaration(&project.get(&function)?.function, &n)?;
             location(&state.docs, &project, &function, input.name.span)
+        }
+        Symbol::Struct { file, name: n } => {
+            location(&state.docs, &project, &file, struct_decl(&project, &file, &n)?.name.span)
+        }
+        Symbol::Field { file, strukt, name: n } => {
+            location(&state.docs, &project, &file, field_span(&project, &file, &strukt, &n)?)
         }
         Symbol::Std(n) => std_location(&n),
     }
