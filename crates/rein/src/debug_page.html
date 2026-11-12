@@ -40,7 +40,7 @@
 </style>
 </head>
 <body>
-<header><h1>rein debug</h1><label>Entry <select id="entry"></select></label><button id="back" type="button">Back</button><button id="reset" type="button">Reset</button></header>
+<header><h1>rein debug</h1><label>Entry <select id="entry"></select></label><button id="back" type="button">Back</button><button id="reset" type="button">Reset</button><button id="copy" type="button">Copy link</button></header>
 <main>
 <aside id="controls" aria-label="Inputs and answers"></aside>
 <section>
@@ -53,11 +53,40 @@
 import mermaid from "__MERMAID__";
 mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
 const initial = __INITIAL__;
-const state = { entry: initial.entry, inputs: { ...initial.inputs }, answers: { ...initial.answers }, order: Object.keys(initial.answers), placeholders: [] };
+const state = { entry: initial.entry, inputs: {}, answers: {}, order: [], placeholders: [] };
 let schema = { functions: [], inputs: {}, answers: [] };
 let renders = 0;
 let pending = 0;
 const $ = (id) => document.getElementById(id);
+
+// The query string holds the whole state: `entry`, `in.<name>` per input, `a.<key>` per answer. A link that
+// carries any of them wins over the starting values; otherwise the starting values are the state.
+function readUrl(start) {
+  const q = new URLSearchParams(location.search);
+  const keys = [...q.keys()];
+  if (!keys.some((k) => k === "entry" || k.startsWith("in.") || k.startsWith("a."))) {
+    Object.assign(state, { entry: start.entry, inputs: { ...start.inputs }, answers: { ...start.answers } });
+  } else {
+    state.entry = q.get("entry") || start.entry;
+    for (const [k, v] of q) {
+      if (v && k.startsWith("in.")) state.inputs[k.slice(3)] = v;
+      else if (v && k.startsWith("a.")) state.answers[k.slice(2)] = v;
+    }
+  }
+  state.order = Object.keys(state.answers);
+}
+
+// Every change writes the whole state to the URL with replaceState, so the address is always a shareable link.
+// It replaces rather than pushes: each keystroke would otherwise fill the Back history. Back still undoes answers.
+function writeUrl() {
+  const q = new URLSearchParams();
+  if (state.entry) q.set("entry", state.entry);
+  for (const [k, v] of Object.entries(state.inputs)) if (v) q.set("in." + k, v);
+  for (const k of state.order) if (state.answers[k]) q.set("a." + k, state.answers[k]);
+  history.replaceState(null, "", "?" + q);
+}
+
+readUrl(initial);
 
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
@@ -173,6 +202,7 @@ async function drawDiagram(text, keys) {
 
 async function walk() {
   const ticket = ++pending;
+  writeUrl();
   const body = JSON.stringify({ entry: state.entry, inputs: state.inputs, answers: state.answers });
   const out = await (await fetch("/walk", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
   if (ticket !== pending) return;
@@ -185,6 +215,21 @@ async function walk() {
 
 $("back").addEventListener("click", () => { const key = state.order.at(-1); if (key) setAnswer(key, ""); });
 $("reset").addEventListener("click", () => { state.inputs = { ...initial.inputs }; state.answers = {}; state.order = []; walk(); });
+// Copy the address of this page, which holds the state. The fallback selects the link in a field for a manual copy.
+$("copy").addEventListener("click", async () => {
+  const link = location.href;
+  try {
+    await navigator.clipboard.writeText(link);
+    $("copy").textContent = "Copied";
+    setTimeout(() => { $("copy").textContent = "Copy link"; }, 1500);
+  } catch {
+    const box = el("textarea", {}, link);
+    document.body.append(box);
+    box.select();
+    if (!document.execCommand("copy")) window.prompt("Copy this link:", link);
+    box.remove();
+  }
+});
 schema = await (await fetch("/schema")).json();
 const pick = $("entry");
 pick.append(...schema.functions.map((f) => el("option", { value: f }, f)));
