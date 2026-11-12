@@ -162,8 +162,20 @@ fn lex_word(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
     let rest = &src[pos..];
     let len = rest.find(|c: char| !is_ident_char(c)).unwrap_or(rest.len());
     let word = &rest[..len];
-    let tok = keyword(word).unwrap_or_else(|| Tok::Ident(word.to_string()));
-    Ok((tok, pos + len))
+    if let Some(tok) = keyword(word) {
+        return Ok((tok, pos + len));
+    }
+    let len = len + field_len(&rest[len..]);
+    Ok((Tok::Ident(rest[..len].to_string()), pos + len))
+}
+
+/// The length of a `.field` right after a name, as in `pick.pr`, or 0. One level only.
+fn field_len(rest: &str) -> usize {
+    let Some(field) = rest.strip_prefix('.') else { return 0 };
+    if !field.chars().next().is_some_and(is_ident_start) {
+        return 0;
+    }
+    1 + field.find(|c: char| !is_ident_char(c)).unwrap_or(field.len())
 }
 
 /// `/** ... */`. Returns the raw text between the markers. `/**/` is an empty doc block.
@@ -285,6 +297,7 @@ fn lex_template(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
                 let name_start = i + 2;
                 let rest = &src[name_start..];
                 let len = rest.find(|c: char| !is_ident_char(c)).unwrap_or(rest.len());
+                let len = len + field_len(&rest[len..]);
                 let name_end = name_start + len;
                 let valid = rest[..len].chars().next().is_some_and(is_ident_start) && src[name_end..].starts_with('}');
                 if !valid {

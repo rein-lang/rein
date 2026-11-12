@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{Function, Input, InputType};
+use crate::ast::{Function, Input, InputType, Struct};
 use crate::diagnostic::{line_col, Severity};
 use crate::eval::{self, Outcome};
 use crate::project::{Project, ENTRY};
@@ -23,7 +23,33 @@ pub const PROTOCOL_VERSION: u32 = 1;
 const HOP_LIMIT: usize = 64;
 
 /// The answers so far, keyed by `<function path>.<name>`, such as `merge_pr.ci` or `answer/faq.solved`.
+///
+/// A struct answer is a JSON object. In memory it is the object's JSON text. On the wire it is a real JSON object.
 pub type Answers = BTreeMap<String, String>;
+
+/// Serde for [`Answers`]: a struct answer is a JSON object on the wire, every other answer a string.
+mod answers_json {
+    use super::Answers;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    pub fn serialize<S: Serializer>(answers: &Answers, s: S) -> Result<S::Ok, S::Error> {
+        let wire: BTreeMap<&String, Value> = answers
+            .iter()
+            .map(|(k, v)| {
+                let object = serde_json::from_str::<Value>(v).ok().filter(Value::is_object);
+                (k, object.unwrap_or_else(|| Value::String(v.clone())))
+            })
+            .collect();
+        serde::Serialize::serialize(&wire, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Answers, D::Error> {
+        let wire = BTreeMap::<String, Value>::deserialize(d)?;
+        Ok(wire.into_iter().map(|(k, v)| (k, if let Value::String(t) = v { t } else { v.to_string() })).collect())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepRequest {
@@ -32,7 +58,7 @@ pub struct StepRequest {
     /// Function path to start from. Default `main`.
     #[serde(default = "default_entry")]
     pub entry: String,
-    #[serde(default)]
+    #[serde(default, with = "answers_json")]
     pub answers: Answers,
     /// Flow name to step, resolved by the caller through `flows::resolve`. Absent when the caller
     /// passes a root instead. The stepping itself ignores it: it runs on the project it is given.
@@ -63,6 +89,7 @@ pub enum StepResponse {
         r#type: String,
         options: Option<Vec<String>>,
         description: String,
+        #[serde(with = "answers_json")]
         answers: Answers,
         trace: Vec<String>,
     },
@@ -73,6 +100,7 @@ pub enum StepResponse {
         function: String,
         instruction: String,
         response: ResponseSpec,
+        #[serde(with = "answers_json")]
         answers: Answers,
         trace: Vec<String>,
     },
@@ -80,6 +108,7 @@ pub enum StepResponse {
     Done {
         version: u32,
         instruction: String,
+        #[serde(with = "answers_json")]
         answers: Answers,
         trace: Vec<String>,
     },
@@ -89,6 +118,7 @@ pub enum StepResponse {
         /// The answer key the message is about, when there is one.
         key: Option<String>,
         diagnostics: Vec<StepDiagnostic>,
+        #[serde(with = "answers_json")]
         answers: Answers,
         trace: Vec<String>,
     },
@@ -97,6 +127,18 @@ pub enum StepResponse {
 /// The answer a request asks for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseSpec {
+    pub name: String,
+    pub r#type: String,
+    pub options: Option<Vec<String>>,
+    pub description: String,
+    /// The fields of a struct answer, when `type` is `struct`. The answer is a JSON object with exactly these fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<FieldSpec>>,
+}
+
+/// One field of a struct answer. `type` is `boolean`, `union` or `string`; a union lists its `options`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldSpec {
     pub name: String,
     pub r#type: String,
     pub options: Option<Vec<String>>,
@@ -248,6 +290,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                     r#type,
                     options,
                     description: input.description.value.clone(),
+                    fields: sf.function.answer_struct(&response).and_then(|s| s.as_ref().ok()).map(field_specs),
                 };
                 return StepResponse::Request {
                     version: PROTOCOL_VERSION,
@@ -292,8 +335,19 @@ fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
+        InputType::Struct(_) => "struct",
     };
     (name.to_string(), options)
+}
+
+fn field_specs(s: &Struct) -> Vec<FieldSpec> {
+    s.fields
+        .iter()
+        .map(|f| {
+            let (r#type, options) = type_of(f);
+            FieldSpec { name: f.name.value.clone(), r#type, options, description: f.description.value.clone() }
+        })
+        .collect()
 }
 
 /// Errors of every file and of the project, in a fixed order. Warnings are left out. A program is its entry file,
@@ -331,30 +385,25 @@ fn error_diagnostics(project: &Project, entry: &str) -> Vec<StepDiagnostic> {
 /// The `(key, message)` of the first answer that names no parameter or answer, or has a bad value.
 fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, String)> {
     for (key, raw) in answers {
-        let Some(input) = declared(project, key) else {
+        let Some((function, input)) = declared(project, key) else {
             return Err((key.clone(), format!("unknown key `{key}`")));
         };
-        if input.ty == InputType::Text && f_has_param(project, key) {
+        if input.ty == InputType::Text {
             return Err((
                 key.clone(),
                 format!("`{key}` is a string parameter; only a template takes one"),
             ));
         }
-        eval::check_value(input, raw).map_err(|message| (key.clone(), message))?;
+        eval::check_value(function, input, raw).map_err(|message| (key.clone(), message))?;
     }
     Ok(())
 }
 
-/// True when `key` names a parameter, not a `const` answer.
-fn f_has_param(project: &Project, key: &str) -> bool {
-    key.rsplit_once('.').is_some_and(|(function, name)| project.get(function).is_some_and(|sf| sf.function.input(name).is_some()))
-}
-
 /// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key.
-fn declared<'a>(project: &'a Project, key: &str) -> Option<&'a Input> {
+fn declared<'a>(project: &'a Project, key: &str) -> Option<(&'a Function, &'a Input)> {
     let (function, name) = key.rsplit_once('.')?;
     let f = &project.get(function)?.function;
-    f.input(name).or_else(|| f.response(name))
+    f.input(name).or_else(|| f.response(name)).map(|i| (f, i))
 }
 
 /// The error for a `string` input that was not given.

@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::ast::{Arg, Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
-use crate::check::string_in_condition;
+use crate::ast::{Arg, Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, Struct, TemplateLit, Value};
+use crate::check::{string_in_condition, struct_in_use};
 
 /// Result of a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +49,14 @@ pub fn run(
     if let Some(name) = unknown.first() {
         return Err(format!("unknown input `{name}`"));
     }
-    let env = Env { f, inputs, bindings, answers: RefCell::new(Vec::new()) };
+    // A struct answer also gives one input per field, named `answer.field`.
+    let mut expanded = inputs.clone();
+    for (name, found) in &f.answer_structs {
+        if let (Ok(s), Some(raw)) = (found, inputs.get(name)) {
+            expanded.extend(struct_values(name, s, raw).unwrap_or_default());
+        }
+    }
+    let env = Env { f, inputs: &expanded, bindings, answers: RefCell::new(Vec::new()) };
     match exec(&env, &f.body) {
         Ok(Some(out)) => Ok(out),
         Ok(None) => Err("no return reached; every path must return".to_string()),
@@ -76,7 +83,7 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                 let Some(raw) = env.inputs.get(name) else {
                     return Err(Stop::Request { instruction, response: name.to_string() });
                 };
-                check_answer(response, raw)?;
+                check_answer(env.f, response, raw)?;
                 env.answers.borrow_mut().push(response);
                 None
             }
@@ -103,6 +110,7 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                     InputType::Choice(members) => members,
                     InputType::Text => return Err(Stop::Error(string_in_condition(&subject.value))),
                     InputType::Bool => return Err(bool_in_switch(&subject.value)),
+                    InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&subject.value))),
                 };
                 let raw = provided(env, &subject.value)?;
                 check_member(&subject.value, members, raw)?;
@@ -137,6 +145,7 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
                         return Err(Stop::Error(format!("boolean parameter `{}` cannot be interpolated", n.value)));
                     }
                     InputType::Choice(members) => check_member(&n.value, members, provided(env, &n.value)?)?,
+                    InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&n.value))),
                     InputType::Text => {}
                 }
                 out.push_str(provided(env, &n.value)?);
@@ -211,6 +220,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
             let input = declared(env, &v.value)?;
             match input.ty {
                 InputType::Text => Err(Stop::Error(string_in_condition(&v.value))),
+                InputType::Struct(_) => Err(Stop::Error(struct_in_use(&v.value))),
                 InputType::Bool => parse_bool(&v.value, provided(env, &v.value)?),
                 InputType::Choice(_) => Err(Stop::Error(format!(
                     "union parameter `{0}` needs a comparison, like `{0} === \"...\"`",
@@ -223,6 +233,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
             let InputType::Choice(members) = &input.ty else {
                 return Err(match input.ty {
                     InputType::Text => Stop::Error(string_in_condition(&var.value)),
+                    InputType::Struct(_) => Stop::Error(struct_in_use(&var.value)),
                     _ => bool_compared(&var.value),
                 });
             };
@@ -238,6 +249,12 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
 }
 
 fn declared<'a>(env: &Env<'a>, name: &str) -> Eval<&'a Input> {
+    // `answer.field` is in scope when the struct answer is.
+    let base = name.split_once('.').map_or(name, |(base, _)| base);
+    let in_scope = env.answers.borrow().iter().any(|i| i.name.value == base);
+    if base != name && in_scope {
+        return env.f.response(name).ok_or_else(|| Stop::Error(format!("unknown parameter `{name}`")));
+    }
     let answer = env.answers.borrow().iter().rev().find(|i| i.name.value == name).copied();
     answer
         .or_else(|| env.f.input(name))
@@ -245,19 +262,61 @@ fn declared<'a>(env: &Env<'a>, name: &str) -> Eval<&'a Input> {
 }
 
 /// Checks a value the agent gave for a `const` answer, as it checks a parameter.
-fn check_answer(input: &Input, raw: &str) -> Eval<()> {
+fn check_answer(f: &Function, input: &Input, raw: &str) -> Eval<()> {
     let name = input.name.value.as_str();
     match &input.ty {
         InputType::Bool => parse_bool(name, raw).map(|_| ()),
         InputType::Choice(members) => check_member(name, members, raw),
-        InputType::Text if raw.is_empty() => Err(Stop::Error(format!("the answer `{name}` is empty; give some text"))),
         InputType::Text => Ok(()),
+        InputType::Struct(_) => match f.answer_struct(name) {
+            Some(Ok(s)) => struct_values(name, s, raw).map(|_| ()).map_err(Stop::Error),
+            Some(Err(msg)) => Err(Stop::Error(msg.clone())),
+            None => Err(Stop::Error(format!("`{name}` is not a struct answer"))),
+        },
     }
 }
 
+/// Checks a struct answer: a JSON object with every field of `s`, no other field, and a valid value in each.
+/// Returns the value of each field as text, keyed `name.field`. A string is its text, a boolean is `true` or `false`.
+pub fn struct_values(name: &str, s: &Struct, raw: &str) -> Result<Vec<(String, String)>, String> {
+    let fields: Vec<&str> = s.fields.iter().map(|f| f.name.value.as_str()).collect();
+    let example = fields.iter().map(|f| format!("\"{f}\": ...")).collect::<Vec<_>>().join(", ");
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str(raw) else {
+        return Err(format!("the answer `{name}` must be a JSON object, like {{{example}}}"));
+    };
+    if let Some(extra) = map.keys().find(|k| !fields.contains(&k.as_str())) {
+        return Err(format!("`{extra}` is not a field of `{}`; fields are {}", s.name.value, fields.join(", ")));
+    }
+    let mut out = Vec::new();
+    for field in &s.fields {
+        let key = format!("{name}.{}", field.name.value);
+        let Some(value) = map.get(&field.name.value) else {
+            return Err(format!("the answer `{name}` is missing field `{}`", field.name.value));
+        };
+        let text = match (&field.ty, value) {
+            (InputType::Bool, serde_json::Value::Bool(b)) => b.to_string(),
+            (InputType::Bool, _) => return Err(format!("field `{key}` must be true or false")),
+            (InputType::Text, serde_json::Value::String(t)) if t.is_empty() => {
+                return Err(format!("field `{key}` is empty; give some text"));
+            }
+            (InputType::Text, serde_json::Value::String(t)) => t.clone(),
+            (InputType::Choice(members), serde_json::Value::String(t)) => {
+                if let Err(Stop::Error(m)) = check_member(&key, members, t) {
+                    return Err(m);
+                }
+                t.clone()
+            }
+            (InputType::Text | InputType::Choice(_), _) => return Err(format!("field `{key}` must be a string")),
+            (InputType::Struct(_), _) => return Err(format!("field `{key}` cannot be a struct")),
+        };
+        out.push((key, text));
+    }
+    Ok(out)
+}
+
 /// Checks one value the agent gives for a parameter or `const` answer. Returns the error text when it is not valid.
-pub fn check_value(input: &Input, raw: &str) -> Result<(), String> {
-    match check_answer(input, raw) {
+pub fn check_value(f: &Function, input: &Input, raw: &str) -> Result<(), String> {
+    match check_answer(f, input, raw) {
         Err(Stop::Error(msg)) => Err(msg),
         _ => Ok(()),
     }

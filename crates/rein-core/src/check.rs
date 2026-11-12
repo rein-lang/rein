@@ -148,6 +148,11 @@ fn missing_members<'a>(f: &'a Function, subject: &str, cases: &[Case]) -> Vec<&'
     }
 }
 
+/// A struct answer has no value of its own; only its fields do.
+pub fn struct_in_use(name: &str) -> String {
+    format!("`{name}` is a struct answer; read one of its fields, like `{name}.field`")
+}
+
 /// A `string` input cannot decide a branch. A condition and a switch subject both give this error.
 pub fn string_in_condition(name: &str) -> String {
     format!("`{name}` is a string input; a condition cannot read it")
@@ -200,7 +205,12 @@ impl<'a> Checker<'a> {
     }
 
     fn unknown(&mut self, name: &Spanned<String>) {
-        if self.pending.contains(&name.value) {
+        let (base, field) = name.value.split_once('.').unwrap_or((&name.value, ""));
+        let known = self.answers.iter().any(|i| i.name.value == base);
+        if let (true, Some(Ok(s))) = (known && !field.is_empty(), self.f.answer_struct(base)) {
+            let fields: Vec<&str> = s.fields.iter().map(|f| f.name.value.as_str()).collect();
+            self.error(name.span, format!("`{field}` is not a field of `{}`; fields are {}", s.name.value, fields.join(", ")));
+        } else if self.pending.iter().any(|p| p == base) {
             self.error(name.span, format!("`{}` is used before it is declared", name.value));
         } else {
             self.error(name.span, format!("unknown parameter `{}`", name.value));
@@ -209,6 +219,10 @@ impl<'a> Checker<'a> {
 
     /// What a name refers to here: an answer declared earlier in an enclosing block, or a parameter.
     fn lookup(&self, name: &str) -> Option<InputType> {
+        if let Some((base, _)) = name.split_once('.') {
+            let known = self.answers.iter().any(|i| i.name.value == base);
+            return self.f.response(name).filter(|_| known).map(|i| i.ty.clone());
+        }
         self.answers
             .iter()
             .rev()
@@ -231,8 +245,10 @@ impl<'a> Checker<'a> {
     /// A bare name as a call argument: it must be a `string` parameter of this function.
     fn string_arg(&mut self, name: &Spanned<String>) {
         self.used.insert(name.value.clone());
-        if self.lookup(&name.value) != Some(InputType::Text) {
-            self.error(name.span, format!("`{}` is not a string input", name.value));
+        match self.lookup(&name.value) {
+            Some(InputType::Text) => {}
+            None if name.value.contains('.') => self.unknown(name),
+            _ => self.error(name.span, format!("`{}` is not a string input", name.value)),
         }
     }
 
@@ -350,10 +366,17 @@ impl<'a> Checker<'a> {
     /// function's struct parameter names it.
     fn structs(&mut self) {
         let f = self.f;
-        let used = f.struct_param().and_then(|p| match &p.ty {
-            StructRef::Local(n) => Some(n.value.as_str()),
-            StructRef::Ref(_) => None,
-        });
+        let answers = f.answer_struct_refs().into_iter().map(|(_, r)| r);
+        let used: Vec<String> = f
+            .struct_param()
+            .map(|p| p.ty.clone())
+            .into_iter()
+            .chain(answers)
+            .filter_map(|r| match r {
+                StructRef::Local(n) => Some(n.value),
+                StructRef::Ref(_) => None,
+            })
+            .collect();
         for s in &f.structs {
             if s.export.is_some() {
                 self.error(
@@ -361,7 +384,7 @@ impl<'a> Checker<'a> {
                     format!("input struct `{}` cannot be exported; to share it, move it to its own `.struct.rein` file", s.name.value),
                 );
             }
-            if used != Some(s.name.value.as_str()) {
+            if !used.contains(&s.name.value) {
                 self.warning(
                     s.name.span,
                     format!("unused struct `{}`; an inline struct is the input of the function in its file", s.name.value),
@@ -478,6 +501,18 @@ impl<'a> Checker<'a> {
                         format!("const `{name}` needs a doc comment: /** question */ const {name}: ..."),
                     );
                 }
+                match &response.ty {
+                    InputType::Text => self.error(
+                        response.name.span,
+                        "a `string` answer is not allowed; answer a struct with a `string` field",
+                    ),
+                    InputType::Struct(r) => {
+                        if let Some(Err(msg)) = self.f.answer_struct(name) {
+                            self.error(r.name().span, msg.clone());
+                        }
+                    }
+                    InputType::Bool | InputType::Choice(_) => {}
+                }
                 if self.f.input(name).is_some() || self.names.contains(name) {
                     self.error(response.name.span, format!("duplicate name `{name}`"));
                 }
@@ -584,6 +619,7 @@ impl<'a> Checker<'a> {
                         n.span,
                         format!("boolean parameter `{}` cannot be interpolated; only union parameters can go in a template", n.value),
                     ),
+                    Some(InputType::Struct(_)) => self.error(n.span, struct_in_use(&n.value)),
                     Some(_) => {}
                 }
             }
@@ -604,7 +640,8 @@ impl<'a> Checker<'a> {
                         );
                     }
                     Some(InputType::Text) => self.error(v.span, string_in_condition(&v.value)),
-                    Some(_) => {}
+                    Some(InputType::Struct(_)) => self.error(v.span, struct_in_use(&v.value)),
+                    Some(InputType::Bool) => {}
                 }
             }
             Expr::Compare { var, value, .. } => {
@@ -618,6 +655,7 @@ impl<'a> Checker<'a> {
                     ),
                     Some(InputType::Choice(members)) => self.check_member(n, value, &members),
                     Some(InputType::Text) => self.error(var.span, string_in_condition(n)),
+                    Some(InputType::Struct(_)) => self.error(var.span, struct_in_use(n)),
                 }
             }
             Expr::Not(inner, _) => self.expr(inner),
@@ -648,6 +686,7 @@ impl<'a> Checker<'a> {
                 format!("boolean parameter `{n}` cannot be used in a switch; use `if ({n})` or `if (!{n})`"),
             ),
             Some(InputType::Text) => self.error(subject.span, string_in_condition(n)),
+            Some(InputType::Struct(_)) => self.error(subject.span, struct_in_use(n)),
             Some(InputType::Choice(members)) => {
                 let mut seen: Vec<&str> = Vec::new();
                 for c in cases {

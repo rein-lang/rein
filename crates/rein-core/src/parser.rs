@@ -88,7 +88,16 @@ impl Parser {
         }
     }
 
+    /// A name of one word. A declaration cannot name a field, so `a.b` is an error here.
     fn ident(&mut self, expected: &str) -> Result<Spanned<String>, Diagnostic> {
+        if matches!(self.peek(), Tok::Ident(v) if v.contains('.')) {
+            return Err(Diagnostic::error(self.span(), "a name is one word; a `.` reads a field of a struct answer"));
+        }
+        self.path(expected)
+    }
+
+    /// A name, or a field of a struct answer such as `pick.pr`.
+    fn path(&mut self, expected: &str) -> Result<Spanned<String>, Diagnostic> {
         if let Tok::Ident(value) = self.peek().clone() {
             let span = self.bump();
             Ok(Spanned { value, span })
@@ -170,6 +179,14 @@ impl Parser {
                 format!("cannot find struct `{0}`; declare `interface {0} {{ ... }}` in this file", name.value)
             });
             f.bind_struct(found);
+        }
+        for (answer, r) in f.answer_struct_refs() {
+            if let StructRef::Local(name) = r {
+                let found = f.structs.iter().find(|s| s.name.value == name.value).cloned().ok_or_else(|| {
+                    format!("cannot find struct `{0}`; declare `interface {0} {{ ... }}` in this file", name.value)
+                });
+                f.bind_answer_struct(&answer, found);
+            }
         }
         Ok(())
     }
@@ -284,6 +301,17 @@ impl Parser {
         Ok(Input { span, name, ty, description, doc })
     }
 
+    /// The type of a `request` answer: a struct name or a `@./` reference, or a scalar type. The checker accepts a struct.
+    fn answer_type(&mut self) -> Result<InputType, Diagnostic> {
+        match self.peek().clone() {
+            Tok::Ref(path) => Ok(InputType::Struct(StructRef::Ref(Spanned { value: path, span: self.bump() }))),
+            Tok::Ident(name) if name != "string" => {
+                Ok(InputType::Struct(StructRef::Local(Spanned { value: name, span: self.bump() })))
+            }
+            _ => self.param_type(),
+        }
+    }
+
     /// `boolean`, or a union of strings with an optional leading `|`.
     fn param_type(&mut self) -> Result<InputType, Diagnostic> {
         if *self.peek() == Tok::Boolean {
@@ -346,7 +374,7 @@ impl Parser {
     fn switch_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         let start = self.bump();
         self.expect(Tok::LParen, "`(`")?;
-        let subject = self.ident("parameter name")?;
+        let subject = self.path("parameter name")?;
         self.expect(Tok::RParen, "`)`")?;
         self.expect(Tok::LBrace, "`{`")?;
         let mut cases = Vec::new();
@@ -434,7 +462,7 @@ impl Parser {
         };
         let name = self.ident("answer name")?;
         self.expect(Tok::Colon, "`:`")?;
-        let ty = self.param_type()?;
+        let ty = self.answer_type()?;
         if *self.peek() != Tok::Assign {
             return Err(Diagnostic::error(start, NO_VARIABLES));
         }
@@ -608,7 +636,7 @@ impl Parser {
         if let Some(d) = self.bool_literal_error() {
             return Err(d);
         }
-        let var = self.ident("parameter name")?;
+        let var = self.path("parameter name")?;
         let equal = match self.peek() {
             Tok::EqEqEq => true,
             Tok::NotEqEq => false,
