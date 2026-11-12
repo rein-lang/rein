@@ -6,7 +6,6 @@ pub mod eval;
 pub mod flows;
 pub mod graph;
 pub mod lexer;
-pub mod lock;
 pub mod parser;
 pub mod project;
 #[cfg(test)]
