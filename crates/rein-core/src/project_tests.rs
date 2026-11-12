@@ -1017,6 +1017,32 @@ fn unreachable_functions_get_no_nesting_warning() {
 }
 
 #[test]
+fn unknown_reachability_gives_no_nesting_warning() {
+    // `u` and `v` only call each other. Reachability from main is unknown when main has a syntax error, and
+    // also when main is missing. Neither case may tell `u` and `v` to move into each other's folder.
+    let broken = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./u"),
+        ("u", "/** u */\nexport default function u() { return @./v }\n"),
+        ("v", "/** v */\nexport default function v() { return @./u }\n"),
+    ]);
+    let root = PathBuf::from("/proj");
+    let missing = Project::from_sources(
+        root.clone(),
+        vec![
+            (root.join("u.rein"), "/** u */\nexport default function u() { return @./v }\n".to_string()),
+            (root.join("v.rein"), "/** v */\nexport default function v() { return @./u }\n".to_string()),
+        ],
+    );
+    for project in [&broken, &missing] {
+        let diags = project.check();
+        for name in ["u", "v"] {
+            assert!(!has(&diags[name], Severity::Warning, "only called by"), "{name}: {:?}", diags[name]);
+            assert_eq!(project.nest_target(name), None, "{name}");
+        }
+    }
+}
+
+#[test]
 fn reachability_starts_at_the_entry_from_the_manifest() {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let root = std::env::temp_dir().join(format!("rein-core-entry-{}-{nanos}", std::process::id()));

@@ -462,17 +462,20 @@ impl Project {
 
     /// The nesting warning of each function that is not where the rule puts it. A function not reachable from
     /// the entry is left out: the reachability warning covers it, and unreachable functions that call each
-    /// other would each be told to move into the other's folder. A target path that another file already has
-    /// is left out too, since the move cannot happen. Two functions with one target name each other.
+    /// other would each be told to move into the other's folder. When reachability is unknown (the entry is
+    /// missing or has a syntax error), no function is left out on that ground, so none gets a warning at all.
+    /// A target path that another file already has is left out too, since the move cannot happen. Two
+    /// functions with one target name each other.
     fn placements(
         &self,
         adj: &BTreeMap<String, BTreeSet<String>>,
         reachable: Option<&BTreeSet<String>>,
     ) -> BTreeMap<String, Placement> {
+        let Some(reachable) = reachable else { return BTreeMap::new() };
         let callers = callers_of(adj);
         let mut out: BTreeMap<String, Placement> = BTreeMap::new();
         for (name, _) in self.functions() {
-            if reachable.is_some_and(|r| !r.contains(name)) {
+            if !reachable.contains(name) {
                 continue;
             }
             let Some((caller, home)) = self.misplaced(name, &callers) else { continue };
@@ -690,7 +693,7 @@ fn collect(
 }
 
 /// Whether the loader skips a folder of this name: hidden folders, `target` and `node_modules`.
-fn skipped_folder(name: &str) -> bool {
+pub fn skipped_folder(name: &str) -> bool {
     name.starts_with('.') || name == "target" || name == "node_modules"
 }
 
