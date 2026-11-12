@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::ast::{Binding, Call, Callee, Expr, Function, Piece, ReturnValue, Stmt, Value};
+use crate::ast::{Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
 use crate::project::{Project, SourceFile};
 
 /// Version of the JSON schema. Bump it when a field changes meaning or goes away.
@@ -217,8 +217,13 @@ impl<'a> Builder<'a> {
                     self.block(f, &case.body, (node.clone(), Some(label)));
                 }
             }
-            Stmt::Request { arg, .. } => {
-                let node = self.step_to(from, NodeKind::Request, format!("request: {}", value_text(arg)));
+            Stmt::Request { response, arg, .. } => {
+                let mut label = format!("request: {}", value_text(arg));
+                // A struct answer shows its name and struct, like `pick: Pick`.
+                if matches!(response.ty, InputType::Struct(_)) {
+                    label.push_str(&format!("\n{}: {}", response.name.value, response.ty.ts_type()));
+                }
+                let node = self.step_to(from, NodeKind::Request, label);
                 if let Value::Call(call) = arg {
                     self.template_edges(&node, call);
                 }

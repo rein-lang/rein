@@ -224,7 +224,16 @@ pub(crate) fn print_step(response: &StepResponse, as_json: bool) {
         StepResponse::Request { key, instruction, response, answers, trace, .. } => {
             println!("request: {instruction}");
             println!("then answer: {key}: {} - {}", shown_type(&response.r#type, &response.options), response.description);
-            println!("hint: rerun with --answer {key}=<value>");
+            let fields = response.fields.as_deref().unwrap_or_default();
+            for f in fields {
+                println!("  {}: {} - {}", f.name, shown_type(&f.r#type, &f.options), f.description);
+            }
+            if fields.is_empty() {
+                println!("hint: rerun with --answer {key}=<value>");
+            } else {
+                let shape: Vec<String> = fields.iter().map(|f| format!("\"{}\":...", f.name)).collect();
+                println!("hint: rerun with --answer {key}='{{{}}}'", shape.join(","));
+            }
             print_answers(answers);
             println!("trace: {}", trace.join(" -> "));
         }
@@ -247,7 +256,11 @@ fn print_answers(answers: &BTreeMap<String, String>) {
     if answers.is_empty() {
         return;
     }
-    let flags: Vec<String> = answers.iter().map(|(k, v)| format!("--answer {k}={v}")).collect();
+    // A struct answer is JSON text, so it needs quotes in a shell.
+    let flags: Vec<String> = answers
+        .iter()
+        .map(|(k, v)| if v.starts_with('{') { format!("--answer {k}='{v}'") } else { format!("--answer {k}={v}") })
+        .collect();
     println!("answers: {}", flags.join(" "));
 }
 
@@ -428,6 +441,7 @@ fn input_json(input: &Input) -> Value {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
+        InputType::Struct(_) => "struct",
     };
     let mut v = json!({
         "name": input.name.value,

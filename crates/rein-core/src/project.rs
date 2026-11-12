@@ -133,17 +133,24 @@ impl Project {
 
     /// Binds each `{ ... }: @./name` parameter to the `export default interface` of `name.struct.rein`.
     fn bind_structs(&mut self) {
-        let found: Vec<(String, Result<Struct, String>)> = self
-            .files
-            .iter()
-            .filter_map(|(name, sf)| {
-                let StructRef::Ref(r) = &sf.function.struct_param()?.ty else { return None };
-                Some((name.clone(), self.struct_for(name, &r.value).map(|(_, s)| s.clone())))
-            })
-            .collect();
-        for (name, s) in found {
+        // `(file, answer name or None for the parameter, struct)`.
+        let mut found: Vec<(String, Option<String>, Result<Struct, String>)> = Vec::new();
+        for (name, sf) in &self.files {
+            let f = &sf.function;
+            let param = f.struct_param().map(|p| (None, p.ty.clone()));
+            let answers = f.answer_struct_refs().into_iter().map(|(a, r)| (Some(a), r));
+            for (answer, r) in param.into_iter().chain(answers) {
+                if let StructRef::Ref(r) = &r {
+                    found.push((name.clone(), answer, self.struct_for(name, &r.value).map(|(_, s)| s.clone())));
+                }
+            }
+        }
+        for (name, answer, s) in found {
             if let Some(sf) = self.files.get_mut(&name) {
-                sf.function.bind_struct(s);
+                match answer {
+                    None => sf.function.bind_struct(s),
+                    Some(a) => sf.function.bind_answer_struct(&a, s),
+                }
             }
         }
     }

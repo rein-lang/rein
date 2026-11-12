@@ -204,8 +204,17 @@ fn template_dedent_keeps_interpolations() {
 }
 
 #[test]
+fn a_name_may_read_one_field_of_a_struct_answer() {
+    let toks = lex("pick.pr").unwrap();
+    assert_eq!(toks[0].0, Tok::Ident("pick.pr".into()));
+    let toks = lex("`${pick.pr}`").unwrap();
+    let Tok::Template(pieces) = &toks[0].0 else { panic!("{:?}", toks[0].0) };
+    assert!(matches!(&pieces[0], Piece::Name(n) if n.value == "pick.pr"));
+}
+
+#[test]
 fn template_literal_only_takes_a_name() {
-    let err = lex("`${a.b}`").unwrap_err();
+    let err = lex("`${a-b}`").unwrap_err();
     assert_eq!(
         err.message,
         "only a parameter name can go in `${}`; write `${name}`"

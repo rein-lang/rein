@@ -31,6 +31,11 @@ pub struct Function {
     /// The struct that the struct parameter names, or why it does not resolve. `None` when the function has no
     /// struct parameter, or when a `@./` struct was not resolved, as in a file parsed outside a project.
     pub input_struct: Option<Result<Struct, String>>,
+    /// The struct of each struct answer, by answer name, or why it does not resolve. Filled by
+    /// [`Function::bind_answer_struct`]: an inline struct when the file parses, a `@./` struct when the project loads.
+    pub answer_structs: std::collections::BTreeMap<String, Result<Struct, String>>,
+    /// One input per field of each struct answer, named `answer.field`, such as `pick.pr`.
+    pub answer_fields: Vec<Input>,
     /// The name after `export default function`. `None` when the file has no function.
     pub name: Option<Spanned<String>>,
     pub body: Vec<Stmt>,
@@ -72,7 +77,37 @@ impl Function {
                 }
             }
         });
-        found
+        found.or_else(|| self.answer_fields.iter().find(|i| i.name.value == name))
+    }
+
+    /// Every struct answer of the body, as `(answer name, struct it names)`.
+    pub fn answer_struct_refs(&self) -> Vec<(String, StructRef)> {
+        let mut out = Vec::new();
+        walk_stmts(&self.body, &mut |s| {
+            if let Stmt::Request { response, .. } = s {
+                if let InputType::Struct(r) = &response.ty {
+                    out.push((response.name.value.clone(), r.clone()));
+                }
+            }
+        });
+        out
+    }
+
+    /// The struct that the struct answer `name` names, or why it does not resolve.
+    pub fn answer_struct(&self, name: &str) -> Option<&Result<Struct, String>> {
+        self.answer_structs.get(name)
+    }
+
+    /// Records what the struct answer `name` names, and adds one input per field, named `name.field`.
+    pub fn bind_answer_struct(&mut self, name: &str, found: Result<Struct, String>) {
+        let at = self.response(name).map(|i| i.name.span).unwrap_or_default();
+        if let Ok(s) = &found {
+            for field in &s.fields {
+                let name = Spanned { value: format!("{name}.{}", field.name.value), span: at };
+                self.answer_fields.push(Input { name, span: at, ..field.clone() });
+            }
+        }
+        self.answer_structs.insert(name.to_string(), found);
     }
 
     /// A template is never run by itself. See [`Function::template_literal`].
@@ -240,14 +275,16 @@ pub enum InputType {
     Bool,
     /// A union of string literals. `choice` is the name the CLI and JSON use.
     Choice(Vec<Spanned<String>>),
-    /// `string`. Only a template takes it.
+    /// `string`. Only a template takes it, and a field of a struct answer.
     Text,
+    /// A struct answer: an inline `interface` or a shared `@./name`. Only a `request` answer has it.
+    Struct(StructRef),
 }
 
 impl InputType {
     pub fn options(&self) -> Option<Vec<&str>> {
         match self {
-            InputType::Bool | InputType::Text => None,
+            InputType::Bool | InputType::Text | InputType::Struct(_) => None,
             InputType::Choice(o) => Some(o.iter().map(|s| s.value.as_str()).collect()),
         }
     }
@@ -257,6 +294,7 @@ impl InputType {
         match self {
             InputType::Bool => "boolean".to_string(),
             InputType::Text => "string".to_string(),
+            InputType::Struct(r) => r.name().value.clone(),
             InputType::Choice(o) => o.iter().map(|s| format!("\"{}\"", s.value)).collect::<Vec<_>>().join(" | "),
         }
     }

@@ -1,8 +1,9 @@
 //! A program hands off to another installed program by name. Programs come from a temp REIN_HOME.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn rein(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rein"))
@@ -66,26 +67,41 @@ fn check_rejects_an_unknown_program() {
 }
 
 #[test]
-fn step_carries_a_string_answer_into_a_program_hand_off() {
-    let home = std::env::temp_dir().join(format!("rein-handoff-string-{}", std::process::id()));
+fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
+    let home = std::env::temp_dir().join(format!("rein-handoff-struct-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     program(&home, "pr-handling", TARGET);
-    program(&home, "picker", "/** Picks a PR. */\nexport default async function main() {\n  /** The link of the PR you picked. */\n  const pr: string = await request(\"Pick the next PR and answer its link.\");\n  return @pr-handling/main(pr=pr);\n}\n");
+    program(&home, "picker", "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n}\n/** Picks a PR. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(\"Pick the next pull request notification.\");\n  return @pr-handling/main(pr=pick.pr);\n}\n");
     let out = rein(&home, &["check", home.join("picker").to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 
     let out = rein(&home, &["step", "picker", "--json"]);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("\"type\":\"string\"") && text.contains("main.pr"), "{text}");
+    assert!(text.contains("\"type\":\"struct\"") && text.contains("\"fields\"") && text.contains("main.pick"), "{text}");
 
-    let out = rein(&home, &["step", "picker", "--answer", "main.pr=", "--json"]);
+    let out = rein(&home, &["step", "picker", "--answer", "main.pick={\"pr\":\"\",\"task\":\"merge\"}", "--json"]);
     assert!(!out.status.success());
-    let out = rein(&home, &["step", "picker", "--answer", "main.pr=https://x/pr/1 (draft)", "--json"]);
+    let out = rein(&home, &["step", "picker", "--answer", "main.pick={\"pr\":\"https://x/pr/1 (draft)\",\"task\":\"merge\"}", "--json"]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("@pr-handling/main.draft"), "{text}");
 
-    let out = rein(&home, &["step", "picker", "--answer", "main.pr=https://x/pr/1", "--answer", "@pr-handling/main.draft=false", "--json"]);
+    let out = rein(&home, &["step", "picker", "--answer", "main.pick={\"pr\":\"https://x/pr/1\",\"task\":\"merge\"}", "--answer", "@pr-handling/main.draft=false", "--json"]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("Handle https://x/pr/1."), "{text}");
+
+    // On stdin the answer is a real JSON object.
+    let request = r#"{"entry":"main","answers":{"main.pick":{"pr":"https://x/pr/2","task":"review"},"@pr-handling/main.draft":"false"}}"#;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .args(["step", "picker", "--stdin"])
+        .env("REIN_HOME", &home)
+        .env("REIN_SYSTEM_DIRS", home.join("none"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(request.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Handle https://x/pr/2.") && text.contains("\"main.pick\":{\"pr\""), "{text}");
     fs::remove_dir_all(&home).unwrap();
 }

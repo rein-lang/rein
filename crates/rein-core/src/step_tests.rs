@@ -178,6 +178,7 @@ fn async_request_stops_then_the_answer_continues() {
                 r#type: "boolean".into(),
                 options: None,
                 description: "Did the article solve it?".into(),
+                fields: None,
             },
             answers: answers(&[("answer/faq.articleFound", "yes")]),
             trace: trace(&["main", "answer/faq"]),
@@ -636,17 +637,68 @@ fn step_follows_a_hand_off_into_another_program() {
     assert_eq!(instruction, "Do merge on https://x/pr/1.");
 }
 
+const PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(\"pick a PR\");\n  return @pr-handling/main(pr=pick.pr);\n}\n";
+
 #[test]
-fn string_answer_takes_any_text_and_reaches_the_hand_off() {
-    let p = crate::program_fixture::with_main("/** Entry. */\nexport default async function main() {\n  /** The PR link. */\n  const pr: string = await request(\"pick a PR\");\n  return @pr-handling/main(pr=pr);\n}\n".to_string());
+fn struct_answer_asks_for_a_json_object_with_the_fields_of_the_struct() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
     let StepResponse::Request { response, key, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
-    assert_eq!((response.r#type.as_str(), key.as_str()), ("string", "main.pr"));
-    let res = step(&p, &req("main", &[("main.pr", "")]));
-    assert!(matches!(res, StepResponse::Error { .. }), "{res:?}");
-    let mut request = req("main", &[("main.pr", "any text: 1"), ("@pr-handling/main.draft", "false"), ("@pr-handling/main.task", "merge")]);
-    let StepResponse::Done { instruction, .. } = step(&p, &request) else { panic!("not done") };
-    assert_eq!(instruction, "Do merge on any text: 1.");
-    request.answers = answers(&[("main.pr", "x")]);
-    let StepResponse::Question { key, .. } = step(&p, &request) else { panic!("not a question") };
+    assert_eq!((response.r#type.as_str(), key.as_str()), ("struct", "main.pick"));
+    let fields = response.fields.unwrap();
+    let shown: Vec<(&str, &str)> = fields.iter().map(|f| (f.name.as_str(), f.r#type.as_str())).collect();
+    assert_eq!(shown, [("pr", "string"), ("task", "union")]);
+    assert_eq!(fields[1].options, Some(vec!["review".to_string(), "merge".to_string()]));
+    assert_eq!(fields[0].description, "The PR link.");
+}
+
+#[test]
+fn struct_answer_is_validated_field_by_field() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let cases = [
+        ("{\"task\":\"merge\"}", "missing field `pr`"),
+        ("{\"pr\":\"u/1\",\"task\":\"merge\",\"x\":\"1\"}", "`x` is not a field of `Pick`; fields are pr, task"),
+        ("{\"pr\":\"u/1\",\"task\":\"nope\"}", "invalid value `nope` for `pick.task`"),
+        ("{\"pr\":\"\",\"task\":\"merge\"}", "field `pick.pr` is empty"),
+        ("{\"pr\":1,\"task\":\"merge\"}", "field `pick.pr` must be a string"),
+        ("not json", "must be a JSON object"),
+    ];
+    for (raw, part) in cases {
+        let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {raw}") };
+        assert!(message.contains(part), "{raw}: {message}");
+        assert_eq!(key.as_deref(), Some("main.pick"));
+    }
+}
+
+#[test]
+fn struct_answer_field_reaches_the_hand_off() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let pick = "{\"pr\":\"https://x/pr/1\",\"task\":\"merge\"}";
+    let StepResponse::Question { key, .. } = step(&p, &req("main", &[("main.pick", pick)])) else { panic!("not a question") };
     assert_eq!(key, "@pr-handling/main.draft");
+    let res = step(&p, &req("main", &[("main.pick", pick), ("@pr-handling/main.draft", "false"), ("@pr-handling/main.task", "merge")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert_eq!(instruction, "Do merge on https://x/pr/1.");
+}
+
+#[test]
+fn shared_struct_answer_field_decides_a_branch() {
+    let main = "/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: @./pick = await request(\"pick a PR\");\n  if (pick.urgent) {\n    return `Hurry ${pick.pr}.`;\n  }\n  return `Handle ${pick.pr}.`;\n}\n";
+    let shared = "/** A picked PR. */\nexport default interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n";
+    let p = project(&[("main.rein", main), ("pick.struct.rein", shared)]);
+    let res = step(&p, &req("main", &[("main.pick", "{\"pr\":\"u/1\",\"urgent\":true}")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert_eq!(instruction, "Hurry u/1.");
+    let res = step(&p, &req("main", &[("main.pick", "{\"pr\":\"u/1\",\"urgent\":\"yes\"}")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error") };
+    assert!(message.contains("field `pick.urgent` must be true or false"), "{message}");
+}
+
+#[test]
+fn struct_answer_is_a_json_object_on_the_wire() {
+    let wire = r#"{"answers":{"main.pick":{"pr":"u/1","task":"merge"},"main.ci":"green"}}"#;
+    let request: StepRequest = serde_json::from_str(wire).unwrap();
+    assert_eq!(request.answers["main.pick"], r#"{"pr":"u/1","task":"merge"}"#);
+    assert_eq!(request.answers["main.ci"], "green");
+    let back = serde_json::to_string(&request).unwrap();
+    assert!(back.contains(r#""main.pick":{"pr":"u/1","task":"merge"}"#) && back.contains(r#""main.ci":"green""#), "{back}");
 }
