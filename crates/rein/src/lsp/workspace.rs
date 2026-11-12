@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use lsp_types::{InitializeParams, Location, ResourceOperationKind, Url};
 use rein_core::diagnostic::Span;
-use rein_core::project::Project;
+use rein_core::project::{skipped_folder, Project};
 
 use super::text::range;
 
@@ -91,6 +91,18 @@ pub fn uri_for(docs: &Docs, path: &Path) -> Option<Url> {
         .find(|u| doc_path(u).as_deref() == Some(path))
         .cloned()
         .or_else(|| Url::from_file_path(path).ok())
+}
+
+/// The outermost folder between `root` and `path` that the loader skips by its name (a hidden folder, `target/` or
+/// `node_modules/`), as a path under `root`. A nested flow is not named: it is a project of its own.
+pub fn skipped_folder_of(root: &Path, path: &Path) -> Option<PathBuf> {
+    let rel = path.strip_prefix(root).ok()?;
+    rel.ancestors()
+        .skip(1)
+        .take_while(|d| !d.as_os_str().is_empty())
+        .filter(|d| d.file_name().and_then(|n| n.to_str()).is_some_and(skipped_folder))
+        .last()
+        .map(Path::to_path_buf)
 }
 
 pub fn doc_path(uri: &Url) -> Option<PathBuf> {

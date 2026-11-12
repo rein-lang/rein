@@ -397,6 +397,28 @@ fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
 }
 
 #[test]
+fn a_file_in_a_skipped_folder_gets_a_hint_why() {
+    let root = temp_project("skipped-hint");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // The loader skips `target/`, so the file has no language features. The hint says why, at the top of the file.
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    let diags = server.wait_diagnostics(&y, |d| has_message(d, "does not load files in `target/`"));
+    let hint = diags.iter().find(|d| d["severity"] == 4).expect("hint diagnostic");
+    assert!(hint["message"].as_str().unwrap().contains("move this file"), "{hint}");
+    assert_eq!(hint["range"], json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn a_nested_project_is_not_checked_as_part_of_the_outer_one() {
     let root = temp_project("nested");
     let sub = root.join("sub");
