@@ -42,7 +42,7 @@ Programs (flows) live in scopes: project, user, and system. The folders, the man
   | Position | Form | Example |
   | --- | --- | --- |
   | Return value (an instruction or a final answer) | TEMPLATE | ``return `Merge the pull request.`;`` |
-  | Call argument value: std templates (`delegate`, `askUser`), project templates, and hand-offs with arguments | TEMPLATE, or a bare name of a `string` parameter | ``delegate(model=`use opus model`, task=`review ${pr}`)`` |
+  | Call argument value: std templates (`delegate`, `askUser`), project templates, and hand-offs with arguments | TEMPLATE, or a bare name of a `string` parameter. A callback parameter takes a REF or a bare name of a callback parameter (section 4, Callbacks) | ``delegate(model=`use opus model`, task=`review ${pr}`)`` |
   | `request(...)` argument | TEMPLATE, or a template call | ``await request(`Run the tests.`)`` |
   | Union member in a parameter, field or answer type | STRING | `ci: "green" \| "red"` |
   | `===` and `!==` operand | STRING | `ci === "green"` |
@@ -70,17 +70,17 @@ params      := param ("," param)* ","?       // more than one param is a checker
 param       := DOC IDENT ":" type            // a scalar parameter. DOC is required; the checker reports a missing one
              | "{" IDENT ("," IDENT)* ","? "}" ":" (IDENT | REF)   // a struct parameter, destructured
 field       := DOC IDENT ":" type (";" | ",")?   // DOC is required; the checker reports a missing one
-type        := "boolean" | "string" | "|"? STRING ("|" STRING)*
+type        := "boolean" | "string" | "@" | "|"? STRING ("|" STRING)*   // "@": a callback (section 4, Callbacks)
 block       := "{" stmt* "}"
 stmt        := if | switch | return | answer
 if          := "if" "(" expr ")" block       // no else: see section 5
 switch      := "switch" "(" IDENT ")" "{" clause* "}"
 clause      := "case" STRING ":" (block | stmt*)   // a label with no body joins the next body
 answer      := DOC "const" IDENT ":" (type | IDENT | REF) "=" "await" "request" "(" value ")" ";"?   // IDENT or REF: a struct answer (section 4, Struct answers)
-return      := "return" (STRING | TEMPLATE | REF | REF "(" args ")" | IDENT "(" args ")") ";"?   // REF with args: a template call or a hand-off
+return      := "return" (STRING | TEMPLATE | REF | REF "(" args ")" | IDENT "(" args ")" | IDENT) ";"?   // REF with args: a template call or a hand-off. A bare IDENT: a callback
 args        := arg ("," arg)* ","?           // the args of a call or a hand-off
 arg         := IDENT "=" value               // named, as in Python. A value with no name is a checker error
-value       := STRING | TEMPLATE | IDENT | IDENT "(" args ")" | REF "(" args ")"
+value       := STRING | TEMPLATE | IDENT | IDENT "(" args ")" | REF "(" args ")" | REF   // a bare REF: only for a callback parameter
 expr        := and ("||" and)*
 and         := unary ("&&" unary)*
 unary       := "!" unary | atom
@@ -106,7 +106,6 @@ Helpful errors from the parser:
 | `x: Name` or `x: @./name` as a parameter | `` a struct parameter is destructured: write `{ field, ... }: Name` `` |
 | a doc comment before a struct parameter | `` a struct parameter has no doc comment; document each field in its `interface` `` |
 | `await` of a name other than `request` | `only `request` can be awaited` |
-| a bare name as a return value | `expected a string, a template literal, or a reference like `@./path`` |
 | a second `export default function` | `expected end of file ...; a file holds one `export default function`` |
 
 ## 4. Declarations
@@ -164,9 +163,10 @@ Parsing rules, for each doc block:
 
 - A function has zero parameters or one. Two or more is an error: `` a function takes one parameter; put `a` and `b` in a struct ``.
 - The parameter is a scalar or a struct.
-- A scalar parameter is `name: type`. The type is `boolean`, a union of strings, or `string`.
+- A scalar parameter is `name: type`. The type is `boolean`, a union of strings, `string`, or `@` (a callback, section 4, Callbacks).
 - `boolean` is true or false. A union is one of its string members. It needs at least 2 unique, non-empty members. A leading `|` is allowed.
 - `string` is text. It is an input: the caller passes its value, and the agent is never asked for it (section 4, Inputs).
+- `@` is a callback: a function that the caller passes. It is an input too (section 4, Callbacks).
 - A struct parameter is destructured: `{ a, b }: Name`. The braces name every field of the struct, each one once. The body reads each field by its name, as it reads a scalar parameter.
 - Errors on the braces: `` `z` is not a field of `Name`; fields are a, b ``, `` destructure every field of `Name`; missing: `b` ``, and `` `a` is destructured twice ``.
 - In the rest of this reference, a parameter is the scalar parameter or a field of the struct parameter. Its name is unique within the function. Answer keys, `--set`, `--input`, `rein describe` and the graph use the field names.
@@ -226,8 +226,8 @@ A relative reference names another function of the project. The path is relative
 - `return @./path(name=value);` calls a template (section 4, Templates). It hands the agent to a normal function with values (section 4, Inputs).
 - `@program/function` hands off to a function of another installed program. The program is found by name through the scopes, as `rein list` and `rein step NAME` find it. A bare `@program` means the entry of that program. It is allowed only as a hand-off in a `return`, with the same argument rules as a hand-off to a local function: only `string` parameters are passed, by name. The other inputs of the target are asked by the target as normal questions.
 - A program that is not installed is an error on the reference: `` cannot find program `x`; run `rein list` to list programs ``. A function that the program does not have is an error: `` cannot find function `f` in program `x` ``.
-- `rein step` follows the hand-off into the other program in the same run. The functions of that program have the name `@program/function`, so its answer keys are `@pr-handling/main.task`, and a local file `pr-handling/main.rein` cannot collide with them. The trace shows the same names. A program reference inside the other program is not followed.
-- `rein graph` draws a `program` node labelled `@program/function`, and a hand-off edge to it. It does not draw the other program.
+- `rein step` follows the hand-off into the other program in the same run. The functions of that program have the name `@program/function`, so its answer keys are `@pr-handling/main.task`, and a local file `pr-handling/main.rein` cannot collide with them. The trace shows the same names. A program reference inside the other program is followed too: the programs that a linked program names are linked as well, in one table by name, so a hand-off or a callback can go from any linked program into any other, and back into the first one.
+- `rein graph` draws a `program` node labelled `@program/function`, and a hand-off edge to it. It does not draw the other program. `return then;` is a `callback` node labelled `then`, and a hand-off edge shows `then=@./after` as an argument.
 - A reference to a template without a call is an error: `` `@./tpl` is a template; call it with arguments, like `@./tpl(...)` ``.
 
 ### Std
@@ -300,6 +300,40 @@ export default function merge({ pr, ci }: Input) {
   return `Wait for CI, then start this program again.`;
 }
 ```
+
+### Callbacks
+
+A callback is a parameter of type `@`. The caller passes a function, and the function goes on to it when its work is done. So a callee continues the flow of its caller without naming the caller.
+
+```ts
+interface Input {
+  /** The link of the pull request to merge. */
+  pr: string;
+  /** Where the flow goes after the merge. */
+  then: @;
+}
+
+/** Merge one pull request, then go on to the callback. */
+export default async function merge({ pr, then }: Input) {
+  /** Did the pull request merge? */
+  const merged: boolean = await request(`Merge the pull request.`);
+  if (!merged) {
+    return askUser(question=`The merge failed. What do I do?`);
+  }
+  return then;
+}
+```
+
+- The caller passes a callback by name, like a `string` input: `return @./merge(pr=pr, then=@./after);`. The value is a reference: `@./path`, `@../path`, `@program` or `@program/function`. The reference rules apply (section 4, References).
+- The target of the reference takes no arguments, as in `return @./path;`. A template is an error.
+- `return then;` hands the agent to the function the caller passed. It is a hand-off, like `return @./path;`.
+- A function passes a callback on by name: `return @./merge(pr=pr, then=then);`.
+- A callback is not a value. A condition, a switch subject, a template literal, a `string` argument, or a `request` argument cannot read it: ``then` is a callback; return it (`return then;`) or pass it to a callback parameter`.
+- A callback is never an answer: a `const x: @`, or a struct answer with a `@` field, is an error: `a callback is not an answer; the caller passes it`.
+- A callback that is never used gives the warning `unused parameter`, as any parameter does.
+- A callback argument is checked like a reference: ``then` is a callback; pass a reference like `then=@./name`` for a text value, and ``@./x` is a reference; only a callback (`@`) parameter takes one` for a reference passed to another parameter.
+- A function with a callback parameter is not a template.
+- The relative reference in `then=@./after` resolves in the file that writes it, so a callback can point back into the caller's own program. Program references resolve by name, as every `@program` does.
 
 ### Async requests
 
@@ -434,6 +468,11 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | A reference does not resolve (`` cannot find function `@./x` ``), or leaves the root (`` `@../../x` leaves the project root ``) |
 | A program reference names a program that is not installed (`` cannot find program `x`; run `rein list` to list programs ``), or a function the program does not have (`` cannot find function `f` in program `x` ``) |
 | A reference to a template is returned without a call |
+| A callback is read as a value: in a condition, a switch, a template literal, or a `string` or `request` argument (``then` is a callback; return it (`return then;`) or pass it to a callback parameter`) |
+| A callback parameter gets a value that is not a reference or a callback (``then` is a callback; pass a reference like `then=@./name``), or a reference that does not resolve, is a template, or takes arguments |
+| A reference is passed to a parameter that is not a callback (``@./x` is a reference; only a callback (`@`) parameter takes one`) |
+| A bare name is returned that is not a callback (``pr` is not a callback; only a callback (`@`) parameter is returned by name`) |
+| An answer is a callback, or a struct answer has a callback field (`a callback is not an answer; the caller passes it`) |
 | A call or a hand-off has a positional argument (`` missing argument `a` in call to `@./tpl`; write `a=value` ``) |
 | A call or a hand-off names an argument that is not a parameter (`` `c` is not a parameter of `@./tpl`; parameters are a, b ``) |
 | A call or a hand-off gives one parameter twice (`` `a` is given twice in call to `@./tpl`; give each name once ``) |
@@ -488,7 +527,7 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | `rein eval [FUNCTION] [--root DIR] [--set name=value]... [--json]` | Evaluate one step. `FUNCTION` defaults to `main`. Prints the returned string, or `next: target` with the target's description and inputs. Exit code 2 when a parameter is needed. Exit code 3 when the agent must do a request. `--set` also gives a value to a `string` parameter. A name given twice with `--set` is an error. |
 | `rein run [NAME] [--root DIR] [--entry FN] [--json]` | Run a program as a live process. Writes one step per line, reads one answer per line on stdin. See [interface.md](interface.md). |
 | `rein describe [FUNCTION] [--root DIR]` | Print the function's schema as JSON. `FUNCTION` defaults to `main`. Usable as an agent tool schema. A template's parameters have type `string`. |
-| `rein graph [NAME \| --root DIR] [--refs] [--format mermaid\|dot\|json] [-o FILE]` | Print the program graph. `NAME` is a program name (section 1a) or a `.rein` file. The default is the project around the current directory. The default view is the decision flow: one node per function, per question (its text, then `name: type`), per request, and per outcome (`done` text or `delegate`). An edge from a question has the answer as its label: `yes`, `no`, or union members. A hand-off edge has its named arguments. A dashed edge goes to a template that a call uses. `--refs` draws only one node per function and one edge per reference. Node ids are `f0`, `f1`, ... for the functions in name order, and `f<i>_<j>` for the steps of function `i` in source order, so the output is stable. The entry is drawn as a stadium shape. `--format` is `mermaid` (default), `dot` (Graphviz), or `json`. `-o FILE` writes to FILE. A `.svg` or `.png` FILE is rendered from DOT by Graphviz `dot`; when `dot` is not on PATH, the command fails and names it. JSON: `{version, view, entry, nodes: [{id, kind, function, label, entry?, name?, type?}], edges: [{from, to, kind, label?, args?: [{name, value}]}]}`. Node kinds: `function`, `question`, `condition`, `request`, `done`, `delegate`, `program` (a function of another program), `unresolved`. Edge kinds: `flow`, `handoff`, `template`. |
+| `rein graph [NAME \| --root DIR] [--refs] [--format mermaid\|dot\|json] [-o FILE]` | Print the program graph. `NAME` is a program name (section 1a) or a `.rein` file. The default is the project around the current directory. The default view is the decision flow: one node per function, per question (its text, then `name: type`), per request, and per outcome (`done` text or `delegate`). An edge from a question has the answer as its label: `yes`, `no`, or union members. A hand-off edge has its named arguments. A dashed edge goes to a template that a call uses. `--refs` draws only one node per function and one edge per reference. Node ids are `f0`, `f1`, ... for the functions in name order, and `f<i>_<j>` for the steps of function `i` in source order, so the output is stable. The entry is drawn as a stadium shape. `--format` is `mermaid` (default), `dot` (Graphviz), or `json`. `-o FILE` writes to FILE. A `.svg` or `.png` FILE is rendered from DOT by Graphviz `dot`; when `dot` is not on PATH, the command fails and names it. JSON: `{version, view, entry, nodes: [{id, kind, function, label, entry?, name?, type?}], edges: [{from, to, kind, label?, args?: [{name, value}]}]}`. Node kinds: `function`, `question`, `condition`, `request`, `done`, `delegate`, `program` (a function of another program), `callback` (`return then;`, labelled with the parameter name), `unresolved`. Edge kinds: `flow`, `handoff`, `template`. |
 | `rein step [--root DIR \| --flow NAME] [--entry FN] [--answer key=value]... [--input name=value]... [--stdin] [--json]` | Step the whole flow from `main`. `--flow` picks a flow by name (section 1a); `--root` and `--flow` exclude each other. `--input` gives a value to a `string` parameter of the entry function. The agent-facing interface (section 11). |
 | `rein list [-l] [-1] [-a] [-r] [-t] [--json] [PATTERN...]` | List the programs visible from here, as `ls` lists files. Names by default; `-l` for scope, version, path and description; `-a` for shadowed programs; PATTERN is a name glob. `rein flows` is an alias. |
 | `rein show <NAME>` | Print a program's manifest and every `.rein` file, entry first. |
@@ -600,7 +639,7 @@ Protocol version 1. A request and a response are JSON objects, each with a `vers
 - `version`: default `1`. Another value is an error. Adding the optional `flow` and `inputs` fields did not change the version.
 - `flow`: optional. The name of a visible flow (section 1a). The CLI resolves it to a flow root and steps that root. Give `flow` or a root, not both.
 - `entry`: the function to start from, by its path. Default `main`.
-- `inputs`: optional. An object. Each key is the name of a `string` parameter of the entry function, and each value is its text. Default `{}`.
+- `inputs`: optional. An object. Each key is the name of a `string` or callback parameter of the entry function, and each value is its text. A callback value is a reference, such as `"then": "@./after"` or `"then": "@pr-handling"` (section 11, Stepping rules). Default `{}`.
 - `answers`: the answers so far. Each key is `<function path>.<name>`, where `name` is a parameter or a `const` answer, such as `merge_pr.ci` or `answer/faq.solved`. A function of another program has the path `@program/function`, such as `@pr-handling/main.task`. Each value is as `--answer` takes it: `yes`, `no`, or a union member. The value of a struct answer is a JSON object, such as `{"pr": "https://example.com/pr/1", "task": "review"}`: with `--stdin` it is a real JSON object, and with `--answer` it is the JSON text (`--answer main.pick='{"pr":"https://example.com/pr/1","task":"review"}'`). The runtime checks it: it is an object, every field is present, no other field is, a `string` field is non-empty text, a `boolean` field is `true` or `false`, and a union field is a member. An error names the field, such as `` field `pick.pr` is empty; give some text ``. Responses echo a struct answer as a JSON object. Default `{}`.
 
 ### Response
@@ -635,9 +674,12 @@ The answer for that request, in `answers`:
 
 - The step starts at `entry`. It evaluates the function with its inputs and the answers whose key names that function. The lazy rules of section 9 apply.
 - A reference is followed in the same call. Only a question, a request, a final instruction, or an error ends a call. The `trace` shows each hop.
+- A function that a call enters again has its own answers. The first visit uses the keys `function.name`. The second visit of the same function in one call uses `function#2.name`, the third `#3`, and so on. The `key` of a question or a request shows it, such as `main#2.pick`. So a cycle, such as a callback back into the caller, asks again instead of reusing the answers of the first visit. Each pass of a cycle must reach a new question or request; a cycle with none hits the limit below.
 - A flow may visit at most 64 functions in one call. A flow that goes further is an error: `flow did not finish in 64 steps (reference cycle?)`.
 - An answer is checked before the flow runs. An unknown key is an error, and the error names the key. A value outside the type is an error, and the message lists the accepted values.
 - A string parameter cannot be answered. It is an input: give it in `inputs`.
+- A callback parameter of the entry function is an input too. Its value is a reference as text: `@./path` (a function of the root, from the root folder), `@program` or `@program/function`. A value that does not resolve is an error: `input `then` is not valid; cannot find function `@./nope``. The CLI links a program that a callback input names.
+- A callback cannot be answered: ``handle.then` is a callback; the caller passes it`.
 - A `string` parameter of the entry function that has no key in `inputs` is an error: `` missing input `pr`; give it with --input pr=<value> ``.
 - A key in `inputs` that is not a `string` parameter of the entry function is an error: `` unknown input `x` ``.
 - A project with checker errors is refused. The error lists the diagnostics. Warnings do not block a step.
