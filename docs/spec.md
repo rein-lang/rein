@@ -443,9 +443,9 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | `rein serve --mcp` | The MCP host. Holds live runs in memory. Tools: `rein_programs`, `rein_show`, `rein_start`, `rein_answer`, `rein_status`, `rein_stop`, `rein_list`. See [interface.md](interface.md). |
 | `rein agent-context [--format text\|json]` | Print the block an agent needs to use the visible flows (section 12). Prints nothing when there are none. |
 | `rein hook [--caller NAME]` | The agent hook entry point (section 12). Reads one event on stdin. |
-| `rein install <source>` | Link a program folder, or install a package with pnpm (see [Install a program](install-programs.md)). |
-| `rein uninstall <name>` | Remove an installed package. Runs `pnpm remove`. |
-| `rein update [<name>]` | Update installed packages within their ranges. Runs `pnpm update --ignore-scripts`. |
+| `rein install [-g] <args>...` | Run `pnpm add --ignore-scripts <args>` in the npm folder: the repo's `rein/npm/`, or the user's with `-g`. See [Install a program](install-programs.md). |
+| `rein uninstall [-g] <args>...` | Run `pnpm remove <args>` in the same folder rules. |
+| `rein update [-g] [<args>...]` | Run `pnpm update --ignore-scripts <args>` in the same folder rules. |
 | `rein lsp` | Run the language server over stdio. See [Language server](#language-server) for its features. |
 
 Exit codes: 0 for a text or reference result, 1 for an error, 2 for a parameter needed, 3 for a request.

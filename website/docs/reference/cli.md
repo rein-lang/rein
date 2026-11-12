@@ -40,9 +40,9 @@ A small language for agent decision flows
 * `serve` — Serve the agent interface. Holds live runs in memory
 * `agent-context` — Print the block an agent needs to use the visible flows
 * `hook` — The agent hook entry point. Reads one event on stdin. Run by the agent, not by hand
-* `install` — Install a program. A folder path links it. Any other name is a pnpm package
-* `uninstall` — Remove an installed program package. Runs `pnpm remove` in the npm project
-* `update` — Update installed program packages within their ranges. Runs `pnpm update --ignore-scripts`
+* `install` — Install a program package: runs `pnpm add` with these arguments
+* `uninstall` — Remove an installed program package: runs `pnpm remove` with these arguments. `-g` picks the user folder
+* `update` — Update installed program packages: runs `pnpm update --ignore-scripts` with these arguments. `-g` picks the user folder
 * `lsp` — Run the language server on stdio
 
 
@@ -230,39 +230,39 @@ The agent hook entry point. Reads one event on stdin. Run by the agent, not by h
 
 ## `rein install`
 
-Install a program. A folder path links it. Any other name is a pnpm package.
+Install a program package: runs `pnpm add` with these arguments.
 
-The rule: a path to an existing directory is linked into the user programs folder. Anything else is passed to `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
+The arguments go to pnpm unchanged, so any pnpm flag works. `-g` or `--global` installs for the user: it runs in `<user programs folder>/npm/`, and rein does not pass it on. Without `-g`, it runs in the repo's `rein/npm/`. Outside a repository, use `-g`. `--ignore-scripts` is added first, unless the arguments set it.
 
-**Usage:** `rein install <SOURCE>`
+**Usage:** `rein install <ARGS>...`
 
 ###### **Arguments:**
 
-* `<SOURCE>` — A program folder to link, or a package such as `pr-handling@^1`
+* `<ARGS>` — Arguments for `pnpm add`, such as `pr-handling@^1`, `file:../pr-handling` or `--save-exact`
 
 
 
 ## `rein uninstall`
 
-Remove an installed program package. Runs `pnpm remove` in the npm project
+Remove an installed program package: runs `pnpm remove` with these arguments. `-g` picks the user folder
 
-**Usage:** `rein uninstall <NAME>`
+**Usage:** `rein uninstall <ARGS>...`
 
 ###### **Arguments:**
 
-* `<NAME>` — Package name, as `rein list` shows it. An alias is its own name
+* `<ARGS>` — Arguments for `pnpm remove`, such as a package name. `-g` picks the user folder
 
 
 
 ## `rein update`
 
-Update installed program packages within their ranges. Runs `pnpm update --ignore-scripts`
+Update installed program packages: runs `pnpm update --ignore-scripts` with these arguments. `-g` picks the user folder
 
-**Usage:** `rein update [NAME]`
+**Usage:** `rein update [ARGS]...`
 
 ###### **Arguments:**
 
-* `<NAME>` — Package to update. Default: every installed package
+* `<ARGS>` — Arguments for `pnpm update`, such as a package name or `--latest`. `-g` picks the user folder
 
 
 
