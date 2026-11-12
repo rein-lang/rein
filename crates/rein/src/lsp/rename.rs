@@ -22,6 +22,9 @@ pub fn prepare(state: &State, p: &TextDocumentPositionParams) -> Result<Option<P
     let Some((project, name)) = locate(&state.docs, &p.text_document.uri) else { return Ok(None) };
     let Some(sf) = project.get(&name) else { return Ok(None) };
     let Some((symbol, span)) = symbol_at(&project, &name, offset(&sf.text, p.position)) else { return Ok(None) };
+    if let Some(program) = other_program(&symbol) {
+        return Err(program_error(program));
+    }
     let (span, placeholder) = match symbol {
         Symbol::Std(n) => return Err(std_error(&n)),
         Symbol::Param { name: n, .. } => (span, n),
@@ -48,6 +51,9 @@ pub fn rename(state: &State, p: &RenameParams) -> Result<Option<WorkspaceEdit>, 
     let Some((project, name)) = locate(&state.docs, &pos.text_document.uri) else { return Ok(None) };
     let Some(sf) = project.get(&name) else { return Ok(None) };
     let Some((symbol, _)) = symbol_at(&project, &name, offset(&sf.text, pos.position)) else { return Ok(None) };
+    if let Some(program) = other_program(&symbol) {
+        return Err(program_error(program));
+    }
     let new = p.new_name.as_str();
     if !is_identifier(new) || KEYWORDS.contains(&new) {
         return Err(format!("`{new}` is not a valid name: use letters, digits and `_`, and start with a letter"));
@@ -63,6 +69,20 @@ pub fn rename(state: &State, p: &RenameParams) -> Result<Option<WorkspaceEdit>, 
 
 fn std_error(n: &str) -> String {
     format!("`{n}` is a std item; it cannot be renamed")
+}
+
+/// The program that holds `symbol`, when it is another installed program (its path is `@program/...`).
+fn other_program(symbol: &Symbol) -> Option<&str> {
+    let path = match symbol {
+        Symbol::Function(f) | Symbol::Param { function: f, .. } => f,
+        Symbol::Struct { file, .. } | Symbol::Field { file, .. } => file,
+        Symbol::Std(_) => return None,
+    };
+    path.strip_prefix('@')?.split('/').next()
+}
+
+fn program_error(program: &str) -> String {
+    format!("`{program}` is another program; rename does not cross programs")
 }
 
 /// The file name of a function, such as `refund` for `billing/refund`.

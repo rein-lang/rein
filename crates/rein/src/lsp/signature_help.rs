@@ -15,7 +15,8 @@ pub fn signature_help(state: &State, p: &SignatureHelpParams) -> Option<Signatur
     let sf = project.get(&name)?;
     let call = call_at(&sf.text, offset(&sf.text, pos.position))?;
     let params = callee_params(&project, &name, &call.callee)?;
-    let shown = if call.callee.starts_with('.') { format!("@{}", call.callee) } else { call.callee.clone() };
+    // A std name is written bare. A reference, local or to another program, is written with `@`.
+    let shown = if rein_core::stdlib::item(&call.callee).is_ok() { call.callee.clone() } else { format!("@{}", call.callee) };
     let mut label = format!("{shown}(");
     let mut parameters = Vec::new();
     for (i, input) in params.iter().enumerate() {
