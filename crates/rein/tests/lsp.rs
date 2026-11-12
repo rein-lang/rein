@@ -903,6 +903,116 @@ fn rename_a_function_renames_its_file_and_references() {
 }
 
 #[test]
+fn rename_a_function_renames_the_folder_of_its_nested_functions() {
+    let root = fs::canonicalize(temp_project("rename-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return @../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("a.rein", 2, 9, 2, 15), "@./c/b".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_to_move_a_folder_that_holds_the_entry() {
+    let root = fs::canonicalize(temp_project("rename-entry-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "app/start.rein"}"#);
+    write("app/start.rein", "/** Start. */\nexport default function start() {\n  return @../app;\n}\n");
+    write("app.rein", "/** App. */\nexport default function app() {\n  return `a`;\n}\n");
+    let mut server = start_with_file_renames();
+    let start = open_file(&mut server, &root, "app/start.rein");
+
+    let mut params = at(&start, 2, 13);
+    params["newName"] = json!("web");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("holds the entry `app/start`"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_to_move_a_folder_into_a_path_the_project_skips() {
+    let root = fs::canonicalize(temp_project("rename-skipped-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return `b`;\n}\n");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("node_modules");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`node_modules/b` is a path the project does not load"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_to_move_a_folder_into_another_flow() {
+    let root = fs::canonicalize(temp_project("rename-nested-flow")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return `b`;\n}\n");
+    write("tools/main.rein", "/** Tools. */\nexport default function main() {\n  return `t`;\n}\n");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("tools");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`tools/b` is a path the project does not load"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn rename_a_function_needs_a_client_that_renames_files() {
     let root = example("support-ticket");
     let mut server = Server::start();
@@ -1099,6 +1209,49 @@ fn quick_fix_moves_a_function_into_the_folder_of_its_only_caller() {
                 (spot("steps/fix_ci.rein", 2, 9, 2, 19), "@../../target".to_string()),
             ],
             vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_moves_the_folder_of_nested_functions_with_the_file() {
+    // `steps/fix_ci/retry` is already in the folder of its only caller. When `steps/fix_ci` moves, it moves too.
+    let root = fs::canonicalize(temp_project("nest-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fixCi() {\n  return @./fix_ci/retry;\n}\n");
+    write("steps/fix_ci/retry.rein", "/** Retry. */\nexport default function retry() {\n  return @../../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    // The reference from `steps/fix_ci` into its own folder stays as it is.
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![
+                (spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string()),
+                (spot("steps/fix_ci/retry.rein", 2, 9, 2, 22), "@../../../target".to_string()),
+            ],
+            vec![
+                ("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string()),
+                ("steps/fix_ci/retry.rein".to_string(), "flow/merge/fix_ci/retry.rein".to_string()),
+            ]
         ),
         "{actions}"
     );

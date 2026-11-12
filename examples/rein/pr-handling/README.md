@@ -15,7 +15,7 @@ The program has no reference cycle. A retry ends the run with the text "start th
 | `comments/address.rein` | `comments/address` | Asks the agent to answer each open comment. |
 | `ci/fix.rein` | `ci/fix` | Routes a failed CI run by its cause. Asks the agent to push a fix. |
 | `merge.rein` | `merge` | Merges when CI is green, no conflict exists, and the review approves. |
-| `templates/post_review.rein` | `templates/post_review` | A template: one review with a type and a body. `review` calls it. |
+| `review/post_review.rein` | `review/post_review` | A template: one review with a type and a body. `review` calls it. |
 
 Each function gets `pr` from its caller and passes it on. There is no global scope.
 

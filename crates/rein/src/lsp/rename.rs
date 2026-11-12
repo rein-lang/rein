@@ -12,7 +12,7 @@ use rein_core::diagnostic::Span;
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::Project;
 
-use super::occurrences::{callers, declaration, name_span, param_uses, refs, symbol_at, Symbol};
+use super::occurrences::{declaration, name_span, param_uses, refs, symbol_at, Symbol};
 use super::structs::{base as struct_base, field_sites, struct_decl, type_sites};
 use super::text::{is_identifier, offset, range, relative_import};
 use super::workspace::{locate, uri_for, Docs, State};
@@ -165,59 +165,89 @@ fn rename_function(state: &State, project: &Project, target: &str, new: &str) ->
     move_function(state, project, target, &new_target)
 }
 
-/// Moves the file of `target` to the project path `new_target`. Every reference to it is rewritten; in the same
-/// folder, only its last segment changes. When the folder changes, every relative reference inside the moved file
-/// is rewritten from its new folder. The name after `export default function` changes when it was the file name.
+/// Moves the file of `target` to the project path `new_target`, with the folder of the functions nested under
+/// it (`<target>/`), so they stay in their caller's folder. Every reference to a moved file is rewritten, and
+/// every relative reference inside a moved file whose path changes. A reference that only changes in its last
+/// segment, as in a rename in the same folder, changes only that segment. The name after
+/// `export default function` changes when it was the file name.
 pub fn move_function(state: &State, project: &Project, target: &str, new_target: &str) -> Result<WorkspaceEdit, String> {
     if !state.renames_files {
         return Err("this editor cannot rename files, so a function cannot be renamed".to_string());
     }
     let sf = project.get(target).ok_or_else(|| format!("cannot find function `{target}`"))?;
     let (old, new) = (basename(target), basename(new_target));
-    let new_path = project.root.join(format!("{new_target}.rein"));
-    if new_path.exists() {
-        return Err(format!("{} already exists", new_path.display()));
+    // Each moved file, by its old project path: the target, and every file in its folder.
+    let nested = format!("{target}/");
+    let moved = |name: &str| -> Option<String> {
+        if name == target {
+            return Some(new_target.to_string());
+        }
+        name.strip_prefix(&nested).map(|rest| format!("{new_target}/{rest}"))
+    };
+    let entry = project.entry();
+    if entry != target && entry.starts_with(&nested) {
+        return Err(format!(
+            "the folder `{nested}` holds the entry `{entry}`; moving it would leave the program without its entry"
+        ));
     }
-    let folder = |f: &str| f.rsplit_once('/').map(|(d, _)| d.to_string());
-    let same_folder = folder(target) == folder(new_target);
+    let mut renames = Vec::new();
+    for (name, file) in &project.files {
+        let Some(to) = moved(name) else { continue };
+        if !project.loads(&to) {
+            return Err(format!(
+                "`{to}` is a path the project does not load (a hidden, `target` or `node_modules` folder, a folder \
+                 with its own `main.rein`, or a `main` below the root); moving `{name}` there would drop it from \
+                 the program"
+            ));
+        }
+        let new_path = project.root.join(format!("{to}.rein"));
+        if new_path.exists() {
+            return Err(format!("{} already exists", new_path.display()));
+        }
+        let old_uri = uri_for(&state.docs, &file.path).ok_or("the file has no URI")?;
+        let new_uri = Url::from_file_path(&new_path).map_err(|()| "the new path has no URI".to_string())?;
+        renames.push((old_uri, new_uri));
+    }
     let mut edits = Edits::default();
-    for (caller, span) in callers(project, target) {
-        // A reference of the moved file to itself is rewritten with its other references, below.
-        if caller == target && !same_folder {
-            continue;
-        }
-        let Some(text) = project.get(&caller).map(|c| &c.text) else { continue };
-        if same_folder && text[span.start..span.end].ends_with(&format!("/{old}")) {
-            edits.add(project, &caller, Span::new(span.end - old.len(), span.end), new);
-        } else {
-            edits.add(project, &caller, span, &format!("@{}", relative_import(&caller, new_target)));
-        }
-    }
-    if !same_folder {
-        for (span, to) in outgoing(project, target) {
-            let to = if to == target { new_target.to_string() } else { to };
-            edits.add(project, target, span, &format!("@{}", relative_import(new_target, &to)));
+    for (from, file) in &project.files {
+        let new_from = moved(from);
+        for (span, to, suffix) in outgoing(project, from) {
+            let new_to = moved(&to);
+            if new_from.is_none() && new_to.is_none() {
+                continue;
+            }
+            let (from_now, to_now) = (new_from.as_deref().unwrap_or(from), new_to.as_deref().unwrap_or(&to));
+            let path = relative_import(from_now, to_now.strip_suffix(suffix).unwrap_or(to_now));
+            let written = &file.text[span.start..span.end];
+            let written = written.strip_prefix('@').unwrap_or(written);
+            if written == path {
+                continue;
+            }
+            let (head, tail) = path.rsplit_once('/').unwrap_or(("", &path));
+            match written.rsplit_once('/') {
+                Some((h, t)) if h == head => edits.add(project, from, Span::new(span.end - t.len(), span.end), tail),
+                _ => edits.add(project, from, span, &format!("@{path}")),
+            }
         }
     }
     if let Some(span) = name_span(&sf.text).filter(|s| &sf.text[s.start..s.end] == old) {
         edits.add(project, target, span, new);
     }
-    let old_uri = uri_for(&state.docs, &sf.path).ok_or("the file has no URI")?;
-    let new_uri = Url::from_file_path(&new_path).map_err(|()| "the new path has no URI".to_string())?;
-    Ok(edits.into_workspace_edit(&state.docs, project, Some((old_uri, new_uri))))
+    Ok(edits.into_workspace_edit(&state.docs, project, renames))
 }
 
-/// Each relative reference written in function `name` that resolves: its span, and the project path it names.
-/// A struct type names its file without `.struct`, as the reference is written.
-fn outgoing(project: &Project, name: &str) -> Vec<(Span, String)> {
+/// Each relative reference written in function `name` that resolves: its span, the project path of the file it
+/// names, and the suffix that path has beyond the written reference. A struct type names `<name>.struct.rein`
+/// without `.struct`, as the reference is written.
+fn outgoing(project: &Project, name: &str) -> Vec<(Span, String, &'static str)> {
     let Some(sf) = project.get(name) else { return Vec::new() };
     let f = &sf.function;
-    let functions = refs(f).into_iter().filter_map(|(r, _)| Some((r.span, project.resolve(name, &r.value).ok()?)));
+    let functions = refs(f).into_iter().filter_map(|(r, _)| Some((r.span, project.resolve(name, &r.value).ok()?, "")));
     let types = f.struct_param().map(|p| p.ty.clone()).into_iter().chain(f.answer_struct_refs().into_iter().map(|(_, t)| t));
     let structs = types.filter_map(|t| match t {
         StructRef::Ref(r) => {
             let (file, _) = project.struct_for(name, &r.value).ok()?;
-            Some((r.span, file.strip_suffix(STRUCT_SUFFIX)?.to_string()))
+            Some((r.span, file, STRUCT_SUFFIX))
         }
         StructRef::Local(_) => None,
     });
@@ -236,9 +266,9 @@ impl Edits {
         }
     }
 
-    /// The text edits of each file, then the file rename, if any. The text edits use the old URIs, so they
-    /// apply before the rename.
-    fn into_workspace_edit(self, docs: &Docs, project: &Project, rename: Option<(Url, Url)>) -> WorkspaceEdit {
+    /// The text edits of each file, then the file renames. The text edits use the old URIs, so they apply before
+    /// the renames.
+    fn into_workspace_edit(self, docs: &Docs, project: &Project, renames: impl IntoIterator<Item = (Url, Url)>) -> WorkspaceEdit {
         let mut ops: Vec<DocumentChangeOperation> = self
             .0
             .into_iter()
@@ -250,7 +280,7 @@ impl Edits {
                 }))
             })
             .collect();
-        if let Some((old_uri, new_uri)) = rename {
+        for (old_uri, new_uri) in renames {
             let file = RenameFile { old_uri, new_uri, options: None, annotation_id: None };
             ops.push(DocumentChangeOperation::Op(ResourceOp::Rename(file)));
         }
