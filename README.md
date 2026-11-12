@@ -29,9 +29,9 @@ export default function mergePr({ docsOnly, ci }: Input) {
   }
   switch (ci) {
     case "green":
-      return @./review_code;
+      return @./merge_pr/review_code;
     case "red":
-      return @./ci/fix;
+      return @./merge_pr/fix;
     case "pending":
       return `wait for CI, then run merge_pr again`;
   }
@@ -43,8 +43,8 @@ flowchart TD
     A["merge_pr"] --> B{"docsOnly?"}
     B -- "yes" --> C["return approved"]
     B -- "no" --> D{"ci?"}
-    D -- "green" --> E["review_code"]
-    D -- "red" --> F["ci/fix"]
+    D -- "green" --> E["merge_pr/review_code"]
+    D -- "red" --> F["merge_pr/fix"]
     D -- "pending" --> G["wait for CI"]
 ```
 
@@ -63,15 +63,15 @@ $ rein step --json --answer main.vip=no
 # exit 2
 
 $ rein step --json --answer main.vip=no --answer main.category=how_to
-{"kind":"question","version":1,"key":"answer/faq.articleFound","function":"answer/faq","name":"articleFound","type":"boolean","options":null,"description":"Did you find a help article that answers the question?","answers":{"main.category":"how_to","main.vip":"no"},"trace":["main","answer/faq"]}
+{"kind":"question","version":1,"key":"faq.articleFound","function":"faq","name":"articleFound","type":"boolean","options":null,"description":"Did you find a help article that answers the question?","answers":{"main.category":"how_to","main.vip":"no"},"trace":["main","faq"]}
 # exit 2
 
-$ rein step --json --answer main.vip=no --answer main.category=how_to --answer answer/faq.articleFound=yes
-{"kind":"request","version":1,"key":"answer/faq.solved","function":"answer/faq","instruction":"Reply with the help article link and ask the customer if it solved the problem.","response":{"name":"solved","type":"boolean","options":null,"description":"Did the customer confirm the article solved the problem?"},"answers":{"answer/faq.articleFound":"yes","main.category":"how_to","main.vip":"no"},"trace":["main","answer/faq"]}
+$ rein step --json --answer main.vip=no --answer main.category=how_to --answer faq.articleFound=yes
+{"kind":"request","version":1,"key":"faq.solved","function":"faq","instruction":"Reply with the help article link and ask the customer if it solved the problem.","response":{"name":"solved","type":"boolean","options":null,"description":"Did the customer confirm the article solved the problem?"},"answers":{"faq.articleFound":"yes","main.category":"how_to","main.vip":"no"},"trace":["main","faq"]}
 # exit 3
 
-$ rein step --json --answer main.vip=no --answer main.category=how_to --answer answer/faq.articleFound=yes --answer answer/faq.solved=yes
-{"kind":"done","version":1,"instruction":"Close the ticket as solved.","answers":{"answer/faq.articleFound":"yes","answer/faq.solved":"yes","main.category":"how_to","main.vip":"no"},"trace":["main","answer/faq"]}
+$ rein step --json --answer main.vip=no --answer main.category=how_to --answer faq.articleFound=yes --answer faq.solved=yes
+{"kind":"done","version":1,"instruction":"Close the ticket as solved.","answers":{"faq.articleFound":"yes","faq.solved":"yes","main.category":"how_to","main.vip":"no"},"trace":["main","faq"]}
 # exit 0
 ```
 

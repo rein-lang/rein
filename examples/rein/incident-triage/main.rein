@@ -24,8 +24,8 @@ export default function main({
     case "sev2":
     case "sev3":
       if (knownRunbook) {
-        return @./runbook/follow;
+        return @./follow;
       }
-      return @./ticket/open;
+      return @./open;
   }
 }

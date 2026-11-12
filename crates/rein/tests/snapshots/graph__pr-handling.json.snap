@@ -228,13 +228,13 @@ expression: text
       "id": "f4_5",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=`request changes`, body=`each security problem, with its file and line`, pr=pr)"
+      "label": "@./review/post_review(kind=`request changes`, body=`each security problem, with its file and line`, pr=pr)"
     },
     {
       "id": "f4_6",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=`approve`, body=`the security checks you made`, pr=pr)"
+      "label": "@./review/post_review(kind=`approve`, body=`the security checks you made`, pr=pr)"
     },
     {
       "id": "f4_7",
@@ -254,30 +254,30 @@ expression: text
       "id": "f4_9",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=`approve`, body=`one line on what you checked`, pr=pr)"
+      "label": "@./review/post_review(kind=`approve`, body=`one line on what you checked`, pr=pr)"
     },
     {
       "id": "f4_10",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=`comment`, body=`each small problem, with its file and line`, pr=pr)"
+      "label": "@./review/post_review(kind=`comment`, body=`each small problem, with its file and line`, pr=pr)"
     },
     {
       "id": "f4_11",
       "kind": "done",
       "function": "review",
-      "label": "@./templates/post_review(kind=`request changes`, body=`each blocking problem, with its file and line`, pr=pr)"
+      "label": "@./review/post_review(kind=`request changes`, body=`each blocking problem, with its file and line`, pr=pr)"
     },
     {
       "id": "f5",
       "kind": "function",
-      "function": "templates/post_review",
-      "label": "templates/post_review(kind, body, pr)"
+      "function": "review/post_review",
+      "label": "review/post_review(kind, body, pr)"
     },
     {
       "id": "f5_0",
       "kind": "done",
-      "function": "templates/post_review",
+      "function": "review/post_review",
       "label": "Post one review on the pull request ${pr}. Type: ${kind}. Body:\n${body}. Do not merge in this run."
     }
   ],

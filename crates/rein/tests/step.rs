@@ -67,8 +67,8 @@ fn answer_for(key: &str) -> &'static str {
     match key {
         "main.vip" => "no",
         "main.category" => "how_to",
-        "answer/faq.articleFound" => "yes",
-        "answer/faq.solved" => "yes",
+        "faq.articleFound" => "yes",
+        "faq.solved" => "yes",
         other => panic!("the walk asked an unexpected key `{other}`"),
     }
 }
@@ -98,7 +98,7 @@ fn stdin_walk_reaches_done_and_feeds_back_answers() {
     };
     assert_eq!(codes, [2, 2, 2, 3, 0]);
     assert_eq!(last["instruction"], "Tell the customer: Glad the help article solved the problem. Reply to this ticket if it comes back. Then close the ticket as\nsolved.");
-    assert_eq!(last["trace"], json!(["main", "answer/faq"]));
+    assert_eq!(last["trace"], json!(["main", "faq"]));
 }
 
 #[test]
@@ -138,12 +138,12 @@ fn exit_code_is_three_for_a_request() {
         "--answer",
         "main.category=how_to",
         "--answer",
-        "answer/faq.articleFound=yes",
+        "faq.articleFound=yes",
     ]);
     assert_eq!(code(&out), 3);
     let v = json(&out);
     assert_eq!(v["kind"], "request");
-    assert_eq!(v["key"], "answer/faq.solved");
+    assert_eq!(v["key"], "faq.solved");
 }
 
 #[test]
@@ -186,16 +186,16 @@ fn answer_flags_give_the_same_result_as_stdin() {
         "--answer",
         "main.category=how_to",
         "--answer",
-        "answer/faq.articleFound=yes",
+        "faq.articleFound=yes",
         "--answer",
-        "answer/faq.solved=yes",
+        "faq.solved=yes",
     ]);
     let by_stdin = step_stdin(&json!({
         "answers": {
             "main.vip": "no",
             "main.category": "how_to",
-            "answer/faq.articleFound": "yes",
-            "answer/faq.solved": "yes",
+            "faq.articleFound": "yes",
+            "faq.solved": "yes",
         }
     }));
     assert_eq!(code(&by_flags), 0);
@@ -251,7 +251,7 @@ fn eval_help_points_agents_at_step() {
 fn run_json_lines_walks_to_done_and_survives_a_bad_answer() {
     let root = example();
     let mut lines = vec![json!({"value": "maybe"}).to_string()];
-    for key in ["main.vip", "main.category", "answer/faq.articleFound", "answer/faq.solved"] {
+    for key in ["main.vip", "main.category", "faq.articleFound", "faq.solved"] {
         lines.push(json!({"key": key, "value": answer_for(key)}).to_string());
     }
     let input = lines.join("\n") + "\n";
@@ -266,5 +266,5 @@ fn run_json_lines_walks_to_done_and_survives_a_bad_answer() {
     assert_eq!(replies[2]["key"], "main.vip", "the run asks the same key again after a bad answer");
     let last = replies.last().unwrap();
     assert_eq!(last["instruction"], "Tell the customer: Glad the help article solved the problem. Reply to this ticket if it comes back. Then close the ticket as\nsolved.");
-    assert_eq!(last["trace"], json!(["main", "answer/faq"]));
+    assert_eq!(last["trace"], json!(["main", "faq"]));
 }

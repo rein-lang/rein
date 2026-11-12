@@ -10,12 +10,38 @@ expression: text
     {
       "id": "f0",
       "kind": "function",
+      "function": "follow",
+      "label": "follow"
+    },
+    {
+      "id": "f0_0",
+      "kind": "request",
+      "function": "follow",
+      "label": "request: `Run the runbook steps for this alert. Then check the alert status and\nreport whether it cleared.`"
+    },
+    {
+      "id": "f0_1",
+      "kind": "question",
+      "function": "follow",
+      "label": "Did the runbook steps clear the alert?\nfixed: boolean",
+      "name": "fixed",
+      "type": "boolean"
+    },
+    {
+      "id": "f0_2",
+      "kind": "done",
+      "function": "follow",
+      "label": "Close the alert. Write a one-line note with the steps you ran."
+    },
+    {
+      "id": "f1",
+      "kind": "function",
       "function": "main",
       "label": "main",
       "entry": true
     },
     {
-      "id": "f0_0",
+      "id": "f1_0",
       "kind": "question",
       "function": "main",
       "label": "Are customers seeing errors or downtime right now?\ncustomerImpact: boolean",
@@ -23,7 +49,7 @@ expression: text
       "type": "boolean"
     },
     {
-      "id": "f0_1",
+      "id": "f1_1",
       "kind": "question",
       "function": "main",
       "label": "How severe is the alert?\nseverity: \"sev1\" | \"sev2\" | \"sev3\"",
@@ -31,7 +57,7 @@ expression: text
       "type": "\"sev1\" | \"sev2\" | \"sev3\""
     },
     {
-      "id": "f0_2",
+      "id": "f1_2",
       "kind": "question",
       "function": "main",
       "label": "Does a runbook exist for this alert?\nknownRunbook: boolean",
@@ -39,68 +65,42 @@ expression: text
       "type": "boolean"
     },
     {
-      "id": "f1",
-      "kind": "function",
-      "function": "page_human",
-      "label": "page_human"
-    },
-    {
-      "id": "f1_0",
-      "kind": "done",
-      "function": "page_human",
-      "label": "Page the on-call engineer now. Post the alert summary in the incident\nchannel. Wait for an acknowledgement before you take any other step."
-    },
-    {
       "id": "f2",
       "kind": "function",
-      "function": "runbook/follow",
-      "label": "runbook/follow"
+      "function": "open",
+      "label": "open"
     },
     {
       "id": "f2_0",
-      "kind": "request",
-      "function": "runbook/follow",
-      "label": "request: `Run the runbook steps for this alert. Then check the alert status and\nreport whether it cleared.`"
-    },
-    {
-      "id": "f2_1",
       "kind": "question",
-      "function": "runbook/follow",
-      "label": "Did the runbook steps clear the alert?\nfixed: boolean",
-      "name": "fixed",
-      "type": "boolean"
-    },
-    {
-      "id": "f2_2",
-      "kind": "done",
-      "function": "runbook/follow",
-      "label": "Close the alert. Write a one-line note with the steps you ran."
-    },
-    {
-      "id": "f3",
-      "kind": "function",
-      "function": "ticket/open",
-      "label": "ticket/open"
-    },
-    {
-      "id": "f3_0",
-      "kind": "question",
-      "function": "ticket/open",
+      "function": "open",
       "label": "Is there already an open ticket for this alert?\nticketExists: boolean",
       "name": "ticketExists",
       "type": "boolean"
     },
     {
-      "id": "f3_1",
+      "id": "f2_1",
       "kind": "done",
-      "function": "ticket/open",
+      "function": "open",
       "label": "Add the alert details as a comment on the open ticket."
     },
     {
-      "id": "f3_2",
+      "id": "f2_2",
       "kind": "done",
-      "function": "ticket/open",
+      "function": "open",
       "label": "Create a ticket with the alert name, severity, and first graph link.\nAssign it to the owning team."
+    },
+    {
+      "id": "f3",
+      "kind": "function",
+      "function": "page_human",
+      "label": "page_human"
+    },
+    {
+      "id": "f3_0",
+      "kind": "done",
+      "function": "page_human",
+      "label": "Page the on-call engineer now. Post the alert summary in the incident\nchannel. Wait for an acknowledgement before you take any other step."
     }
   ],
   "edges": [
@@ -111,36 +111,17 @@ expression: text
     },
     {
       "from": "f0_0",
-      "to": "f1",
-      "kind": "handoff",
-      "label": "yes"
-    },
-    {
-      "from": "f0_0",
       "to": "f0_1",
-      "kind": "flow",
-      "label": "no"
-    },
-    {
-      "from": "f0_1",
-      "to": "f1",
-      "kind": "handoff",
-      "label": "sev1"
+      "kind": "flow"
     },
     {
       "from": "f0_1",
       "to": "f0_2",
       "kind": "flow",
-      "label": "sev2 / sev3"
-    },
-    {
-      "from": "f0_2",
-      "to": "f2",
-      "kind": "handoff",
       "label": "yes"
     },
     {
-      "from": "f0_2",
+      "from": "f0_1",
       "to": "f3",
       "kind": "handoff",
       "label": "no"
@@ -151,6 +132,42 @@ expression: text
       "kind": "flow"
     },
     {
+      "from": "f1_0",
+      "to": "f3",
+      "kind": "handoff",
+      "label": "yes"
+    },
+    {
+      "from": "f1_0",
+      "to": "f1_1",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f1_1",
+      "to": "f3",
+      "kind": "handoff",
+      "label": "sev1"
+    },
+    {
+      "from": "f1_1",
+      "to": "f1_2",
+      "kind": "flow",
+      "label": "sev2 / sev3"
+    },
+    {
+      "from": "f1_2",
+      "to": "f0",
+      "kind": "handoff",
+      "label": "yes"
+    },
+    {
+      "from": "f1_2",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "no"
+    },
+    {
       "from": "f2",
       "to": "f2_0",
       "kind": "flow"
@@ -158,36 +175,19 @@ expression: text
     {
       "from": "f2_0",
       "to": "f2_1",
-      "kind": "flow"
-    },
-    {
-      "from": "f2_1",
-      "to": "f2_2",
       "kind": "flow",
       "label": "yes"
     },
     {
-      "from": "f2_1",
-      "to": "f1",
-      "kind": "handoff",
+      "from": "f2_0",
+      "to": "f2_2",
+      "kind": "flow",
       "label": "no"
     },
     {
       "from": "f3",
       "to": "f3_0",
       "kind": "flow"
-    },
-    {
-      "from": "f3_0",
-      "to": "f3_1",
-      "kind": "flow",
-      "label": "yes"
-    },
-    {
-      "from": "f3_0",
-      "to": "f3_2",
-      "kind": "flow",
-      "label": "no"
     }
   ]
 }

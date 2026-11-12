@@ -14,10 +14,10 @@ export default function main({ category, vip }: Ticket) {
   }
   switch (category) {
     case "billing":
-      return @./billing/refund;
+      return @./refund;
     case "account":
       return @./escalate;
     case "how_to":
-      return @./answer/faq;
+      return @./faq;
   }
 }
