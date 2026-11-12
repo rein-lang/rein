@@ -37,6 +37,8 @@ Programs (flows) live in scopes: project, user, and system. The folders, the man
 - An unterminated doc comment is an error: `unterminated doc comment; add */`.
 - A STRING is text in double quotes or single quotes. Escapes: `\"`, `\'`, `\\`, `\n`. A raw newline is not allowed inside a STRING.
 - A TEMPLATE is text in backticks. It may hold newlines. It can interpolate a name with `${name}`. Only a bare name is allowed inside `${}`. Escapes: `` \` ``, `\\`, `\$`, `\n`.
+- A line continuation is a `\` right before a line break (`\n` or `\r\n`) inside a STRING or a TEMPLATE. The `\` and the line break add no text, as in TypeScript. The next line keeps its leading spaces in the text, so start that line at column 1. Example: `"Read the log. \` on one line and `Fix the test."` on the next is the text `Read the log. Fix the test.`
+- A line holds at most 80 characters. This is the Prettier default `printWidth` (https://prettier.io/docs/options#print-width). The rule counts characters, not bytes, and a tab counts as one character. It applies to every line of every `.rein` file, `.struct.rein` files, doc comments and strings too. A program sets another limit with `maxLineLength` in its `rein.json`: a positive integer, such as `"maxLineLength": 120`.
 - A REF is `@` followed by `./` or `../`, then path names made of letters, digits and `_`, separated by `/`. It has no extension. Examples: `@./ci/fix`, `@../escalate`. A REF that does not start with `./` or `../` names another program: `@program` or `@program/function`. The program name is as `rein list` shows it, and may hold `-`. The function path holds names of letters, digits and `_`. Examples: `@pr-handling`, `@pr-handling/main`. A malformed one is an error: `a reference is `@./path`, `@../path`, or `@program/function` for another program`.
 - An IDENT matches `[A-Za-z_][A-Za-z0-9_]*`.
 - Keywords: `import`, `from`, `export`, `default`, `function`, `if`, `else`, `switch`, `case`, `return`, `boolean`. A keyword cannot be a name.
@@ -364,6 +366,8 @@ When a file has a syntax error, only that error is reported for the file. It is 
 | The function body is empty (`function must return something`) |
 | A function has more lines than the limit (`` function `NAME` has N lines; the limit is M. Move part of it into its own function and call it with `@./name` ``). It points at the header, `export default function NAME` |
 | `rein.json` sets `maxFunctionLines` to a value that is not a positive integer (`` `maxFunctionLines` in rein.json must be a positive integer, such as 40; found VALUE ``). It points at `rein.json`, and the limit stays 40 |
+| A line has more characters than the limit (`` line has N characters; the limit is M. Break the line; to break a long string, end the line with `\` and start the next line at column 1 ``). It points at the part of the line after character M |
+| `rein.json` sets `maxLineLength` to a value that is not a positive integer (`` `maxLineLength` in rein.json must be a positive integer, such as 80; found VALUE ``). It points at `rein.json`, and the limit stays 80 |
 | Two parameters share a name |
 | A function has two or more parameters (`` a function takes one parameter; put `a` and `b` in a struct ``) |
 | A struct parameter names a field that its struct does not have, leaves a field out, or names a field twice |

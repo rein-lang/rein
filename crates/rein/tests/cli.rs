@@ -158,6 +158,38 @@ fn check_applies_the_function_line_limit() {
 }
 
 #[test]
+fn check_applies_the_line_length_limit() {
+    // Line 3 is `  return "` + 69 letters + `";`: 81 characters.
+    let root = temp_dir("width");
+    let text = format!("/** Entry. */\nexport default function main() {{\n  return \"{}\";\n}}\n", "a".repeat(69));
+    fs::write(root.join("main.rein"), &text).unwrap();
+
+    let out = rein(&["check", root.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("main.rein:3:81: error: line has 81 characters; the limit is 80."), "{stdout}");
+
+    fs::write(root.join("rein.json"), r#"{"maxLineLength": 120}"#).unwrap();
+    assert_eq!(code(&rein(&["check", root.to_str().unwrap()])), 0);
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_backslash_at_the_end_of_a_line_continues_the_text() {
+    let root = temp_dir("continue");
+    let text = "/** Entry. */\nexport default function main() {\n  return `Read the log. \\\nFix the test.`;\n}\n";
+    fs::write(root.join("main.rein"), text).unwrap();
+    let main = root.join("main.rein");
+
+    let out = rein(&["step", main.to_str().unwrap(), "--json"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains(r#""instruction":"Read the log. Fix the test.""#), "{stdout}");
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn syntax_error_is_reported_with_its_position() {
     let root = temp_dir("syntax");
     fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  for (;;) { }\n}\n").unwrap();

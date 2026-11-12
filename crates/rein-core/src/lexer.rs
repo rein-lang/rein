@@ -196,6 +196,10 @@ fn lex_string(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
                 ))
             }
             '\\' => {
+                if let Some(len) = line_break_len(&src[i + 1..]) {
+                    i += 1 + len;
+                    continue;
+                }
                 let ch = match src[i + 1..].chars().next() {
                     Some(q @ ('"' | '\'' | '\\')) => q,
                     Some('n') => '\n',
@@ -299,6 +303,10 @@ fn lex_template(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
                 i = name_end + 1;
             }
             '\\' => {
+                if let Some(len) = line_break_len(&src[i + 1..]) {
+                    i += 1 + len;
+                    continue;
+                }
                 let escaped = match src[i + 1..].chars().next() {
                     Some(q @ ('`' | '\\' | '$')) => q,
                     Some('n') => '\n',
@@ -317,6 +325,19 @@ fn lex_template(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
                 i += c.len_utf8();
             }
         }
+    }
+}
+
+/// A line continuation, as in TypeScript: `\` right before a line break adds no text, and the break is dropped.
+/// Returns the length of the line break at the start of `s`, `\n` or `\r\n`.
+// ponytail: a lone `\r`, U+2028 and U+2029 are not line breaks here; add them if a file uses them.
+fn line_break_len(s: &str) -> Option<usize> {
+    if s.starts_with("\r\n") {
+        Some(2)
+    } else if s.starts_with('\n') {
+        Some(1)
+    } else {
+        None
     }
 }
 

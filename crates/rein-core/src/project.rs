@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
-use crate::check::{check_function, check_length, Kind};
+use crate::check::{check_function, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::parser::parse;
 
@@ -41,6 +41,8 @@ pub struct Project {
     pub files: BTreeMap<String, SourceFile>,
     /// The most lines a function may have: `maxFunctionLines` in `rein.json`, else the default.
     pub max_function_lines: u64,
+    /// The most characters a line may hold: `maxLineLength` in `rein.json`, else the default.
+    pub max_line_length: u64,
     /// Errors in `rein.json`. They apply to every file of the project.
     manifest_diagnostics: Vec<Diagnostic>,
 }
@@ -48,29 +50,30 @@ pub struct Project {
 /// The `rein.json` field that sets the line limit of a function.
 const MAX_LINES_FIELD: &str = "maxFunctionLines";
 
-/// The line limit from `root/rein.json`, and an error when the field is not a positive integer. A missing or
-/// unreadable manifest, or one that is not JSON, gives the default, as the program reader does.
-fn read_line_limit(root: &Path) -> (u64, Option<Diagnostic>) {
-    let default = crate::check::DEFAULT_MAX_FUNCTION_LINES;
-    let Some(value) = fs::read_to_string(root.join(crate::flows::MANIFEST))
+/// The `rein.json` field that sets the most characters a line may hold.
+const MAX_LINE_LENGTH_FIELD: &str = "maxLineLength";
+
+/// The limits from `root/rein.json`: the function line limit, the line length limit, and an error for each field
+/// that is not a positive integer. A missing or unreadable manifest, or one that is not JSON, gives the defaults,
+/// as the program reader does.
+fn read_limits(root: &Path) -> (u64, u64, Vec<Diagnostic>) {
+    let manifest = fs::read_to_string(root.join(crate::flows::MANIFEST))
         .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-    else {
-        return (default, None);
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let mut errors = Vec::new();
+    let mut limit = |field: &str, default: u64| {
+        let Some(v) = manifest.as_ref().and_then(|m| m.get(field)) else { return default };
+        v.as_u64().filter(|n| *n > 0).unwrap_or_else(|| {
+            errors.push(Diagnostic::error(
+                Span::default(),
+                format!("`{field}` in {} must be a positive integer, such as {default}; found {v}", crate::flows::MANIFEST),
+            ));
+            default
+        })
     };
-    match value.get(MAX_LINES_FIELD) {
-        None => (default, None),
-        Some(v) => match v.as_u64().filter(|n| *n > 0) {
-            Some(n) => (n, None),
-            None => (
-                default,
-                Some(Diagnostic::error(
-                    Span::default(),
-                    format!("`{MAX_LINES_FIELD}` in {} must be a positive integer, such as 40; found {v}", crate::flows::MANIFEST),
-                )),
-            ),
-        },
-    }
+    let lines = limit(MAX_LINES_FIELD, crate::check::DEFAULT_MAX_FUNCTION_LINES);
+    let length = limit(MAX_LINE_LENGTH_FIELD, crate::check::DEFAULT_MAX_LINE_LENGTH);
+    (lines, length, errors)
 }
 
 impl Project {
@@ -121,8 +124,9 @@ impl Project {
             };
             files.insert(name, SourceFile { path, text, function, parse_diagnostics });
         }
-        let (max_function_lines, limit_error) = read_line_limit(&root);
-        let mut project = Self { root, files, programs: BTreeMap::new(), max_function_lines, manifest_diagnostics: limit_error.into_iter().collect() };
+        let (max_function_lines, max_line_length, manifest_diagnostics) = read_limits(&root);
+        let mut project =
+            Self { root, files, programs: BTreeMap::new(), max_function_lines, max_line_length, manifest_diagnostics };
         project.bind_structs();
         project
     }
@@ -217,7 +221,7 @@ impl Project {
         vec![Diagnostic::error(Span::default(), "project has no main.rein; it is the agent's entry point")]
     }
 
-    /// Errors in `rein.json`, such as a `maxFunctionLines` that is not a positive integer.
+    /// Errors in `rein.json`, such as a `maxFunctionLines` or a `maxLineLength` that is not a positive integer.
     pub fn manifest_diagnostics(&self) -> &[Diagnostic] {
         &self.manifest_diagnostics
     }
@@ -316,6 +320,7 @@ impl Project {
                 if !is_struct(name) {
                     diags.extend(check_length(&sf.function, name, &sf.text, self.max_function_lines));
                 }
+                diags.extend(check_line_length(&sf.text, self.max_line_length));
                 let bindings = self.bindings(name);
                 diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &adj));
                 if !is_struct(name) && reachable.as_ref().is_some_and(|r| !r.contains(name)) {

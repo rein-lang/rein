@@ -84,6 +84,32 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
 /// The line limit of a function when `rein.json` sets none.
 pub const DEFAULT_MAX_FUNCTION_LINES: u64 = 40;
 
+/// The default most characters a line may hold. It is Prettier's default `printWidth`.
+pub const DEFAULT_MAX_LINE_LENGTH: u64 = 80;
+
+/// Checks every line of a file. A line holds at most `max` characters. A character is a Unicode scalar value,
+/// not a byte, and a tab counts as one. A longer line is an error on its overflow: from character `max + 1` to
+/// the end of the line.
+pub fn check_line_length(text: &str, max: u64) -> Vec<Diagnostic> {
+    let limit = usize::try_from(max).unwrap_or(usize::MAX);
+    let mut diags = Vec::new();
+    let mut start = 0;
+    for line in text.split('\n') {
+        let line_text = line.strip_suffix('\r').unwrap_or(line);
+        if let Some((over, _)) = line_text.char_indices().nth(limit) {
+            let chars = line_text.chars().count();
+            diags.push(Diagnostic::error(
+                Span::new(start + over, start + line_text.len()),
+                format!(
+                    "line has {chars} characters; the limit is {max}. Break the line; to break a long string, end the line with `\\` and start the next line at column 1"
+                ),
+            ));
+        }
+        start += line.len() + 1;
+    }
+    diags
+}
+
 /// Checks the length of one function file. The function's lines run from its `export default` line to its
 /// closing `}`, both included. Blank and comment lines count. The doc comment above it does not.
 /// `text` is the file's source, and `max` the limit. Longer than `max` is an error on the function header.

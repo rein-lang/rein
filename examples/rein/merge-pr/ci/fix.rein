@@ -6,7 +6,9 @@ export default function fixCi(
   fixPushed: boolean,
 ) {
   if (fixPushed) {
-    return "Wait for CI to finish. Then start this program again with the task merge.";
+    return "Wait for CI to finish. Then start this program again with \
+the task merge.";
   }
-  return "Read the CI log. Fix the failing test or code. Push the fix. Then run ci/fix again.";
+  return "Read the CI log. Fix the failing test or code. Push the fix. \
+Then run ci/fix again.";
 }
