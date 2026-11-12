@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  body { margin: 0; padding: 16px; font: 14px/1.5 system-ui, sans-serif; background: #fff; color: #111; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  .legend span { display: inline-block; margin-right: 16px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border: 2px solid; border-radius: 3px; }
+  .legend .taken { background: #dcfce7; border-color: #16a34a; }
+  .legend .current { background: #fde68a; border-color: #d97706; }
+  .legend .dimmed { background: #fff; border-color: #999; opacity: 0.4; }
+  pre.mermaid { overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>__TITLE__</h1>
+__WALK__<pre class="mermaid">
+__DIAGRAM__</pre>
+<script type="module">
+  import mermaid from "__MERMAID__";
+  mermaid.initialize({ startOnLoad: true, securityLevel: "strict" });
+</script>
+</body>
+</html>

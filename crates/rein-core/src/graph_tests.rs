@@ -105,3 +105,30 @@ fn double_equals_is_labelled_like_triple() {
     let labels = |p: &Project| flow(p, "main").nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>();
     assert_eq!(labels(&double), labels(&triple));
 }
+
+#[test]
+fn walk_follows_a_compound_condition_and_stops_at_a_missing_answer() {
+    let p = project(&[(
+        "main.rein",
+        "interface Input {\n  /** A? */\n  a: boolean;\n  /** B? */\n  b: boolean;\n}\n/** M. */\nexport default function main({ a, b }: Input) {\n  if (a && b) {\n    return `one`;\n  }\n  return `two`;\n}\n",
+    )]);
+    let mut req = crate::step::StepRequest {
+        version: crate::step::PROTOCOL_VERSION,
+        entry: "main".into(),
+        answers: Default::default(),
+        flow: None,
+        inputs: Default::default(),
+    };
+    req.answers.insert("main.a".into(), "yes".into());
+    req.answers.insert("main.b".into(), "no".into());
+    let g = walk(&p, "main", &crate::step::step(&p, &req));
+    assert_eq!(g.path, ["f0", "f0_0", "f0_2"]);
+    let current = g.current.expect("current");
+    assert_eq!((current.node.as_str(), current.kind), ("f0_2", "done"));
+    assert_eq!(g.edges.iter().filter(|e| e.taken).count(), 2);
+
+    req.answers.remove("main.b");
+    let g = walk(&p, "main", &crate::step::step(&p, &req));
+    assert_eq!(g.path, ["f0", "f0_0"]);
+    assert_eq!(g.current.expect("current").key.as_deref(), Some("main.b"));
+}

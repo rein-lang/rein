@@ -86,6 +86,14 @@ rein step --flow ticket --answer main.urgent=yes --json
 
 For the full protocol, see [spec section 11](docs/spec.md#11-stepping-agent-interface).
 
+## See the path
+
+Give `rein graph` the same answers. It marks the path the flow takes and where it stops. A `.html` file is a page you open in a browser:
+
+```sh
+rein graph ticket --answer main.urgent=yes -o ticket.html
+```
+
 ## Next steps
 
 - Read the [Concepts](/concepts) page for the model.
