@@ -743,17 +743,20 @@ export default async function f() {
     );
 }
 
+const PICK: &str = "/** d */\nexport default async function f() {\n  /** The link of the PR you picked. */\n  const pr: string = await request(\"pick a PR\");\n";
+
 #[test]
-fn answer_cannot_be_a_string() {
+fn string_answer_is_used_in_a_hand_off_and_a_template() {
+    clean(&format!("{PICK}  return @./merge(pr=pr);\n}}"));
+    clean(&format!("{PICK}  return @./tpl(a=pr, b=\"x\");\n}}"));
+}
+
+#[test]
+fn string_answer_cannot_decide_a_branch() {
     expect_diag(
-        r#"/** d */
-export default async function f() {
-  /** Ok? */
-  const s: string = await request("x");
-  return "y"
-}"#,
+        &format!("{PICK}  switch (pr) {{\n    case \"x\":\n      return \"1\";\n  }}\n}}"),
         Severity::Error,
-        "a request answer is `boolean` or a union of strings",
+        "`pr` is a string input; a condition cannot read it",
     );
 }
 

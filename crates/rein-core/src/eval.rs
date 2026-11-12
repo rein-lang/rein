@@ -250,6 +250,7 @@ fn check_answer(input: &Input, raw: &str) -> Eval<()> {
     match &input.ty {
         InputType::Bool => parse_bool(name, raw).map(|_| ()),
         InputType::Choice(members) => check_member(name, members, raw),
+        InputType::Text if raw.is_empty() => Err(Stop::Error(format!("the answer `{name}` is empty; give some text"))),
         InputType::Text => Ok(()),
     }
 }

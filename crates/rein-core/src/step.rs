@@ -334,7 +334,7 @@ fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, St
         let Some(input) = declared(project, key) else {
             return Err((key.clone(), format!("unknown key `{key}`")));
         };
-        if input.ty == InputType::Text {
+        if input.ty == InputType::Text && f_has_param(project, key) {
             return Err((
                 key.clone(),
                 format!("`{key}` is a string parameter; only a template takes one"),
@@ -343,6 +343,11 @@ fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, St
         eval::check_value(input, raw).map_err(|message| (key.clone(), message))?;
     }
     Ok(())
+}
+
+/// True when `key` names a parameter, not a `const` answer.
+fn f_has_param(project: &Project, key: &str) -> bool {
+    key.rsplit_once('.').is_some_and(|(function, name)| project.get(function).is_some_and(|sf| sf.function.input(name).is_some()))
 }
 
 /// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key.

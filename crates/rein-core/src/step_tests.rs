@@ -635,3 +635,18 @@ fn step_follows_a_hand_off_into_another_program() {
     let StepResponse::Done { instruction, .. } = step(&p, &request) else { panic!("not done") };
     assert_eq!(instruction, "Do merge on https://x/pr/1.");
 }
+
+#[test]
+fn string_answer_takes_any_text_and_reaches_the_hand_off() {
+    let p = crate::program_fixture::with_main("/** Entry. */\nexport default async function main() {\n  /** The PR link. */\n  const pr: string = await request(\"pick a PR\");\n  return @pr-handling/main(pr=pr);\n}\n".to_string());
+    let StepResponse::Request { response, key, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    assert_eq!((response.r#type.as_str(), key.as_str()), ("string", "main.pr"));
+    let res = step(&p, &req("main", &[("main.pr", "")]));
+    assert!(matches!(res, StepResponse::Error { .. }), "{res:?}");
+    let mut request = req("main", &[("main.pr", "any text: 1"), ("@pr-handling/main.draft", "false"), ("@pr-handling/main.task", "merge")]);
+    let StepResponse::Done { instruction, .. } = step(&p, &request) else { panic!("not done") };
+    assert_eq!(instruction, "Do merge on any text: 1.");
+    request.answers = answers(&[("main.pr", "x")]);
+    let StepResponse::Question { key, .. } = step(&p, &request) else { panic!("not a question") };
+    assert_eq!(key, "@pr-handling/main.draft");
+}
