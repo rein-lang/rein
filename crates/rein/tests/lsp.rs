@@ -1288,6 +1288,175 @@ fn rename_refuses_a_broken_reference_that_would_resolve_after_the_move() {
 }
 
 #[test]
+fn rename_refuses_a_broken_reference_in_a_file_that_stays_put_that_would_resolve_after_the_move() {
+    let root = folder_project("rename-broken-stays-put");
+    // `x` stays at the root and refers to `@./c`, which does not exist. Renaming `a` to `c` creates `c.rein`, and
+    // the same text in `x` names it, although `x` does not move.
+    fs::write(root.join("x.rein"), "/** X. */\nexport default function x() {\n  return @./c;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("`@./c` in `x` does not resolve, but after the move it would resolve to `c`"),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// `steps/fix_ci` is only called by `flow/merge`, so the quick fix moves it to `flow/merge/fix_ci.rein`, one folder
+/// deeper. It refers to `@../../nope`, which leaves the root from `steps` but names `nope` from `flow/merge`.
+fn escaping_reference_project(tag: &str, nope: bool) -> (PathBuf, Value) {
+    let root = fs::canonicalize(temp_project(tag)).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fixCi() {\n  return @../../nope;\n}\n");
+    if nope {
+        write("nope.rein", "/** Nope. */\nexport default function nope() {\n  return `n`;\n}\n");
+    }
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "`steps/fix_ci` is only called by `flow/merge`; move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    server.shutdown();
+    (root, actions)
+}
+
+#[test]
+fn quick_fix_moves_a_function_deeper_when_its_escaping_reference_still_names_nothing() {
+    // From `steps/fix_ci`, `@../../nope` leaves the root. From `flow/merge/fix_ci` it names `nope`, which is not a
+    // file, so the move changes nothing about the reference and is allowed.
+    let (root, actions) = escaping_reference_project("escape-allowed", false);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![(spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string())],
+            vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_refuses_a_move_that_makes_an_escaping_reference_name_a_file() {
+    // With `nope.rein` at the root, `@../../nope` from `flow/merge/fix_ci` names it after the move.
+    let (root, actions) = escaping_reference_project("escape-refused", true);
+    let offered = actions["result"].as_array().unwrap().iter().any(|a| a["title"] == "Move to flow/merge/fix_ci.rein");
+    assert!(!offered, "{actions}");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_a_function_to_a_name_that_differs_only_in_case() {
+    let root = fs::canonicalize(temp_project("rename-case")).unwrap();
+    // Only a case-insensitive file system (macOS, Windows, or a casefold folder) finds `TARGET.rein` in this folder.
+    if !root.join("TARGET.rein").exists() {
+        eprintln!("skipped: the temp dir is case-sensitive");
+        fs::remove_dir_all(&root).unwrap();
+        return;
+    }
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("Target");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("main.rein", 2, 12, 2, 18), "Target".to_string()),
+                (spot("target.rein", 1, 24, 1, 30), "Target".to_string()),
+            ],
+            vec![("target.rein".to_string(), "Target.rein".to_string())]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_case_only_rename_of_a_function_with_a_folder() {
+    // Decided from the names and the folder on disk, so this runs on any file system.
+    let root = folder_project("rename-case-folder");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("A");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edit["error"]["message"],
+        "a rename that only changes case cannot move the folder `a/`; rename it in two steps through another name",
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_hard_link_of_the_source() {
+    let root = fs::canonicalize(temp_project("rename-hard-link")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    fs::hard_link(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+    // Nothing moved: both names still exist.
+    assert!(root.join("a.rein").exists() && root.join("c.rein").exists());
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_symlink_to_the_source() {
+    let root = fs::canonicalize(temp_project("rename-symlink-dest")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    std::os::unix::fs::symlink(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn rename_moves_the_editor_leftovers_of_the_folder_with_it() {
     let root = folder_project("rename-leftovers");
     fs::write(root.join("a/.DS_Store"), "").unwrap();

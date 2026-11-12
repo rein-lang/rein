@@ -11,9 +11,8 @@ use lsp_types::{
 };
 use rein_core::ast::{is_struct, StructRef, STRUCT_SUFFIX};
 use rein_core::diagnostic::Span;
-use rein_core::flows::MAIN_FILE;
 use rein_core::lexer::KEYWORDS;
-use rein_core::project::{join, skipped_folder, Project};
+use rein_core::project::{join, skips_folder, Project};
 
 use super::occurrences::{declaration, name_span, param_uses, refs, symbol_at, Symbol};
 use super::structs::{base as struct_base, field_sites, struct_decl, type_sites};
@@ -145,7 +144,7 @@ fn rename_struct(state: &State, project: &Project, file: &str, old: &str, new: &
     let sf = project.get(file).ok_or_else(|| format!("cannot find `{file}`"))?;
     let base = struct_base(file);
     let new_path = sf.path.with_file_name(format!("{new}.struct.rein"));
-    if new_path.exists() {
+    if taken(&new_path, &sf.path) {
         return Err(format!("{} already exists", new_path.display()));
     }
     for (f, span) in type_sites(project, file, old) {
@@ -171,8 +170,9 @@ fn rename_function(state: &State, project: &Project, target: &str, new: &str) ->
 /// Moves the file of `target` to the project path `new_target`, with the folder of the functions nested under
 /// it (`<target>/`), so they stay in their caller's folder. Every reference to a moved file is rewritten, and
 /// every relative reference inside a moved file whose path changes. A reference that only changes in its last
-/// segment, as in a rename in the same folder, changes only that segment. A reference inside a moved file that
-/// does not resolve keeps its target, and is refused only when the move would make it resolve to a file. The
+/// segment, as in a rename in the same folder, changes only that segment. A reference that does not resolve keeps
+/// its target, in a moved file or in one that stays put, and the move is refused only when it would make the
+/// reference resolve to a file, or, when it leaves the project root, when it would then name one. The
 /// editor and OS leftovers in the folder move with it. The name after `export default function` changes when it
 /// was the file name.
 pub fn move_function(state: &State, project: &Project, target: &str, new_target: &str) -> Result<WorkspaceEdit, String> {
@@ -183,6 +183,16 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
     let (old, new) = (basename(target), basename(new_target));
     // Each moved file, by its old project path: the target, and every file in its folder.
     let nested = format!("{target}/");
+    // A case-only move (`target` to `Target`) on a case-insensitive file system renames each file of the folder into
+    // the same folder, and the folder keeps its old name, so the references would name a folder that is gone.
+    if target != new_target
+        && target.eq_ignore_ascii_case(new_target)
+        && fs::symlink_metadata(project.root.join(target)).is_ok_and(|m| m.is_dir())
+    {
+        return Err(format!(
+            "a rename that only changes case cannot move the folder `{nested}`; rename it in two steps through another name"
+        ));
+    }
     let moved = |name: &str| -> Option<String> {
         if name == target {
             return Some(new_target.to_string());
@@ -209,7 +219,7 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
             ));
         }
         let new_path = project.root.join(format!("{to}.rein"));
-        if new_path.exists() {
+        if taken(&new_path, &file.path) {
             return Err(format!("{} already exists", new_path.display()));
         }
         let old_uri = uri_for(&state.docs, &file.path).ok_or("the file has no URI")?;
@@ -220,7 +230,7 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
     for path in leftovers {
         let rest = path.strip_prefix(&folder).map_err(|_| format!("`{}` is not in the folder", path.display()))?;
         let new_path = project.root.join(new_target).join(rest);
-        if new_path.exists() {
+        if taken(&new_path, &path) {
             return Err(format!("{} already exists", new_path.display()));
         }
         let old_uri = Url::from_file_path(&path).map_err(|()| "the file has no URI".to_string())?;
@@ -232,13 +242,17 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
         let new_from = moved(from);
         for (span, value, suffix) in references(project, from) {
             let Ok(path_now) = join(from, &value) else {
-                // The reference leaves the project root or is not a path. A moved file may now reach a path.
+                // The reference leaves the project root, so it names nothing now. A moved file may now reach a file.
                 if let Some(new_from) = &new_from {
                     if let Ok(path) = join(new_from, &value) {
-                        return Err(format!(
-                            "`@{value}` in `{from}` leaves the project root, but after the move it would name \
-                             `{path}`, so the move would change its meaning; fix it first"
-                        ));
+                        let now = format!("{path}{suffix}");
+                        if after.contains(&now) {
+                            return Err(format!(
+                                "`@{value}` in `{from}` leaves the project root, but after the move it would name \
+                                 `{}`, so the move would change its meaning; fix it first",
+                                shown_name(&now)
+                            ));
+                        }
                     }
                 }
                 continue;
@@ -246,17 +260,21 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
             let now = format!("{path_now}{suffix}");
             let resolved = project.files.contains_key(&now);
             let new_to = moved(&now);
-            // An unresolved reference in a file that stays put is not this move's business.
-            if new_from.is_none() && (!resolved || new_to.is_none()) {
-                continue;
-            }
-            let to_after = new_to.unwrap_or_else(|| now.clone());
-            if !resolved && after.contains(&to_after) {
+            let to_after = new_to.clone().unwrap_or_else(|| now.clone());
+            // An unresolved reference keeps its text. In a file that stays put, the text names `now` after the move;
+            // in a moved file it is rewritten to name `to_after`. Either way the move is refused when that name
+            // would then be a file.
+            let named = if new_from.is_some() { &to_after } else { &now };
+            if !resolved && after.contains(named) {
                 return Err(format!(
                     "`@{value}` in `{from}` does not resolve, but after the move it would resolve to `{}`, so the move \
                      would change its meaning; fix it first",
-                    shown_name(&to_after)
+                    shown_name(named)
                 ));
+            }
+            // A reference in a file that stays put changes only when it resolves to a file that moves.
+            if new_from.is_none() && (!resolved || new_to.is_none()) {
+                continue;
             }
             let from_now = new_from.as_deref().unwrap_or(from);
             let path = relative_import(from_now, to_after.strip_suffix(suffix).unwrap_or(&to_after));
@@ -324,7 +342,7 @@ fn left_behind(project: &Project, dir: &Path, loaded: &BTreeSet<PathBuf>, leftov
         }
         let is_dir = path.is_dir();
         if is_dir {
-            if skipped_folder(&name) || path.join(MAIN_FILE).is_file() {
+            if skips_folder(&path, &name) {
                 return Err(format!(
                     "`{}` is a folder the project does not load (a hidden, `target` or `node_modules` folder, or one \
                      with its own `main.rein`), so the move would leave it behind; move or remove it first",
@@ -351,6 +369,36 @@ fn symlink_error(path: &str) -> String {
         "`{path}` is a symbolic link; a move would carry the link to a new place, where its target no longer \
          resolves, or take files out of the folder it points to. Move or remove the link first"
     )
+}
+
+/// Whether a move to `new` would overwrite a file other than `old`. The destination is the source itself only when
+/// its path equals the source path ignoring ASCII case (a case-only rename on a case-insensitive file system, where
+/// `a.rein` to `A.rein` finds its own source) and it is the same file. Any other file at `new`, including a hard link
+/// or a symbolic link to the source, is a clash. A link is checked as a link, so it is never taken for its target.
+fn taken(new: &Path, old: &Path) -> bool {
+    if fs::symlink_metadata(new).is_err() {
+        return false;
+    }
+    !(new.to_string_lossy().eq_ignore_ascii_case(&old.to_string_lossy()) && same_file(new, old))
+}
+
+/// Whether `a` and `b` are the same file: the same device and inode on Unix, with no link followed, so a hard link
+/// to the file is the same file and a symbolic link is not. Elsewhere, both must be files that are not links with the
+/// same canonical path.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let is_link = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+        !is_link(a) && !is_link(b) && matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+    }
 }
 
 /// The path of `path` under the project root, as the messages show it, such as `ci/fix/notes.md`.

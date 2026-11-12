@@ -706,7 +706,7 @@ pub fn skipped_folder(name: &str) -> bool {
 
 /// Whether the loader skips the folder `dir` named `name`: [`skipped_folder`], or a folder with its own `main.rein`,
 /// which is another flow.
-fn skips_folder(dir: &Path, name: &str) -> bool {
+pub fn skips_folder(dir: &Path, name: &str) -> bool {
     skipped_folder(name) || dir.join(MAIN_FILE).is_file()
 }
 
