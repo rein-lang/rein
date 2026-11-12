@@ -462,7 +462,9 @@ impl Project {
         let base = name.rsplit('/').next().unwrap_or(name);
         let folder = if *caller == self.entry { caller.rsplit_once('/').map(|(d, _)| d) } else { Some(caller.as_str()) };
         let home = folder.map_or_else(|| base.to_string(), |d| format!("{d}/{base}"));
-        (home != name).then_some((caller.as_str(), home))
+        // A caller inside the function's own folder moves with it, so the function can never reach that folder.
+        let inside_own_folder = home.starts_with(&format!("{name}/"));
+        (home != name && !inside_own_folder).then_some((caller.as_str(), home))
     }
 
     /// Distinct `(function, reference)` pairs for every `@program` or `@program/function` in the project.
