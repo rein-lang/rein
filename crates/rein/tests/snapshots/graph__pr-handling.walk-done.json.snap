@@ -1,0 +1,29 @@
+---
+source: crates/rein/tests/graph.rs
+expression: json
+---
+{
+  "current": {
+    "kind": "done",
+    "node": "f3_5"
+  },
+  "path": [
+    "f2",
+    "f2_0",
+    "f2_2",
+    "f3",
+    "f3_0",
+    "f3_2",
+    "f3_4",
+    "f3_5"
+  ],
+  "taken": [
+    "f2 -> f2_0",
+    "f2_0 -> f2_2",
+    "f2_2 -> f3",
+    "f3 -> f3_0",
+    "f3_0 -> f3_2",
+    "f3_2 -> f3_4",
+    "f3_4 -> f3_5"
+  ]
+}

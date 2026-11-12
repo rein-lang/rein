@@ -139,3 +139,76 @@ fn ids_are_unique_and_labels_are_escaped() {
 
     fs::remove_dir_all(&root).unwrap();
 }
+
+const PR_WALK: [&str; 6] = ["--input", "pr=https://x/pr/1", "--answer", "main.draft=no", "--answer", "main.task=merge"];
+
+/// The Mermaid text of a walk, and a JSON summary of it: `path`, `current` and the edges taken.
+fn walk_view(args: &[&str]) -> (String, String) {
+    let mmd = stdout(&rein(args));
+    let json = stdout(&rein(&[args, &["--format", "json"]].concat()));
+    let v: Value = serde_json::from_str(&json).unwrap();
+    let taken: Vec<String> = v["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["taken"] == true)
+        .map(|e| format!("{} -> {}", e["from"].as_str().unwrap(), e["to"].as_str().unwrap()))
+        .collect();
+    let summary = serde_json::json!({"path": v["path"], "current": v["current"], "taken": taken});
+    (mmd, serde_json::to_string_pretty(&summary).unwrap())
+}
+
+#[test]
+fn walk_stops_at_the_next_question() {
+    let (mmd, json) = walk_view(&[&["graph", "pr-handling"][..], &PR_WALK].concat());
+    assert!(json.contains("\"key\": \"merge.ci\""), "{json}");
+    insta::assert_snapshot!("pr-handling.walk-partial.mmd", mmd);
+    insta::assert_snapshot!("pr-handling.walk-partial.json", json);
+}
+
+#[test]
+fn walk_to_done_marks_the_outcome() {
+    let more = ["--answer", "merge.ci=green", "--answer", "merge.conflicts=no", "--answer", "merge.review=approved"];
+    let (mmd, json) = walk_view(&[&["graph", "pr-handling"][..], &PR_WALK, &more].concat());
+    assert!(json.contains("\"kind\": \"done\""), "{json}");
+    insta::assert_snapshot!("pr-handling.walk-done.mmd", mmd);
+    insta::assert_snapshot!("pr-handling.walk-done.json", json);
+}
+
+#[test]
+fn walk_with_an_invalid_answer_fails_like_step() {
+    let bad = ["--input", "pr=https://x/pr/1", "--answer", "main.task=ship"];
+    let graph = rein(&[&["graph", "pr-handling"][..], &bad].concat());
+    let step = rein(&[&["step", "pr-handling"][..], &bad].concat());
+    assert_eq!(graph.status.code(), Some(1));
+    assert_eq!(graph.status.code(), step.status.code());
+    let err = String::from_utf8_lossy(&graph.stderr).to_string();
+    assert_eq!(err, String::from_utf8_lossy(&step.stderr));
+    insta::assert_snapshot!("pr-handling.walk-invalid.stderr", err);
+}
+
+#[test]
+fn html_page_has_the_diagram_the_pinned_mermaid_and_the_legend() {
+    let dir = temp_dir("html");
+    let file = dir.join("flow.html");
+    let args = [&["graph", "pr-handling", "-o", file.to_str().unwrap()][..], &PR_WALK].concat();
+    assert_eq!(stdout(&rein(&args)), "");
+    let page = fs::read_to_string(&file).unwrap();
+    let parts = [
+        "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs",
+        "<pre class=\"mermaid\">",
+        "flowchart TD",
+        "classDef taken",
+        "class=\"legend\"",
+        "not taken",
+        "<code>merge.ci</code>",
+        "<code>--answer main.task=merge</code>",
+        "<code>--input pr=https://x/pr/1</code>",
+        "@media (prefers-color-scheme: dark)",
+        "theme: dark ? \"dark\" : \"default\"",
+    ];
+    for part in parts {
+        assert!(page.contains(part), "{part}\n{page}");
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}

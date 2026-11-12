@@ -326,7 +326,7 @@ fn failure(
 }
 
 /// The wire type name and the options of an input.
-fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
+pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
     let options = input
         .ty
         .options()
@@ -423,7 +423,7 @@ fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>) -> Res
 }
 
 /// The answers that belong to `function`, keyed by the bare name the evaluator uses.
-fn inputs_of(function: &str, answers: &Answers) -> HashMap<String, String> {
+pub(crate) fn inputs_of(function: &str, answers: &Answers) -> HashMap<String, String> {
     answers
         .iter()
         .filter_map(|(key, raw)| {
