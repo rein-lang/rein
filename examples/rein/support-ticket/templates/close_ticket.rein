@@ -3,5 +3,5 @@
  */
 export default function closeTicket({ opening, nextStep }: @./message) {
   return `Tell the customer: ${opening} ${nextStep} Then close the ticket as
-    solved.`;
+  solved.`;
 }

@@ -7,8 +7,8 @@ export default function fixCi(
 ) {
   if (fixPushed) {
     return `Wait for CI to finish. Then start this program again with the task
-      merge.`;
+    merge.`;
   }
   return `Read the CI log. Fix the failing test or code. Push the fix. Then run
-    ci/fix again.`;
+  ci/fix again.`;
 }

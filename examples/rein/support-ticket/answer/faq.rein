@@ -11,7 +11,7 @@ export default async function answerFaq(
   /** Did the customer confirm the article solved the problem? */
   const solved: boolean = await request(
     `Reply with the help article link and ask the customer if it solved the
-      problem.`,
+    problem.`,
   );
   if (solved) {
     return @../templates/close_ticket(

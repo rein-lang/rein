@@ -20,7 +20,7 @@ export default async function review({ pr, ownPr, securitySensitive }: Input) {
     /** Did the security review find a problem that must be fixed? */
     const securityProblem: boolean = await request(
       delegate(model="use opus model", task=`review the pull request ${pr}
-        with a security focus and list each problem with file and line`),
+      with a security focus and list each problem with file and line`),
     );
     if (securityProblem) {
       return @./templates/post_review(kind="request changes",
@@ -33,7 +33,7 @@ export default async function review({ pr, ownPr, securitySensitive }: Input) {
   const verdict: "clean" | "small problems" | "blocking problems" =
     await request(
       delegate(model="use haiku model", task=`review the pull request ${pr}
-        and list each problem with file and line`),
+      and list each problem with file and line`),
     );
   switch (verdict) {
     case "clean":
