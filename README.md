@@ -4,7 +4,7 @@ Status: proof of concept. Private.
 
 Rein is a language for agent flows. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It returns the next step as text, as a reference to another function, or as a template call. When it needs a fact, it asks the agent. When it needs a step done, it sends the agent a request and waits for the answer.
 
-Rein mimics TypeScript syntax and types, except `@` references. There are no imports, no `else`, and no `default`. Every function returns on every path.
+Rein mimics TypeScript syntax and types, except `@` references. There are no imports, no `else`, and no `default`. Every function returns on every path. A function takes one parameter: a scalar or a struct, and a shared struct is a `<name>.struct.rein` file.
 
 ## Sample
 
@@ -13,15 +13,17 @@ Rein mimics TypeScript syntax and types, except `@` references. There are no imp
 ```ts
 // merge_pr.rein
 
+interface Input {
+  /** Does the PR change only documentation files? */
+  docsOnly: boolean;
+  /** What is the CI status of the PR? */
+  ci: "green" | "red" | "pending";
+}
+
 /**
  * Decide whether a pull request can be merged.
  */
-export default function mergePr(
-  /** Does the PR change only documentation files? */
-  docsOnly: boolean,
-  /** What is the CI status of the PR? */
-  ci: "green" | "red" | "pending",
-) {
+export default function mergePr({ docsOnly, ci }: Input) {
   if (docsOnly) {
     return "approved";
   }
