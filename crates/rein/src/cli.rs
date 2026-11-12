@@ -149,7 +149,7 @@ pub(crate) fn exit_code(response: &StepResponse) -> u8 {
 }
 
 /// The request from stdin (JSON, all of it) or from `--entry` and `--answer key=value` flags.
-fn build_request(entry: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool) -> Result<StepRequest, String> {
+pub(crate) fn build_request(entry: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool) -> Result<StepRequest, String> {
     if from_stdin {
         if entry.is_some() || !answers.is_empty() || !inputs.is_empty() {
             return Err("--stdin reads the whole request; do not combine it with --entry, --answer or --input".into());

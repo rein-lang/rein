@@ -49,13 +49,7 @@ pub fn run(
     if let Some(name) = unknown.first() {
         return Err(format!("unknown input `{name}`"));
     }
-    // A struct answer also gives one input per field, named `answer.field`.
-    let mut expanded = inputs.clone();
-    for (name, found) in &f.answer_structs {
-        if let (Ok(s), Some(raw)) = (found, inputs.get(name)) {
-            expanded.extend(struct_values(name, s, raw).unwrap_or_default());
-        }
-    }
+    let expanded = with_struct_fields(f, inputs);
     let env = Env { f, inputs: &expanded, bindings, answers: RefCell::new(Vec::new()) };
     match exec(&env, &f.body) {
         Ok(Some(out)) => Ok(out),
@@ -64,6 +58,26 @@ pub fn run(
         Err(Stop::Error(msg)) => Err(msg),
         Err(Stop::Request { instruction, response }) => Ok(Outcome::Request { instruction, response }),
     }
+}
+
+/// The inputs, plus one input per field of each struct answer given, named `answer.field`.
+pub fn with_struct_fields(f: &Function, inputs: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut expanded = inputs.clone();
+    for (name, found) in &f.answer_structs {
+        if let (Ok(s), Some(raw)) = (found, inputs.get(name)) {
+            expanded.extend(struct_values(name, s, raw).unwrap_or_default());
+        }
+    }
+    expanded
+}
+
+/// Whether `cond` holds for `inputs` (from [`with_struct_fields`]), with every answer of `f` in scope.
+/// `None` when a value it needs is missing or not valid. `rein graph` walks a flow with it.
+pub fn holds(f: &Function, cond: &Expr, inputs: &HashMap<String, String>) -> Option<bool> {
+    let bindings = BTreeMap::new();
+    let answers = inputs.keys().filter_map(|k| f.response(k)).collect();
+    let env = Env { f, inputs, bindings: &bindings, answers: RefCell::new(answers) };
+    eval(&env, cond).ok()
 }
 
 /// Runs one block. The answers it binds are dropped when it ends.
