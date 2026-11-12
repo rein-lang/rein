@@ -23,8 +23,20 @@ pub struct SourceFile {
     pub parse_diagnostics: Vec<Diagnostic>,
 }
 
+/// Gives the root and entry function of a program by name, or why there is none.
+pub type FindProgram = dyn Fn(&str) -> Result<(PathBuf, String), String>;
+
+/// Another installed program that this project hands off to, with the entry function a hand-off starts at.
+pub struct Linked {
+    pub project: Box<Project>,
+    pub entry: String,
+}
+
 pub struct Project {
     pub root: PathBuf,
+    /// The programs named by `@program/function`, by name. Filled by [`Project::link_programs`]. A name that did
+    /// not load holds the reason. Their functions are reached as `name:function`, such as `pr-handling:main`.
+    pub programs: BTreeMap<String, Result<Linked, String>>,
     /// Key = function name.
     pub files: BTreeMap<String, SourceFile>,
     /// The most lines a function may have: `maxFunctionLines` in `rein.json`, else the default.
@@ -110,7 +122,7 @@ impl Project {
             files.insert(name, SourceFile { path, text, function, parse_diagnostics });
         }
         let (max_function_lines, limit_error) = read_line_limit(&root);
-        let mut project = Self { root, files, max_function_lines, manifest_diagnostics: limit_error.into_iter().collect() };
+        let mut project = Self { root, files, programs: BTreeMap::new(), max_function_lines, manifest_diagnostics: limit_error.into_iter().collect() };
         project.bind_structs();
         project
     }
@@ -154,8 +166,47 @@ impl Project {
         name_under(&self.root, path)
     }
 
+    /// A function by project path. `@program/path` is a function inside a linked program.
     pub fn get(&self, name: &str) -> Option<&SourceFile> {
-        self.files.get(name)
+        match name.strip_prefix('@') {
+            Some(inner) => {
+                let (program, path) = inner.split_once('/')?;
+                self.linked(program)?.project.get(path)
+            }
+            None => self.files.get(name),
+        }
+    }
+
+    fn linked(&self, program: &str) -> Option<&Linked> {
+        self.programs.get(program)?.as_ref().ok()
+    }
+
+    /// Loads each program that a `@program` or `@program/function` names. `find` gives the root and entry of a
+    /// program by name, as the scopes resolve it. The CLI passes it, because scopes live on the machine, not here.
+    pub fn link_programs(&mut self, find: &FindProgram) {
+        let names: BTreeSet<String> = self
+            .files
+            .values()
+            .flat_map(|sf| keys(&sf.function))
+            .filter(|k| is_program_key(k))
+            .map(|k| k.split('/').next().unwrap_or_default().to_string())
+            .collect();
+        for name in names {
+            let loaded = find(&name).and_then(|(root, entry)| {
+                let project = Project::load(&root).map_err(|e| format!("cannot read program `{name}`: {e}"))?;
+                Ok(Linked { project: Box::new(project), entry })
+            });
+            self.programs.insert(name, loaded);
+        }
+    }
+
+    /// The function to run after a hand-off from `from` to `target`. A target in another program is already
+    /// `@program/path`. Inside a linked program (`from` is `@program/path`), a local target stays in that program.
+    pub fn qualify(&self, from: &str, target: &str) -> String {
+        match from.strip_prefix('@').and_then(|f| f.split_once('/')) {
+            Some((program, _)) if !target.starts_with('@') => format!("@{program}/{target}"),
+            _ => target.to_string(),
+        }
     }
 
     /// Diagnostics that belong to the project, not to one function. They point at `main.rein`.
@@ -189,6 +240,9 @@ impl Project {
 
     /// What each callee and reference of `name` refers to, keyed by [`Callee::key`]. Unresolved ones are left out.
     pub fn bindings(&self, name: &str) -> BTreeMap<String, Binding<'_>> {
+        if let Some((program, path)) = name.strip_prefix('@').and_then(|n| n.split_once('/')) {
+            return self.linked(program).map_or_else(BTreeMap::new, |l| l.project.bindings(path));
+        }
         let Some(sf) = self.files.get(name) else { return BTreeMap::new() };
         keys(&sf.function)
             .into_iter()
@@ -199,6 +253,9 @@ impl Project {
     /// What a callee or reference written in function `from` refers to, or why it does not resolve.
     /// A std name (no `./` or `../`) is a std item. Anything else is a path relative to `from`.
     pub fn binding_for(&self, from: &str, key: &str) -> Result<Binding<'_>, String> {
+        if is_program_key(key) {
+            return self.program_binding(key);
+        }
         if !(key.starts_with("./") || key.starts_with("../")) {
             return crate::stdlib::item(key);
         }
@@ -211,12 +268,31 @@ impl Project {
         })
     }
 
+    /// What `@program` or `@program/function` names: the function in the linked program, entry when bare.
+    fn program_binding(&self, key: &str) -> Result<Binding<'_>, String> {
+        let (program, path) = key.split_once('/').map_or((key, None), |(p, f)| (p, Some(f)));
+        let linked = match self.programs.get(program) {
+            Some(Ok(linked)) => linked,
+            Some(Err(reason)) => return Err(reason.clone()),
+            None => return Err(unknown_program(program)),
+        };
+        let path = path.unwrap_or(&linked.entry);
+        let function = &linked
+            .project
+            .files
+            .get(path)
+            .ok_or_else(|| format!("cannot find function `{path}` in program `{program}`"))?
+            .function;
+        let target = format!("@{program}/{path}");
+        Ok(if function.is_template() { Binding::Template { path: Some(target), function } } else { Binding::Function(target) })
+    }
+
     /// What a reference written in function `from` names, for the checker. A function reports the names of its
     /// `string` parameters, and a template the names of all its parameters, so a call can bind them by name.
     fn kind_for(&self, from: &str, key: &str) -> Result<Kind, String> {
         Ok(match self.binding_for(from, key)? {
             Binding::Function(path) => Kind::Function {
-                strings: self.files.get(&path).map_or_else(Vec::new, |sf| param_names(sf.function.text_inputs())),
+                strings: self.get(&path).map_or_else(Vec::new, |sf| param_names(sf.function.text_inputs())),
             },
             Binding::Template { function, .. } => Kind::Template { params: param_names(function.inputs.iter()) },
             Binding::Request => Kind::Request,
@@ -250,6 +326,14 @@ impl Project {
                 (name.clone(), diags)
             })
             .collect()
+    }
+
+    /// Distinct `(function, reference)` pairs for every `@program` or `@program/function` in the project.
+    pub fn program_refs(&self) -> Vec<(String, String)> {
+        let pairs = self.files.iter().flat_map(|(name, sf)| {
+            keys(&sf.function).into_iter().filter(|k| is_program_key(k)).map(move |k| (name.clone(), k))
+        });
+        pairs.collect()
     }
 
     /// Distinct `(from, to)` pairs for every return of an imported function that resolves.
@@ -372,6 +456,16 @@ fn collect(
     Ok(())
 }
 
+/// Whether a reference key names another program: it is not a relative path and not a std name.
+fn is_program_key(key: &str) -> bool {
+    !(key.starts_with("./") || key.starts_with("../")) && crate::stdlib::item(key).is_err()
+}
+
+/// Why a `@program` has no program behind it.
+fn unknown_program(name: &str) -> String {
+    format!("cannot find program `{name}`; run `rein list` to list programs")
+}
+
 /// The names of some parameters, in order.
 fn param_names<'a>(inputs: impl Iterator<Item = &'a Input>) -> Vec<String> {
     inputs.map(|i| i.name.value.clone()).collect()
@@ -419,8 +513,9 @@ fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<(Str
     let mut out = Vec::new();
     walk_stmts(&f.body, &mut |s| {
         let mut push = |key: &str| match bindings.get(key) {
-            Some(Binding::Function(path)) => out.push((path.clone(), s.span())),
-            Some(Binding::Template { path: Some(path), .. }) => out.push((path.clone(), s.span())),
+            // A program is another project, not a node of this one.
+            Some(Binding::Function(path)) if !path.starts_with('@') => out.push((path.clone(), s.span())),
+            Some(Binding::Template { path: Some(path), .. }) if !path.starts_with('@') => out.push((path.clone(), s.span())),
             _ => {}
         };
         let callee_is_ref = |c: &crate::ast::Call| matches!(c.callee, Callee::Ref(_));

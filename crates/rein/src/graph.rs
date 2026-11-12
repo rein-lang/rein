@@ -33,7 +33,7 @@ fn write(program: Option<String>, root: Option<PathBuf>, refs: bool, format: Gra
         Some(p) => scopes::locate(&p)?,
         None => (root.unwrap_or_else(|| Project::find_root(Path::new("."))), ENTRY.to_string()),
     };
-    let project = Project::load(&root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+    let project = scopes::load_linked(&root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
     let g = if refs { graph::refs(&project, &entry) } else { graph::flow(&project, &entry) };
     let image = output.and_then(|p| p.extension()).and_then(|e| e.to_str()).filter(|e| matches!(*e, "svg" | "png"));
     if let (Some(path), Some(ext)) = (output, image) {

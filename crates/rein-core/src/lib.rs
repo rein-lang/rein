@@ -8,5 +8,7 @@ pub mod graph;
 pub mod lexer;
 pub mod parser;
 pub mod project;
+#[cfg(test)]
+mod program_fixture;
 pub mod stdlib;
 pub mod step;

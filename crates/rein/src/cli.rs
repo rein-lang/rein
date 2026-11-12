@@ -36,7 +36,7 @@ pub fn check(given: &Path) -> u8 {
     }
     let scope = absolute(given);
     let root = Project::find_root(&scope);
-    let project = match Project::load(&root) {
+    let project = match scopes::load_linked(&root) {
         Ok(p) => p,
         Err(e) => return fail(false, &format!("cannot read {}: {e}", root.display())),
     };
@@ -291,7 +291,7 @@ pub fn description(f: &Function) -> String {
 
 fn load(root: Option<PathBuf>) -> Result<Project, String> {
     let root = root.unwrap_or_else(|| Project::find_root(Path::new(".")));
-    Project::load(&root).map_err(|e| format!("cannot read {}: {e}", root.display()))
+    scopes::load_linked(&root).map_err(|e| format!("cannot read {}: {e}", root.display()))
 }
 
 /// Diagnostics under `scope`: one file, one directory, or the whole project. Sorted by file then position.

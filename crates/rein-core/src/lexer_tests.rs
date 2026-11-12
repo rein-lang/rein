@@ -123,9 +123,20 @@ fn plain_block_comment_is_rejected() {
 }
 
 #[test]
-fn at_sign_needs_a_relative_path() {
-    let err = lex("return @x").unwrap_err();
-    assert_eq!(err.message, "references are relative: write `@./name`");
+fn bare_at_name_is_a_program_reference() {
+    let toks = lex("@pr-handling @pr-handling/main @./x").unwrap();
+    let refs: Vec<&Tok> = toks.iter().map(|(t, _)| t).collect();
+    assert_eq!(refs[0], &Tok::Ref("pr-handling".into()));
+    assert_eq!(refs[1], &Tok::Ref("pr-handling/main".into()));
+    assert_eq!(refs[2], &Tok::Ref("./x".into()));
+}
+
+#[test]
+fn bad_program_reference_is_an_error() {
+    for src in ["@", "@-x", "@x/", "@x//y", "@x/a-b"] {
+        let err = lex(src).unwrap_err();
+        assert!(err.message.contains("@program/function"), "{src}: {}", err.message);
+    }
 }
 
 #[test]

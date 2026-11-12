@@ -82,3 +82,17 @@ fn mermaid_escapes_quotes_hashes_and_backticks() {
         "{text}"
     );
 }
+
+#[test]
+fn program_hand_off_is_an_edge_to_a_program_node() {
+    let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    let g = flow(&p, "main");
+    let node = g.nodes.iter().find(|n| n.kind == NodeKind::Program).expect("program node");
+    assert_eq!(node.label, "@pr-handling/main");
+    let edge = g.edges.iter().find(|e| e.to == node.id).expect("edge");
+    assert_eq!(edge.kind, EdgeKind::Handoff);
+    assert_eq!((edge.args[0].name.as_str(), edge.args[0].value.as_str()), ("pr", "pr"));
+    let r = refs(&p, "main");
+    assert!(r.nodes.iter().any(|n| n.kind == NodeKind::Program && n.label == "@pr-handling/main"));
+    assert!(r.edges.iter().any(|e| e.kind == EdgeKind::Handoff && e.from == "f0"));
+}
