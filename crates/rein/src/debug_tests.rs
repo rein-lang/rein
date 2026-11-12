@@ -125,6 +125,14 @@ fn start_url_carries_the_starting_state_as_its_query() {
 }
 
 #[test]
+fn page_has_the_zoom_and_the_pan() {
+    let html = page(&first(&[]));
+    for part in ["id=\"zoom-in\"", "id=\"zoom-fit\"", "id=\"zoom-100\"", "function centerCurrent()", "addEventListener(\"wheel\""] {
+        assert!(html.contains(part), "{part}");
+    }
+}
+
+#[test]
 fn routes_and_the_host_check() {
     let server = Server { project: pr_handling(), first: first(&[]), port: 4000 };
     assert_eq!(server.respond("GET", "/nope", "").0, "404 Not Found");
