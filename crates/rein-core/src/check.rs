@@ -2,7 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::ast::{Binding, Callee, Call, Case, DocBlock, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
+use crate::ast::{
+    Binding, Callee, Call, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
+    StructParam, StructRef, TemplateLit, Value, STRUCT_SUFFIX,
+};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{KEYWORDS, RESERVED};
 use crate::stdlib;
@@ -37,6 +40,10 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
         pending: Vec::new(),
         names: BTreeSet::new(),
     };
+    if let Some(stem) = name.strip_suffix(STRUCT_SUFFIX) {
+        c.struct_file(stem);
+        return c.out;
+    }
     if !valid_name(name) {
         c.error(
             Span::default(),
@@ -47,6 +54,7 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
     }
     c.doc(name);
     c.params();
+    c.structs();
     if let Some(lit) = f.template_literal() {
         c.template(lit);
     } else if f.body.is_empty() {
@@ -124,6 +132,25 @@ pub fn string_in_condition(name: &str) -> String {
 fn members_text(members: &[Spanned<String>]) -> String {
     members.iter().map(|o| format!("`{}`", o.value)).collect::<Vec<_>>().join(", ")
 }
+
+/// `` `a` ``, `` `a` and `b` ``, or `` `a`, `b` and `c` ``.
+fn and_list(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+    match quoted.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => quoted.concat(),
+    }
+}
+
+/// The names a parameter brings: its own name, or the names in `{ }`.
+fn written_names(p: &Param) -> Vec<String> {
+    match p {
+        Param::Scalar(i) => vec![i.name.value.clone()],
+        Param::Struct(s) => s.fields.iter().map(|n| n.value.clone()).collect(),
+    }
+}
+
+const STRUCT_FILE_ONLY: &str = "a `.struct.rein` file holds one `export default interface` and nothing else";
 
 struct Checker<'a> {
     f: &'a Function,
@@ -213,13 +240,40 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Each parameter has a doc comment, and names are unique.
+    /// A function takes one parameter at most. A scalar parameter has a doc comment and a valid type. A struct
+    /// parameter names a struct and destructures every field of it.
     fn params(&mut self) {
         let f = self.f;
-        for (i, input) in f.inputs.iter().enumerate() {
+        if f.params.len() > 1 {
+            let names: Vec<String> = f.params.iter().flat_map(written_names).collect();
+            let span = f.params[1].span().to(f.params[f.params.len() - 1].span());
+            self.error(span, format!("a function takes one parameter; put {} in a struct", and_list(&names)));
+        }
+        let scalars: Vec<&Input> = f
+            .params
+            .iter()
+            .filter_map(|p| match p {
+                Param::Scalar(i) => Some(i),
+                Param::Struct(_) => None,
+            })
+            .collect();
+        self.declarations(&scalars, "parameter");
+        if let Some(p) = f.struct_param() {
+            match &f.input_struct {
+                Some(Err(msg)) => self.error(p.ty.name().span, msg.clone()),
+                Some(Ok(s)) => self.destructure(p, s),
+                None => {}
+            }
+        }
+    }
+
+    /// Doc comments, unique names and union members, for parameters or for the fields of a struct.
+    /// `noun` is `parameter` or `field`.
+    fn declarations(&mut self, inputs: &[&Input], noun: &str) {
+        for (i, input) in inputs.iter().enumerate() {
             let name = &input.name.value;
-            if f.inputs[..i].iter().any(|p| p.name.value == *name) {
-                self.error(input.name.span, format!("duplicate parameter `{name}`"));
+            if inputs[..i].iter().any(|p| p.name.value == *name) {
+                self.error(input.name.span, format!("duplicate {noun} `{name}`"));
             }
             if let Some(doc) = &input.doc {
                 self.tags(doc);
@@ -227,21 +281,105 @@ impl<'a> Checker<'a> {
             if input.description.value.trim().is_empty() {
                 self.error(
                     input.name.span,
-                    format!("parameter `{name}` needs a doc comment: /** question */ {name}: ..."),
+                    format!("{noun} `{name}` needs a doc comment: /** question */ {name}: ..."),
                 );
             }
             if let InputType::Choice(members) = &input.ty {
                 if members.len() < 2 {
-                    self.error(input.span, format!("union parameter `{name}` needs at least 2 members"));
+                    self.error(input.span, format!("union {noun} `{name}` needs at least 2 members"));
                 }
                 for (j, m) in members.iter().enumerate() {
                     if m.value.trim().is_empty() {
-                        self.error(m.span, format!("empty member in union parameter `{name}`"));
+                        self.error(m.span, format!("empty member in union {noun} `{name}`"));
                     } else if members[..j].iter().any(|p| p.value == m.value) {
-                        self.error(m.span, format!("duplicate member `{}` in union parameter `{name}`", m.value));
+                        self.error(m.span, format!("duplicate member `{}` in union {noun} `{name}`", m.value));
                     }
                 }
             }
+        }
+    }
+
+    /// `{ a, b }: S` names only fields of `S`, each once, and every field of `S`.
+    fn destructure(&mut self, p: &StructParam, s: &Struct) {
+        let fields: Vec<&str> = s.fields.iter().map(|f| f.name.value.as_str()).collect();
+        for (i, n) in p.fields.iter().enumerate() {
+            if !fields.contains(&n.value.as_str()) {
+                self.error(n.span, format!("`{}` is not a field of `{}`; fields are {}", n.value, s.name.value, fields.join(", ")));
+            } else if p.fields[..i].iter().any(|o| o.value == n.value) {
+                self.error(n.span, format!("`{}` is destructured twice", n.value));
+            }
+        }
+        for field in &fields {
+            if !p.fields.iter().any(|n| n.value == *field) {
+                self.error(p.span, format!("destructure every field of `{}`; missing: `{field}`", s.name.value));
+            }
+        }
+    }
+
+    /// The fields of one `interface`.
+    fn fields(&mut self, s: &Struct) {
+        let fields: Vec<&Input> = s.fields.iter().collect();
+        self.declarations(&fields, "field");
+    }
+
+    /// The `interface`s of a function file. Each one is an inline input struct: it is not exported, and the
+    /// function's struct parameter names it.
+    fn structs(&mut self) {
+        let f = self.f;
+        let used = f.struct_param().and_then(|p| match &p.ty {
+            StructRef::Local(n) => Some(n.value.as_str()),
+            StructRef::Ref(_) => None,
+        });
+        for s in &f.structs {
+            if s.export.is_some() {
+                self.error(
+                    s.name.span,
+                    format!("input struct `{}` cannot be exported; to share it, move it to its own `.struct.rein` file", s.name.value),
+                );
+            }
+            if used != Some(s.name.value.as_str()) {
+                self.warning(
+                    s.name.span,
+                    format!("unused struct `{}`; an inline struct is the input of the function in its file", s.name.value),
+                );
+            }
+            self.fields(s);
+        }
+    }
+
+    /// A `.struct.rein` file holds one `export default interface`, with a doc comment, and nothing else.
+    fn struct_file(&mut self, stem: &str) {
+        let f = self.f;
+        if !valid_name(stem) {
+            self.error(
+                Span::default(),
+                format!(
+                    "invalid struct file name `{stem}.struct.rein`; each `/` part must match [A-Za-z_][A-Za-z0-9_]* and must not be a keyword"
+                ),
+            );
+        }
+        if let Some(name) = &f.name {
+            self.error(name.span, format!("{STRUCT_FILE_ONLY}; move the function to its own `.rein` file"));
+        }
+        let mut exported = false;
+        for s in &f.structs {
+            if !s.default || exported {
+                self.error(s.name.span, STRUCT_FILE_ONLY);
+            } else {
+                exported = true;
+                let name = &s.name.value;
+                match &s.doc {
+                    Some(doc) if !doc.description.value.trim().is_empty() => self.tags(doc),
+                    Some(doc) => {
+                        self.error(doc.span, format!("empty description on struct `{name}`; write what it holds in the doc comment"))
+                    }
+                    None => self.error(
+                        s.name.span,
+                        format!("missing doc comment on struct `{name}`; put /** description */ right before `export default interface`"),
+                    ),
+                }
+            }
+            self.fields(s);
         }
     }
 
@@ -526,11 +664,14 @@ mod tests {
     use crate::diagnostic::Severity;
     use crate::parser::parse;
 
-    const TPL: &str = r#"/** Pick. */
-export default function tpl(
-  /** First. */ a: string,
-  /** Second. */ b: string,
-) {
+    const TPL: &str = r#"interface Input {
+  /** First. */
+  a: string;
+  /** Second. */
+  b: string;
+}
+/** Pick. */
+export default function tpl({ a, b }: Input) {
   return `${a} ${b}`;
 }"#;
 
@@ -1264,7 +1405,7 @@ export default async function f() {
     fn string_parameter_makes_a_normal_function_when_mixed_with_a_union() {
         // Not all parameters are `string`, so this is not a template. `pr` is an input, and no error is given.
         clean(
-            "/** d */\nexport default function f(\n  /** Link */ pr: string,\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return `Pick ${pr}` }\n  return `Other ${pr} ${c}`;\n}",
+            "interface Input {\n  /** Link */\n  pr: string;\n  /** C */\n  c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ pr, c }: Input) {\n  if (c === \"x\") { return `Pick ${pr}` }\n  return `Other ${pr} ${c}`;\n}",
         );
     }
 
@@ -1310,8 +1451,8 @@ export default async function f() {
 
     #[test]
     fn named_arguments_bind_in_any_order() {
-        clean(&with("", "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./tpl(b=a, a=b);\n}"));
-        clean(&with("", "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./tpl(a=a, b=b);\n}"));
+        clean(&with("", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** d */\nexport default function f({ a, b }: Input) {\n  return @./tpl(b=a, a=b);\n}"));
+        clean(&with("", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** d */\nexport default function f({ a, b }: Input) {\n  return @./tpl(a=a, b=b);\n}"));
     }
 
     #[test]
@@ -1388,6 +1529,123 @@ export default function f() { return @./tpl(b="only two") }"#),
     #[test]
     fn string_input_not_used_is_a_warning() {
         expect_diag(&with_pr("return \"x\";"), Severity::Warning, "unused parameter `pr`");
+    }
+
+    /// A function file with one inline struct `Input` (fields `a` and `c`) and the given body.
+    fn with_input_struct(body: &str) -> String {
+        format!(
+            "interface Input {{\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}}\n/** d */\nexport default function f({body}) {{ if (a) {{ return \"1\" }} if (c === \"x\") {{ return \"2\" }} return \"3\" }}"
+        )
+    }
+
+    /// Diagnostics for a `.struct.rein` file named `ticket.struct`.
+    fn check_struct_file(src: &str) -> Vec<Diagnostic> {
+        let (f, parse_diags) = parse(src);
+        assert!(parse_diags.is_empty(), "{parse_diags:?}");
+        check_function(&f, "ticket.struct", &resolves)
+    }
+
+    #[test]
+    fn a_function_takes_one_parameter() {
+        expect_diag(
+            "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** B */ b: boolean,\n) { if (a) { return \"1\" } if (b) { return \"2\" } return \"3\" }",
+            Severity::Error,
+            "a function takes one parameter; put `a` and `b` in a struct",
+        );
+        expect_diag(
+            "/** d */\nexport default function f(\n  /** A */ a: boolean,\n  /** B */ b: boolean,\n  /** C */ c: boolean,\n) { if (a) { return \"1\" } if (b) { return \"2\" } if (c) { return \"3\" } return \"4\" }",
+            Severity::Error,
+            "a function takes one parameter; put `a`, `b` and `c` in a struct",
+        );
+    }
+
+    #[test]
+    fn inline_struct_parameter_is_clean() {
+        clean("interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a, c }: Input) {\n  if (a) { return \"1\" }\n  if (c === \"x\") { return \"2\" }\n  return \"3\"\n}");
+    }
+
+    #[test]
+    fn an_inline_struct_cannot_be_exported() {
+        let src = "interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a, c }: Input) {\n  if (a) { return \"1\" }\n  if (c === \"x\") { return \"2\" }\n  return \"3\"\n}";
+        let msg = "input struct `Input` cannot be exported; to share it, move it to its own `.struct.rein` file";
+        expect_diag(&src.replacen("interface Input", "export interface Input", 1), Severity::Error, msg);
+        expect_diag(&src.replacen("interface Input", "export default interface Input", 1), Severity::Error, msg);
+    }
+
+    #[test]
+    fn destructuring_names_every_field_once() {
+        expect_diag(
+            &with_input_struct("{ a, c, z }: Input"),
+            Severity::Error,
+            "`z` is not a field of `Input`; fields are a, c",
+        );
+        expect_diag(
+            "interface Input {\n  /** A? */ a: boolean;\n  /** C? */ c: \"x\" | \"y\";\n}\n/** d */\nexport default function f({ a }: Input) { if (a) { return \"1\" } return \"3\" }",
+            Severity::Error,
+            "destructure every field of `Input`; missing: `c`",
+        );
+        expect_diag(
+            &with_input_struct("{ a, a, c }: Input"),
+            Severity::Error,
+            "`a` is destructured twice",
+        );
+    }
+
+    #[test]
+    fn an_inline_struct_must_exist() {
+        expect_diag(
+            "/** d */\nexport default function f({ a }: Nope) { return \"x\" }",
+            Severity::Error,
+            "cannot find struct `Nope`; declare `interface Nope { ... }` in this file",
+        );
+    }
+
+    #[test]
+    fn an_unused_inline_struct_is_a_warning() {
+        expect_diag(
+            "interface Extra {\n  /** A */ a: boolean;\n}\n/** d */\nexport default function f() { return \"x\" }",
+            Severity::Warning,
+            "unused struct `Extra`; an inline struct is the input of the function in its file",
+        );
+    }
+
+    #[test]
+    fn a_field_needs_a_doc_comment() {
+        expect_diag(
+            "interface Input {\n  a: boolean;\n}\n/** d */\nexport default function f({ a }: Input) { if (a) { return \"1\" } return \"2\" }",
+            Severity::Error,
+            "field `a` needs a doc comment: /** question */ a: ...",
+        );
+    }
+
+    #[test]
+    fn struct_file_rules() {
+        let ticket = "/** A ticket. */\nexport default interface Ticket {\n  /** Title. */\n  title: string;\n}\n";
+        let diags = check_struct_file(ticket);
+        assert!(diags.is_empty(), "{diags:?}");
+
+        let with_fn = format!("{ticket}\n/** d */\nexport default function f() {{ return \"x\" }}");
+        let diags = check_struct_file(&with_fn);
+        assert!(
+            diags.iter().any(|d| d.severity == Severity::Error
+                && d.message.contains("a `.struct.rein` file holds one `export default interface` and nothing else; move the function to its own `.rein` file")),
+            "{diags:?}"
+        );
+
+        let no_doc = "export default interface Ticket {\n  /** Title. */\n  title: string;\n}\n";
+        let diags = check_struct_file(no_doc);
+        assert!(
+            diags.iter().any(|d| d.severity == Severity::Error
+                && d.message == "missing doc comment on struct `Ticket`; put /** description */ right before `export default interface`"),
+            "{diags:?}"
+        );
+
+        let with_other = format!("interface Other {{\n  /** B */ b: boolean;\n}}\n{ticket}");
+        let diags = check_struct_file(&with_other);
+        assert!(
+            diags.iter().any(|d| d.severity == Severity::Error && d.message.contains("a `.struct.rein` file holds one `export default interface` and nothing else")),
+            "{diags:?}"
+        );
     }
 
     #[test]

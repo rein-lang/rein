@@ -452,7 +452,7 @@ mod tests {
     fn merge_project() -> Project {
         project(&[
             ("main.rein", "/** Entry. */\nexport default function main(\n  /** Which path? */\n  path: \"merge\" | \"review\",\n) {\n  switch (path) {\n    case \"merge\":\n      return @./merge_pr;\n    case \"review\":\n      return \"Review the code.\";\n  }\n}\n"),
-            ("merge_pr.rein", "/** Merge a PR. */\nexport default function mergePr(\n  /** Does the PR change only docs? */\n  docsOnly: boolean,\n  /** What is the CI status? */\n  ci: \"green\" | \"red\",\n) {\n  if (docsOnly) {\n    return \"approved\";\n  }\n  switch (ci) {\n    case \"green\":\n      return \"merge it\";\n    case \"red\":\n      return \"wait for CI\";\n  }\n}\n"),
+            ("merge_pr.rein", "interface Input {\n  /** Does the PR change only docs? */\n  docsOnly: boolean;\n  /** What is the CI status? */\n  ci: \"green\" | \"red\";\n}\n/** Merge a PR. */\nexport default function mergePr({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return \"approved\";\n  }\n  switch (ci) {\n    case \"green\":\n      return \"merge it\";\n    case \"red\":\n      return \"wait for CI\";\n  }\n}\n"),
         ])
     }
 
@@ -887,8 +887,8 @@ mod tests {
     /// `main` takes a link as an input and hands it to `merge`, which asks the agent for `ci`.
     fn pr_project() -> Project {
         project(&[
-            ("main.rein", "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n  /** Draft? */\n  draft: boolean,\n) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return @./merge(pr=pr);\n}\n"),
-            ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}.`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
+            ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Draft? */\n  draft: boolean;\n}\n/** Entry. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return @./merge(pr=pr);\n}\n"),
+            ("merge.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n/** Merge. */\nexport default function merge({ pr, ci }: Input) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}.`;\n    case \"red\":\n      return \"Wait.\";\n  }\n}\n"),
         ])
     }
 
@@ -948,8 +948,8 @@ mod tests {
     #[test]
     fn hand_off_arguments_bind_in_declaration_order() {
         let project = project(&[
-            ("main.rein", "/** Entry. */\nexport default function main(\n  /** A */\n  a: string,\n  /** B */\n  b: string,\n) {\n  return @./two(y=a, x=b);\n}\n"),
-            ("two.rein", "/** Two. */\nexport default function two(\n  /** X */\n  x: string,\n  /** Y */\n  y: string,\n  /** Keep order? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `${x} then ${y}`;\n  }\n  return `${y} then ${x}`;\n}\n"),
+            ("main.rein", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** Entry. */\nexport default function main({ a, b }: Input) {\n  return @./two(y=a, x=b);\n}\n"),
+            ("two.rein", "interface Input {\n  /** X */\n  x: string;\n  /** Y */\n  y: string;\n  /** Keep order? */\n  ok: boolean;\n}\n/** Two. */\nexport default function two({ x, y, ok }: Input) {\n  if (ok) {\n    return `${x} then ${y}`;\n  }\n  return `${y} then ${x}`;\n}\n"),
         ]);
         let inputs = [("a", "A"), ("b", "B")];
         let res = step(&project, &req_with("main", &[("two.ok", "yes")], &inputs));

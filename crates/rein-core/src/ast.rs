@@ -2,6 +2,14 @@
 
 use crate::diagnostic::Span;
 
+/// A `.struct.rein` file's project path ends with this, such as `ticket.struct` for `ticket.struct.rein`.
+pub const STRUCT_SUFFIX: &str = ".struct";
+
+/// True for the project path of a `.struct.rein` file. Such a file holds a struct, not a function.
+pub fn is_struct(name: &str) -> bool {
+    name.ends_with(STRUCT_SUFFIX)
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Spanned<T> {
     pub value: T,
@@ -12,7 +20,19 @@ pub struct Spanned<T> {
 pub struct Function {
     /// Text of the function doc block. Filled from `doc`.
     pub description: Option<Spanned<String>>,
+    /// The values the function reads by name: its scalar parameter, or the fields of its struct parameter.
+    /// A struct parameter's fields are filled in by [`Function::bind_struct`]. Every later stage reads this list.
     pub inputs: Vec<Input>,
+    /// The parameters as written. More than one is a checker error.
+    pub params: Vec<Param>,
+    /// Every `interface` in the file: inline input structs, or the one `export default interface` of a
+    /// `.struct.rein` file.
+    pub structs: Vec<Struct>,
+    /// The struct that the struct parameter names, or why it does not resolve. `None` when the function has no
+    /// struct parameter, or when a `@./` struct was not resolved, as in a file parsed outside a project.
+    pub input_struct: Option<Result<Struct, String>>,
+    /// The name after `export default function`. `None` when the file has no function.
+    pub name: Option<Spanned<String>>,
     pub body: Vec<Stmt>,
     /// The `/** */` doc block right before `export default function`. `None` when the file has none.
     pub doc: Option<DocBlock>,
@@ -68,6 +88,33 @@ impl Function {
         }
     }
 
+    /// The struct parameter, when the function has one.
+    pub fn struct_param(&self) -> Option<&StructParam> {
+        self.params.iter().find_map(|p| match p {
+            Param::Struct(s) => Some(s),
+            Param::Scalar(_) => None,
+        })
+    }
+
+    /// The `export default interface` of a `.struct.rein` file.
+    pub fn exported_struct(&self) -> Option<&Struct> {
+        self.structs.iter().find(|s| s.default)
+    }
+
+    /// Records what the struct parameter names, and adds one input per destructured field, in field order.
+    /// Each input keeps the field's type and doc, at the span of its name in `{ }`.
+    pub fn bind_struct(&mut self, found: Result<Struct, String>) {
+        let Some(param) = self.struct_param().cloned() else { return };
+        if let Ok(s) = &found {
+            for field in &s.fields {
+                if let Some(at) = param.fields.iter().find(|n| n.value == field.name.value) {
+                    self.inputs.push(Input { name: at.clone(), span: at.span, ..field.clone() });
+                }
+            }
+        }
+        self.input_struct = Some(found);
+    }
+
     /// The `string` parameters, in declaration order. Their values come from the caller.
     pub fn text_inputs(&self) -> impl Iterator<Item = &Input> {
         self.inputs.iter().filter(|i| i.ty == InputType::Text)
@@ -107,6 +154,70 @@ pub enum Binding<'a> {
     Template { path: Option<String>, function: &'a Function },
     /// `request` from std. It is awaited, not returned or called.
     Request,
+}
+
+/// One parameter as written.
+#[derive(Debug, Clone)]
+pub enum Param {
+    /// `/** question */ name: type`, where the type is `boolean`, `string` or a union.
+    Scalar(Input),
+    /// `{ a, b }: Name` or `{ a, b }: @./name`. The function reads the fields by name.
+    Struct(StructParam),
+}
+
+impl Param {
+    pub fn span(&self) -> Span {
+        match self {
+            Param::Scalar(i) => i.span,
+            Param::Struct(s) => s.span,
+        }
+    }
+}
+
+/// A destructured struct parameter, such as `{ title, vip }: Ticket`.
+#[derive(Debug, Clone)]
+pub struct StructParam {
+    /// The names inside `{ }`, in source order.
+    pub fields: Vec<Spanned<String>>,
+    pub ty: StructRef,
+    pub span: Span,
+}
+
+/// The type of a struct parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructRef {
+    /// An `interface` in the same file, by name.
+    Local(Spanned<String>),
+    /// A `.struct.rein` file, by reference: `@./ticket` names `ticket.struct.rein`.
+    Ref(Spanned<String>),
+}
+
+impl StructRef {
+    pub fn name(&self) -> &Spanned<String> {
+        match self {
+            StructRef::Local(s) | StructRef::Ref(s) => s,
+        }
+    }
+}
+
+/// `interface Name { /** doc */ field: type; ... }`, with an optional `export` or `export default` before it.
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub name: Spanned<String>,
+    pub doc: Option<DocBlock>,
+    /// Each field is like a scalar parameter: a doc comment, a name and a type.
+    pub fields: Vec<Input>,
+    /// The `export` keyword, when the struct has one.
+    pub export: Option<Span>,
+    /// `export default interface`.
+    pub default: bool,
+    pub span: Span,
+}
+
+impl Struct {
+    pub fn field(&self, name: &str) -> Option<&Input> {
+        self.fields.iter().find(|f| f.name.value == name)
+    }
 }
 
 #[derive(Debug, Clone)]
