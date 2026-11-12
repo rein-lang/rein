@@ -906,6 +906,20 @@ fn a_target_path_that_another_file_has_gives_no_warning() {
 }
 
 #[test]
+fn a_caller_inside_the_function_folder_gives_no_nesting_warning() {
+    // `x` has one caller, `x/y`, which sits in `x/`. Moving `x` to `x/y/x` would move `x/y` along, so the
+    // warning would come back one level deeper each time.
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./x/y }\n"),
+        ("x/y", "/** y */\nexport default function y() { return @../x }\n"),
+        ("x", "/** x */\nexport default function x() { return `x` }\n"),
+    ]);
+    let diags = project.check();
+    assert!(!has(&diags["x"], Severity::Warning, "only called by"), "{:?}", diags["x"]);
+    assert_eq!(project.nest_target("x"), None);
+}
+
+#[test]
 fn unreachable_functions_get_no_nesting_warning() {
     // `u` and `v` only call each other. Each has one caller, but neither is reachable from main.
     let project = project_of(&[
