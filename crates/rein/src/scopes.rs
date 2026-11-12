@@ -73,7 +73,7 @@ pub fn find_in(all: &[Flow], name: &str) -> Result<Flow, String> {
 /// Loads the project at `root`, and the programs its `@program` references name, found as `rein list` finds them.
 pub fn load_linked(root: &Path) -> std::io::Result<Project> {
     let mut project = Project::load(root)?;
-    project.link_programs(&|name| find(name).map(|f| (f.root, f.entry)));
+    project.link_programs(&find);
     Ok(project)
 }
 
