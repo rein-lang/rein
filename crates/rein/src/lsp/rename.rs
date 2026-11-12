@@ -281,8 +281,9 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
 /// Refuses a move that would leave something of the folder `<root>/<target>` behind, or that would go through a
 /// symbolic link. The `.rein` files the project loads move with their folder, and so do the editor and OS
 /// leftovers (see [`is_leftover`]), which are returned sorted. Anything else in it blocks the move: a file that is
-/// not `.rein` (such as `notes.md`), a folder the loader skips, or a folder with its own `main.rein`. A link is
-/// refused too, since renaming through it moves files out of the folder it points to.
+/// not `.rein` (such as `notes.md`), a folder the loader skips, or a folder with its own `main.rein`. Any link in
+/// it refuses the move, a link to a file or to a folder alike, and this is checked before the leftover rule: a
+/// link to a file would otherwise move as a leftover and be left pointing at nothing.
 fn check_folder(project: &Project, target: &str) -> Result<Vec<PathBuf>, String> {
     let folder = project.root.join(target);
     let Ok(meta) = fs::symlink_metadata(&folder) else { return Ok(Vec::new()) };
@@ -316,12 +317,12 @@ fn left_behind(project: &Project, dir: &Path, loaded: &BTreeSet<PathBuf>, leftov
     for entry in entries {
         let path = entry.map_err(|e| format!("cannot read `{}`: {e}", shown(project, dir)))?.path();
         let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        // `metadata` follows a link. A link to a folder is refused, as in `check_folder`.
-        let is_dir = fs::metadata(&path).is_ok_and(|m| m.is_dir());
+        // A link is refused whatever it points to, before any other rule: `symlink_metadata` does not follow it.
         let is_link = fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
-        if is_dir && is_link {
+        if is_link {
             return Err(symlink_error(&shown(project, &path)));
         }
+        let is_dir = path.is_dir();
         if is_dir {
             if skipped_folder(&name) || path.join(MAIN_FILE).is_file() {
                 return Err(format!(
@@ -346,7 +347,10 @@ fn left_behind(project: &Project, dir: &Path, loaded: &BTreeSet<PathBuf>, leftov
 }
 
 fn symlink_error(path: &str) -> String {
-    format!("`{path}` is a symbolic link; a move through it would take files out of the folder it points to")
+    format!(
+        "`{path}` is a symbolic link; a move would carry the link to a new place, where its target no longer \
+         resolves, or take files out of the folder it points to. Move or remove the link first"
+    )
 }
 
 /// The path of `path` under the project root, as the messages show it, such as `ci/fix/notes.md`.

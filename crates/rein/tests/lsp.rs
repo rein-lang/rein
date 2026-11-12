@@ -1063,6 +1063,29 @@ fn rename_refuses_to_move_through_a_symlinked_folder() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn rename_refuses_to_move_a_folder_holding_a_hidden_file_symlink() {
+    let root = folder_project("rename-hidden-file-symlink");
+    fs::write(root.join("shared.env"), "KEY=1\n").unwrap();
+    std::os::unix::fs::symlink("../shared.env", root.join("a/.env")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`a/.env` is a symbolic link"), "{edit}");
+    // Nothing moved: the folder and its link are where they were.
+    assert!(root.join("a/b.rein").is_file(), "{edit}");
+    assert!(fs::symlink_metadata(root.join("a/.env")).unwrap().file_type().is_symlink(), "{edit}");
+    assert!(!root.join("c").exists(), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn rename_keeps_a_broken_reference_that_keeps_its_meaning() {
     let root = folder_project("rename-broken-same-meaning");
