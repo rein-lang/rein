@@ -3,14 +3,14 @@
 mod cli;
 mod graph;
 mod hook;
-mod install;
 mod live_run;
 mod lsp;
 mod mcp;
+mod packages;
 mod programs;
 mod scopes;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -150,19 +150,28 @@ enum Command {
         #[arg(long)]
         caller: Option<String>,
     },
-    /// Register a program folder in the user programs folder, or write a tool's hook config (`claude-code`).
+    /// Install a program package: runs `pnpm add` with these arguments.
+    ///
+    /// The arguments go to pnpm unchanged, so any pnpm flag works. `-g` or `--global` installs for the user: it runs
+    /// in `<user programs folder>/npm/`, and rein does not pass it on. Without `-g`, it runs in the repo's
+    /// `rein/npm/`. Outside a repository, use `-g`. `--ignore-scripts` is added first, unless the arguments set it.
     Install {
-        /// A program folder to register, or the agent tool, such as `claude-code`.
-        tool: String,
-        /// Write to the project's settings (`.claude/settings.json`). Default.
-        #[arg(long, conflicts_with = "user")]
-        project: bool,
-        /// Write to the user's settings (`~/.claude/settings.json`).
-        #[arg(long)]
-        user: bool,
-        /// Print the resulting file and write nothing.
-        #[arg(long)]
-        dry_run: bool,
+        /// Arguments for `pnpm add`, such as `pr-handling@^1`, `file:../pr-handling` or `--save-exact`.
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+        args: Vec<String>,
+    },
+    /// Remove an installed program package: runs `pnpm remove` with these arguments. `-g` picks the user folder.
+    Uninstall {
+        /// Arguments for `pnpm remove`, such as a package name. `-g` picks the user folder.
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+        args: Vec<String>,
+    },
+    /// Update installed program packages: runs `pnpm update --ignore-scripts` with these arguments. `-g` picks the
+    /// user folder.
+    Update {
+        /// Arguments for `pnpm update`, such as a package name or `--latest`. `-g` picks the user folder.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+        args: Vec<String>,
     },
     /// Run the language server on stdio.
     Lsp,
@@ -190,14 +199,9 @@ fn main() -> ExitCode {
         }
         Command::AgentContext { format } => cli::agent_context(matches!(format, Format::Json)),
         Command::Hook { caller } => hook::run(caller.as_deref()),
-        Command::Install { tool, project: _, user, dry_run } => {
-            if Path::new(&tool).is_dir() {
-                programs::install(Path::new(&tool))
-            } else {
-                let target = if user { install::Target::User } else { install::Target::Project };
-                install::run(&tool, target, dry_run)
-            }
-        }
+        Command::Install { args } => packages::run("add", &args),
+        Command::Uninstall { args } => packages::run("remove", &args),
+        Command::Update { args } => packages::run("update", &args),
         Command::Lsp => lsp::serve(),
         Command::DocsCli => {
             let options = clap_markdown::MarkdownOptions::new().show_footer(false);

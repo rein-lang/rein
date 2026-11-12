@@ -1,12 +1,10 @@
-//! Programs as named apps: `rein list`, `rein show`, and `rein install <path>`. The MCP host uses
-//! the same functions.
+//! Programs as named apps: `rein list` and `rein show`. The MCP host uses the same functions.
 
 use std::fs;
-use std::path::{Path, PathBuf};
 
-use rein_core::flows::{self, Scope, MANIFEST};
+use rein_core::flows::MANIFEST;
 use rein_core::project::Project;
-use rein_core::step::{invalid_request, StepResponse};
+use rein_core::step::invalid_request;
 use serde_json::Value;
 
 use crate::cli::flow_json;
@@ -14,6 +12,7 @@ use crate::live_run::Run;
 use crate::scopes;
 
 /// Every visible program as JSON: the `rein flows` fields plus `first_step`, the step a new run starts on.
+/// A package whose `engines.rein` does not hold for this rein also has a `warning`.
 pub fn catalog() -> Vec<Value> {
     scopes::discover_here()
         .iter()
@@ -24,9 +23,36 @@ pub fn catalog() -> Vec<Value> {
                 Err(e) => invalid_request(format!("cannot read {}: {e}", f.root.display())),
             };
             v["first_step"] = serde_json::to_value(first).unwrap_or_default();
+            if let Some(warning) = f.engines_rein.as_deref().and_then(|range| engines_warning(range, RUNNING)) {
+                v["warning"] = Value::String(warning);
+            }
             v
         })
         .collect()
+}
+
+/// This rein's version. `engines.rein` ranges are checked against it.
+const RUNNING: &str = env!("CARGO_PKG_VERSION");
+
+/// A warning when `range` does not hold for `version`. `None` when it holds, or when `range_holds` cannot read it.
+fn engines_warning(range: &str, version: &str) -> Option<String> {
+    (range_holds(range, version) == Some(false)).then(|| format!("needs rein {range}; this is rein {version}"))
+}
+
+/// Whether `version` satisfies a caret range such as `^0.1.0`, or a plain `0.1.0`, which is read as a caret.
+/// A caret keeps its first non-zero part: `^1.2.0` holds for 1.x at or above 1.2.0, and `^0.1.0` for 0.1.x at or
+/// above 0.1.0. `None` when either side is not three numbers.
+// ponytail: only caret and plain ranges are read. `>=`, `||` and spaced ranges are not checked; add the semver crate when they appear.
+fn range_holds(range: &str, version: &str) -> Option<bool> {
+    let want = triple(range.trim().trim_start_matches('^'))?;
+    let have = triple(version)?;
+    let lead = want.iter().position(|&p| p != 0).unwrap_or(2);
+    Some(have[..=lead] == want[..=lead] && have >= want)
+}
+
+fn triple(version: &str) -> Option<[u64; 3]> {
+    let parts: Vec<u64> = version.split('.').map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    <[u64; 3]>::try_from(parts).ok()
 }
 
 /// `rein list`: name, scope, path, description, and the first question of each program.
@@ -41,7 +67,8 @@ pub fn list(json: bool) -> u8 {
         let step = &p["first_step"];
         let first = ["description", "instruction", "message"].iter().map(|k| text(step, k)).find(|s| !s.is_empty()).unwrap_or_default();
         let shadow = p["shadowed_by"].as_str().map_or(String::new(), |by| format!(" (shadowed by {by})"));
-        println!("{}\t{}\t{}\t{}\tfirst: {first}{shadow}", text(p, "name"), text(p, "scope"), text(p, "path"), text(p, "description"));
+        let warning = p["warning"].as_str().map_or(String::new(), |w| format!(" (warning: {w})"));
+        println!("{}\t{}\t{}\t{}\tfirst: {first}{shadow}{warning}", text(p, "name"), text(p, "scope"), text(p, "path"), text(p, "description"));
     }
     0
 }
@@ -77,49 +104,19 @@ pub fn show(name: &str) -> u8 {
     }
 }
 
-/// `rein install <path>`: links a program folder into the user programs folder under its name.
-pub fn install(path: &Path) -> u8 {
-    match link(path) {
-        Ok((name, target)) => {
-            println!("installed {name} -> {}", target.display());
-            0
-        }
-        Err(message) => {
-            eprintln!("error: {message}");
-            1
-        }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::range_holds;
 
-fn link(path: &Path) -> Result<(String, PathBuf), String> {
-    let root = fs::canonicalize(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let flow = flows::program(root.clone(), Scope::User)
-        .ok_or_else(|| format!("{} is not a program: it has no {MANIFEST} or main.rein", root.display()))?;
-    // A trust boundary: the name becomes a path under the user folder.
-    if flow.name.is_empty() || !flow.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return Err(format!("invalid program name `{}`", flow.name));
+    #[test]
+    fn caret_and_plain_ranges_hold_like_semver() {
+        assert_eq!(range_holds("^0.1.0", "0.1.0"), Some(true));
+        assert_eq!(range_holds("^0.1.0", "0.1.3"), Some(true));
+        assert_eq!(range_holds("0.1.0", "0.1.0"), Some(true));
+        assert_eq!(range_holds("^0.2.0", "0.1.0"), Some(false));
+        assert_eq!(range_holds("^0.1.2", "0.1.1"), Some(false));
+        assert_eq!(range_holds("^1.0.0", "0.1.0"), Some(false));
+        assert_eq!(range_holds("^1.0.0", "1.4.2"), Some(true));
+        assert_eq!(range_holds(">=0.1.0 <0.2.0", "0.1.0"), None);
     }
-    let project = Project::load(&root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
-    if let StepResponse::Error { message, .. } = Run::start(project, flow.entry.clone()).last() {
-        return Err(format!("{} cannot start: {message}", flow.name));
-    }
-    let dir = scopes::user_dir().ok_or("no user programs folder; set HOME or REIN_HOME")?;
-    fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let target = dir.join(&flow.name);
-    if target.symlink_metadata().is_ok() {
-        return Err(format!("{} already exists", target.display()));
-    }
-    symlink(&root, &target).map_err(|e| format!("cannot link {}: {e}", target.display()))?;
-    Ok((flow.name, target))
-}
-
-// ponytail: a link keeps the program live while its author edits it; copy instead if installs must be frozen.
-#[cfg(unix)]
-fn symlink(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(from, to)
-}
-
-#[cfg(not(unix))]
-fn symlink(_: &Path, _: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::other("install needs symlinks; only Unix is supported"))
 }

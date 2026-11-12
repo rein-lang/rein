@@ -1,4 +1,4 @@
-//! Flow scopes, `step --flow`, `agent-context`, the agent hook, and `install`. Every run gets temp
+//! Flow scopes, `step --flow`, `agent-context`, the agent hook, and `install` of a package. Every run gets temp
 //! HOME, REIN_HOME, REIN_SYSTEM_DIRS and TMPDIR, so no real user or system folder is read or written.
 
 use std::fs;
@@ -284,89 +284,13 @@ fn hook_malformed_payload_is_a_no_op_with_stderr() {
 }
 
 #[test]
-fn install_writes_project_settings_with_both_events() {
-    let sb = Sandbox::new("install-project");
-    let repo = temp_dir("install-project-repo");
-    let out = sb.run(&repo, &["install", "claude-code", "--project"]);
-    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
-    let text = fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
-    let v: Value = serde_json::from_str(&text).unwrap();
-    for event in ["SessionStart", "UserPromptSubmit"] {
-        let cmd = &v["hooks"][event][0]["hooks"][0]["command"];
-        assert_eq!(cmd, "rein hook --caller claude-code", "{event}: {text}");
-    }
-}
-
-#[test]
-fn install_merges_into_existing_settings_and_keeps_other_hooks() {
-    let sb = Sandbox::new("install-merge");
-    let repo = temp_dir("install-merge-repo");
-    write(
-        &repo,
-        ".claude/settings.json",
-        r#"{"model":"opus","permissions":{"allow":["Bash(ls)"]},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"guard.sh"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"other.sh"}]}]}}"#,
-    );
-    let out = sb.run(&repo, &["install", "claude-code", "--project"]);
-    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
-    let v: Value = serde_json::from_str(&fs::read_to_string(repo.join(".claude/settings.json")).unwrap()).unwrap();
-    assert_eq!(v["model"], "opus");
-    assert_eq!(v["permissions"]["allow"][0], "Bash(ls)");
-    assert_eq!(v["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "guard.sh");
-    let session = v["hooks"]["SessionStart"].as_array().unwrap();
-    assert_eq!(session.len(), 2, "the existing SessionStart hook is kept");
-    assert_eq!(session[0]["hooks"][0]["command"], "other.sh");
-}
-
-#[test]
-fn install_is_idempotent() {
-    let sb = Sandbox::new("install-idem");
-    let repo = temp_dir("install-idem-repo");
-    assert_eq!(code(&sb.run(&repo, &["install", "claude-code", "--project"])), 0);
-    let first = fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
-    assert_eq!(code(&sb.run(&repo, &["install", "claude-code", "--project"])), 0);
-    let second = fs::read_to_string(repo.join(".claude/settings.json")).unwrap();
-    assert_eq!(first, second);
-    assert_eq!(second.matches("rein hook --caller claude-code").count(), 2);
-}
-
-#[test]
-fn install_user_writes_under_home() {
-    let sb = Sandbox::new("install-user");
-    let repo = temp_dir("install-user-repo");
-    let out = sb.run(&repo, &["install", "claude-code", "--user"]);
-    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(sb.home.join(".claude/settings.json").is_file());
-    assert!(!repo.join(".claude/settings.json").exists(), "the project file is not touched");
-}
-
-#[test]
-fn install_dry_run_prints_and_writes_nothing() {
-    let sb = Sandbox::new("install-dry");
-    let repo = temp_dir("install-dry-repo");
-    let out = sb.run(&repo, &["install", "claude-code", "--project", "--dry-run"]);
-    assert_eq!(code(&out), 0);
-    let v: Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert!(v["hooks"]["SessionStart"].is_array(), "{v}");
-    assert!(!repo.join(".claude").exists(), "dry run writes nothing");
-}
-
-#[test]
-fn install_refuses_an_unsupported_tool() {
+fn install_other_name_is_a_package_for_pnpm() {
+    // `-g` installs for the user, so it runs in the user folder. A missing pnpm stops it before any network use.
     let sb = Sandbox::new("install-other");
     let repo = temp_dir("install-other-repo");
-    let out = sb.run(&repo, &["install", "cursor", "--project"]);
+    let out = sb.command(&repo, &["install", "-g", "cursor"]).env("REIN_PNPM", sb.tmp.join("no-pnpm")).output().unwrap();
     assert_eq!(code(&out), 1);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not supported yet"));
-}
-
-#[test]
-fn install_refuses_invalid_existing_json_and_leaves_it() {
-    let sb = Sandbox::new("install-bad");
-    let repo = temp_dir("install-bad-repo");
-    write(&repo, ".claude/settings.json", "{ broken");
-    let out = sb.run(&repo, &["install", "claude-code", "--project"]);
-    assert_eq!(code(&out), 1);
-    assert_eq!(fs::read_to_string(repo.join(".claude/settings.json")).unwrap(), "{ broken");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("pnpm is not installed"));
 }
 
 /// A program with no `rein/` folder, no manifest and no `main.rein`: the file is the program. It refs `@./ci/fix`.

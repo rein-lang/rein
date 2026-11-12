@@ -1,0 +1,11 @@
+{
+  "name": "incident-triage",
+  "version": "0.1.0",
+  "description": "Decide how the on-call agent handles a new production alert.",
+  "license": "MIT",
+  "private": true,
+  "files": ["**/*.rein", "README.md", "rein.json"],
+  "engines": {
+    "rein": "^0.1.0"
+  }
+}

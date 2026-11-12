@@ -1,5 +1,3 @@
 {
-  "name": "support-ticket",
-  "description": "Decide how the support agent handles a customer ticket.",
   "entry": "main.rein"
 }
