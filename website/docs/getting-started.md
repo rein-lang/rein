@@ -75,7 +75,7 @@ The output shows `ticket`, its scope, its path, and its description.
 
 ## Step the flow
 
-Step the flow by name. Rein asks for the input it needs and exits with code 2:
+Step the flow by name. `rein step` is stateless, so it is for tests and debugging. For how an agent runs a program, see the [Agent interface](/reference/interface). Rein asks for the input it needs and exits with code 2:
 
 ```sh
 rein step --flow ticket --json

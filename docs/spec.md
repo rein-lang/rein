@@ -467,7 +467,7 @@ The code is in `crates/rein/src/lsp/`, one module per feature. It reads the tree
 
 ## 11. Stepping (agent interface)
 
-`rein step` steps the whole flow in one call. It is the interface for agents. `rein eval` evaluates one function, and is the debug command. Live runs (`rein run`, `rein serve --mcp`) call the same logic and keep the answers above it; see [interface.md](interface.md). The stepping logic lives in `rein_core::step`. It is pure: no I/O and no state. The CLI only parses flags, calls it, and prints.
+`rein step` steps the whole flow in one call. It is stateless, so it is a test and debug tool, not the agent interface; see [interface.md](interface.md). `rein eval` evaluates one function, and is the debug command. Live runs (`rein run`, `rein serve --mcp`) call the same logic and keep the answers above it; see [interface.md](interface.md). The stepping logic lives in `rein_core::step`. It is pure: no I/O and no state. The CLI only parses flags, calls it, and prints.
 
 Protocol version 1. A request and a response are JSON objects, each with a `version` field. A daemon or another transport can carry the same objects unchanged.
 

@@ -46,9 +46,9 @@ flowchart TD
     D -- "pending" --> G["wait for CI"]
 ```
 
-## How an agent uses it
+## How `rein step` works
 
-The agent steps the flow with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/rein/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
+An agent runs a program as its own run process. See [docs/interface.md](docs/interface.md) for the model. `rein step` is the stateless test and debug command. It takes every answer so far on each call. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/rein/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
 
 ```text
 $ cd examples/rein/support-ticket
@@ -127,7 +127,7 @@ pnpm run docs:dev
 
 - [Language reference](docs/spec.md): syntax, rules, evaluation, CLI.
 - [Decisions](docs/decisions.md): owner facts, PoC choices, open questions.
-- [Agent interface](docs/interface.md): programs as named apps, the MCP host, and `rein run`.
+- [Agent interface](docs/interface.md): programs as named apps, the run model, and `rein run`.
 
 Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook checks the example pages are generated.
 

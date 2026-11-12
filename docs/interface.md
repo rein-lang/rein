@@ -1,22 +1,59 @@
 # Agent interface
 
-Status: proof of concept. The MCP host, `rein run`, `rein list` and `rein show` are built. Harness enforcement is a proposal.
+Status: proof of concept. Each section says what is built and what is proposed. The full list is in [Status](#status).
 
-A Rein program is a running app. The agent finds it by name, starts it, and answers it step by step. The program keeps its state while it runs. The agent does not resend earlier answers.
+A Rein program is a self-contained process for an agent. It works like an app for a person. The agent finds a program, starts it, and works with it. The program holds the state of the run: the answers, the current question, and the trace. The agent does not resend earlier answers.
 
-## Authoring stays the same
+## The model
 
-- A program is written in `.rein` files, in the TypeScript-like syntax of [spec.md](spec.md).
-- Each parameter is a question. Its doc comment is the question text.
-- Functions reference each other with `@./path` and `@../path`.
-- A parameter asks for a fact. A `request` asks the agent to do a step, then answer.
-- The evaluator in `rein_core::step` is not changed. Every interface below calls it.
+Programs are for agents, as apps are for people. The model does not give full enforcement. The agent chooses a program by its description.
+
+| Layer | Required | Role |
+| --- | --- | --- |
+| CLI | Yes | The base interface. Every agent can use it. |
+| MCP | No | A client of the run process, for agents that call MCP tools. |
+| Hook | No | Tells the agent that Rein and its programs exist. |
+
+## Agent workflow
+
+1. Find a program. Run `rein list`. Read one with `rein show <name>`. To install programs, see [Install a program](docs/install-programs.md).
+2. Start a run. Run `rein start <program> [--input name=value]...`. It starts one run process. It prints the run id and the first step. (Proposed.)
+3. Work the run. Answer each step by its run id. Use the CLI, IPC, or MCP. Each channel reaches the same process.
+4. Finish. The run ends on a `done` step. To end it early, run `rein stop <run>`. (Proposed.)
+
+### Channels to a run
+
+A run lives in its own process. A command ends when it prints. Claude Code and Codex call tools and cannot keep a stdin open across calls. So the run cannot live in the caller. (Proposed.)
+
+| Channel | Commands or tools |
+| --- | --- |
+| CLI | `rein answer <run> <value>`, `rein status <run>`, `rein stop <run>`, `rein ps`. `rein ps` lists the live runs of the agent. |
+| IPC | A local socket for each run process. The CLI is a thin client of it. |
+| MCP | `rein_start`, `rein_answer`, `rein_status`, `rein_stop`. `rein serve --mcp` is a thin client of the sockets. |
+
+- The socket path is a proposal: `$XDG_RUNTIME_DIR/rein/runs/<run>.sock`. If `XDG_RUNTIME_DIR` is not set, use a folder in the user state directory.
+- Each reply is a step, in the shape of [spec section 11](spec.md#11-stepping-agent-interface), with the `run` field. An answer uses the `{"key","value"}` line from `rein run --json`.
+- `rein_start` starts a run process. The other MCP tools reach its socket. A run that the CLI started shows over MCP, and a run that MCP started shows in the CLI.
+
+### Not channels
+
+The agent does not run or answer a program through these:
+
+- The hook. The hook only says that Rein and its programs exist.
+- The file system. The agent does not read `.rein` or state files to run a program. It writes program files only to author them.
+- A UI. The agent does not use a UI to run or answer a program.
+
+### `rein step` and `rein run`
+
+- `rein step` is stateless. The agent sends every answer on each call. Rein replays the flow from `main`. It is a test and debug tool, not the agent interface.
+- `rein run` stays for people, tests, and embedding in other programs. Agents use the channels above.
 
 ## Programs are named apps
 
 Programs are named apps. To install, list, and remove them, see [Install a program](docs/install-programs.md).
 
 - `rein run <name>` starts the program from any directory.
+- `rein start <name>` does the same for an agent. (Proposed.)
 
 ## Agents can author programs
 
@@ -25,15 +62,13 @@ An agent can write a program, then use it:
 1. The agent writes a program folder with a `main.rein` and a manifest. The [install page](docs/install-programs.md) describes the manifest.
 2. The agent runs `rein check <folder>`.
 3. The agent installs the folder as described in [Install a program](docs/install-programs.md).
-4. The agent, or another agent, starts it with `rein_start` or `rein run <name>`.
+4. The agent starts it with `rein start <name>`. (Proposed.) Today it uses `rein run <name>` or `rein_start`.
 
-This is why programs are visible files. An agent reads and writes visible files with its normal tools. It does not need to know about a dot-folder. `rein show` gives an agent the source of any installed program, so it can read a program before it changes or copies it.
+This is why programs are visible files. When it authors, an agent reads and writes visible files with its normal tools. It does not need to know about a dot-folder. Authoring reads files. Running a program does not. `rein show` gives an agent the source of any installed program. The agent can read a program before it changes or copies it.
 
-## The MCP host is the primary interface
+## Built today: the MCP host
 
-Claude Code and Codex call tools. They cannot keep a stdin open across tool calls. So the running program lives in a host process, and the agent talks to it through MCP.
-
-`rein serve --mcp` is a long-running MCP server on stdio. It holds live runs in memory. It uses rmcp, the official Rust MCP SDK.
+`rein serve --mcp` is a long-running MCP server on stdio. It holds runs in its own memory. It uses rmcp, the official Rust MCP SDK. It is not yet a client of run processes.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
@@ -48,7 +83,7 @@ Claude Code and Codex call tools. They cannot keep a stdin open across tool call
 - A step has the same shape as a `rein step` response, plus `run`.
 - `rein_answer` answers the key the run waits on. The agent sends only the value.
 - An unknown run id is a tool error.
-- Runs live until `rein_stop` or until the host exits. Saving runs to disk, to resume after a crash, is not built. It is optional, and it is not the main path.
+- Runs end with `rein_stop` or when the host exits. Saving runs to disk is not built.
 
 Register it in Claude Code:
 
@@ -58,7 +93,7 @@ claude mcp add rein -- rein serve --mcp
 
 ### Worked example over MCP
 
-This is real output. A small Python client spoke JSON-RPC to `rein serve --mcp` in `examples/`. `>>` is a message to the host. `<<` is the tool text. Long lines are cut with `...`.
+This is real output from today's build. A small Python client spoke JSON-RPC to `rein serve --mcp` in `examples/`. `>>` is a message to the host. `<<` is the tool text. Long lines are cut with `...`.
 
 ```text
 >> {"jsonrpc": "2.0", "method": "tools/list", "id": 2}
@@ -81,7 +116,7 @@ This is real output. A small Python client spoke JSON-RPC to `rein serve --mcp` 
 
 The bad answer `maybe` did not end the run. The next answer went to the same key. The test `crates/rein/tests/mcp.rs` runs the same walk.
 
-## `rein run`: one live run over stdio
+## Built today: `rein run` over stdio
 
 `rein run <name>` starts one program as a process. It is for people, tests, and embedding in other programs.
 
@@ -91,7 +126,7 @@ The bad answer `maybe` did not end the run. The next answer went to the same key
 - Without `--json`, it prints text and a `> ` prompt. A person types the value.
 - A bad answer prints an error step. The run then asks the same step again.
 - The run ends on `done` with exit code 0. A program that cannot start ends with exit code 1.
-- When stdin closes first, the exit code says what the run waits on: 2 for a question, 3 for a request.
+- When stdin closes first, the exit code says what the run waits on. It is 2 for a question and 3 for a request.
 
 ### Worked example over stdio
 
@@ -126,24 +161,50 @@ question: main.vip: boolean - Is the customer on the VIP plan?
 trace: main -> escalate
 ```
 
-## `rein step` stays for replay
+## Built today: `rein step` for replay
 
-Stateless `rein step` does not change. It is for replay, debugging, and tests. The same answers always give the same step. The old single-function `rein run FUNCTION --set ...` is now `rein eval`.
+Stateless `rein step` does not change. It is for replay, debugging, and tests, not the agent interface. The same answers always give the same step. The old single-function `rein run FUNCTION --set ...` is now `rein eval`.
 
-## Harness enforcement (proposal)
+## Built today: the hook
 
-This part is not built.
+`rein install claude-code` writes the agent hook. On the first prompt, the hook adds the list of programs to the agent context. The hook is optional. It adds no gate. Nothing stops the agent from skipping a program.
 
-- A hook injects the current step of each live run into the agent context, on each prompt. The agent sees what the program waits on.
-- A Stop hook blocks the agent from ending its turn while a run waits on a step. The hook tells the agent to answer the step or to call `rein_stop`.
-- The hooks read the live runs from the host, with `rein_list`.
-- The harness then enforces the program the way an operating system enforces a process. The agent cannot drift away from it.
+## Status
+
+Checked against `rein --help`.
+
+Built today:
+
+- `rein list` and `rein show <name>`.
+- `rein run`: one run over stdio, for people, tests, and embedding.
+- `rein step`: stateless replay and debugging.
+- `rein serve --mcp`: seven tools. Runs live in the host's own memory.
+- `rein install claude-code` and the hook.
+
+Proposed, not built:
+
+- `rein start`, `rein answer`, `rein status`, `rein stop`, and `rein ps`.
+- One run process for each run, with a local socket.
+- `rein serve --mcp` as a client of the run processes.
+
+Gaps in the built code:
+
+- `rein_start` takes no inputs.
+- The `rein step` help text calls it "the agent-facing interface".
+- The hook context text tells the agent to fall back to `rein step`. It must change with this model.
 
 ## Not in scope
 
 - Graph editors.
 - Links between agents.
 - Protocol layers above MCP.
+
+## Open questions
+
+- Run lifetime. How long may an idle run wait? Does it time out?
+- Attach. May another agent attach to a run that one agent started?
+- Sleep and restart. What happens to runs when the machine sleeps or restarts?
+- MCP inputs. `rein_start` takes no inputs. Should it take `--input` values, as `rein start` does?
 
 ## Conflicts with spec section 11
 
