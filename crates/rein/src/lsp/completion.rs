@@ -102,7 +102,9 @@ fn option_completions(text: &str, off: usize, f: &Function) -> Option<Vec<Comple
         start -= 1;
     }
     let head = head.trim_end();
-    let var = if let Some(h) = head.strip_suffix("===").or_else(|| head.strip_suffix("!==")) {
+    // `===` before `==`, so `x ===` is not read as `x =` plus `==`.
+    let op = ["===", "!==", "==", "!="].iter().find_map(|op| head.strip_suffix(op));
+    let var = if let Some(h) = op {
         let h = h.trim_end();
         &h[h.trim_end_matches(is_token_char).len()..]
     } else if head.trim_start() == "case" {

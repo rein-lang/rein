@@ -245,6 +245,24 @@ fn boolean_parameter_compared() {
 }
 
 #[test]
+fn double_equals_on_boolean_parameter_is_still_an_error() {
+    expect_diag(
+        "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { if (a == \"x\") { return \"1\" } return \"2\"  }",
+        Severity::Error,
+        "boolean parameter `a` cannot be compared; use `if (a)` or `if (!a)`",
+    );
+}
+
+#[test]
+fn double_equals_checks_its_union_member() {
+    expect_diag(
+        "/** d */\nexport default function f(\n  /** C */ c: \"x\" | \"y\",\n) { if (c != \"z\") { return \"1\" } return \"2\"  }",
+        Severity::Error,
+        "`z` is not a member of `c`",
+    );
+}
+
+#[test]
 fn boolean_parameter_as_switch_subject() {
     expect_diag(
         "/** d */\nexport default function f(\n  /** A */ a: boolean,\n) { switch (a) { case \"x\": return `1` } }",

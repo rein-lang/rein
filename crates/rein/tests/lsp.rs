@@ -954,6 +954,40 @@ fn completion_offers_argument_names_and_union_members() {
 }
 
 #[test]
+fn double_equals_has_no_diagnostic_and_completes_members() {
+    let tmp = temp_project("double-equals");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // `==` is `===`: no diagnostic, and completion after `c == "` lists the members of `c`.
+    let start = uri_of(&tmp, "start.rein");
+    server.open(
+        &start,
+        "/** Start. */\nexport default function start(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c == \"x\") {\n    return \"a\";\n  }\n  return \"z\";\n}\n",
+    );
+    // The server publishes only files with problems. Messages sent before the response are the ones it sent for the open.
+    server.send(json!({"jsonrpc": "2.0", "id": 2, "method": "textDocument/completion", "params": at(&start, 4, 12)}));
+    let mut before = Vec::new();
+    let items = loop {
+        let msg = server.messages.recv_timeout(TIMEOUT).expect("completion response");
+        if msg["id"] == 2 {
+            break msg;
+        }
+        before.push(msg);
+    };
+    let problems: Vec<&Value> = before
+        .iter()
+        .filter(|m| m["method"] == "textDocument/publishDiagnostics" && m["params"]["uri"] == start.as_str())
+        .filter(|m| m["params"]["diagnostics"].as_array().is_some_and(|d| d.iter().any(|x| x["severity"] == 1)))
+        .collect();
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(labels(&items), ["\"x\"", "\"y\""], "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
 fn signature_help_shows_the_callee_parameters() {
     let root = example("support-ticket");
     let mut server = Server::start();
