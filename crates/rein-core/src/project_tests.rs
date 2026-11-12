@@ -920,6 +920,28 @@ fn a_caller_inside_the_function_folder_gives_no_nesting_warning() {
 }
 
 #[test]
+fn a_function_whose_folder_holds_the_entry_gives_no_nesting_warning() {
+    // `app` belongs at `y/app`, but moving its folder would move the entry `app/start` and leave `rein.json`
+    // naming a file that is gone.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-entry-folder-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "app/start.rein"}"#);
+    write("app/start.rein", "/** s */\nexport default function start() { return @../y }\n");
+    write("y.rein", "/** y */\nexport default function y() { return @./app }\n");
+    write("app.rein", "/** a */\nexport default function app() { return `a` }\n");
+    let project = Project::load(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    assert_eq!(project.entry(), "app/start");
+    assert!(!has(&project.check()["app"], Severity::Warning, "only called by"), "{:?}", project.check()["app"]);
+    assert_eq!(project.nest_target("app"), None);
+}
+
+#[test]
 fn unreachable_functions_get_no_nesting_warning() {
     // `u` and `v` only call each other. Each has one caller, but neither is reachable from main.
     let project = project_of(&[

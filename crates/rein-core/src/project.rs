@@ -452,6 +452,11 @@ impl Project {
         out
     }
 
+    /// The entry function: `entry` in `rein.json` without `.rein`, else `main`.
+    pub fn entry(&self) -> &str {
+        &self.entry
+    }
+
     /// The only caller of `name` and the project path `name` should have, when it is not there yet.
     fn misplaced<'a>(&self, name: &str, callers: &'a BTreeMap<String, BTreeSet<String>>) -> Option<(&'a str, String)> {
         if is_struct(name) || name == self.entry {
@@ -463,8 +468,10 @@ impl Project {
         let folder = if *caller == self.entry { caller.rsplit_once('/').map(|(d, _)| d) } else { Some(caller.as_str()) };
         let home = folder.map_or_else(|| base.to_string(), |d| format!("{d}/{base}"));
         // A caller inside the function's own folder moves with it, so the function can never reach that folder.
-        let inside_own_folder = home.starts_with(&format!("{name}/"));
-        (home != name && !inside_own_folder).then_some((caller.as_str(), home))
+        // The entry inside it would move too, and `rein.json` would name a file that is gone.
+        let folder = format!("{name}/");
+        let blocked = home.starts_with(&folder) || self.entry.starts_with(&folder);
+        (home != name && !blocked).then_some((caller.as_str(), home))
     }
 
     /// Distinct `(function, reference)` pairs for every `@program` or `@program/function` in the project.

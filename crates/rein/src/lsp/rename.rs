@@ -184,6 +184,12 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
         }
         name.strip_prefix(&nested).map(|rest| format!("{new_target}/{rest}"))
     };
+    let entry = project.entry();
+    if entry != target && entry.starts_with(&nested) {
+        return Err(format!(
+            "the folder `{nested}` holds the entry `{entry}`; moving it would leave the program without its entry"
+        ));
+    }
     let mut renames = Vec::new();
     for (name, file) in &project.files {
         let Some(to) = moved(name) else { continue };
