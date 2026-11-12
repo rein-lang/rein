@@ -13,7 +13,7 @@ export default async function answerFaq(
     "Reply with the help article link and ask the customer if it solved the problem.",
   );
   if (solved) {
-    return "Close the ticket as solved.";
+    return @../templates/close_ticket(opening="Glad the help article solved the problem.", nextStep="Reply to this ticket if it comes back.");
   }
   return @../escalate;
 }

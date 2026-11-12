@@ -97,7 +97,7 @@ fn stdin_walk_reaches_done_and_feeds_back_answers() {
         }
     };
     assert_eq!(codes, [2, 2, 2, 3, 0]);
-    assert_eq!(last["instruction"], "Close the ticket as solved.");
+    assert_eq!(last["instruction"], "Tell the customer: Glad the help article solved the problem. Reply to this ticket if it comes back. Then close the ticket as solved.");
     assert_eq!(last["trace"], json!(["main", "answer/faq"]));
 }
 
@@ -265,6 +265,6 @@ fn run_json_lines_walks_to_done_and_survives_a_bad_answer() {
     assert_eq!(kinds, ["question", "error", "question", "question", "question", "request", "done"]);
     assert_eq!(replies[2]["key"], "main.vip", "the run asks the same key again after a bad answer");
     let last = replies.last().unwrap();
-    assert_eq!(last["instruction"], "Close the ticket as solved.");
+    assert_eq!(last["instruction"], "Tell the customer: Glad the help article solved the problem. Reply to this ticket if it comes back. Then close the ticket as solved.");
     assert_eq!(last["trace"], json!(["main", "answer/faq"]));
 }

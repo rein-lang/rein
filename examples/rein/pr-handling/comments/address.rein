@@ -1,12 +1,14 @@
+interface Input {
+  /** The link of the pull request with the review comments. */
+  pr: string;
+  /** Does the pull request have a review comment with no answer? */
+  openComments: boolean;
+}
+
 /**
  * Answer the open review comments on a pull request.
  */
-export default async function addressComments(
-  /** The link of the pull request with the review comments. */
-  pr: string,
-  /** Does the pull request have a review comment with no answer? */
-  openComments: boolean,
-) {
+export default async function addressComments({ pr, openComments }: Input) {
   if (!openComments) {
     return `No comment is open on ${pr}. Ask the reviewer for a new review. Then stop.`;
   }

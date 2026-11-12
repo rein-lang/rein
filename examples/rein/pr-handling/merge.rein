@@ -1,16 +1,18 @@
+interface Input {
+  /** The link of the pull request to merge. */
+  pr: string;
+  /** What is the CI status of the PR? */
+  ci: "green" | "red" | "pending";
+  /** Does the PR conflict with its base branch? */
+  conflicts: boolean;
+  /** What is the review state of the PR? */
+  review: "approved" | "changes requested" | "no review";
+}
+
 /**
  * Decide whether a pull request can merge now.
  */
-export default function merge(
-  /** The link of the pull request to merge. */
-  pr: string,
-  /** What is the CI status of the PR? */
-  ci: "green" | "red" | "pending",
-  /** Does the PR conflict with its base branch? */
-  conflicts: boolean,
-  /** What is the review state of the PR? */
-  review: "approved" | "changes requested" | "no review",
-) {
+export default function merge({ pr, ci, conflicts, review }: Input) {
   switch (ci) {
     case "red":
       return @./ci/fix(pr=pr);

@@ -1,14 +1,16 @@
+interface Alert {
+  /** How severe is the alert? */
+  severity: "sev1" | "sev2" | "sev3";
+  /** Are customers seeing errors or downtime right now? */
+  customerImpact: boolean;
+  /** Does a runbook exist for this alert? */
+  knownRunbook: boolean;
+}
+
 /**
  * Decide how the on-call agent handles a new production alert.
  */
-export default function main(
-  /** How severe is the alert? */
-  severity: "sev1" | "sev2" | "sev3",
-  /** Are customers seeing errors or downtime right now? */
-  customerImpact: boolean,
-  /** Does a runbook exist for this alert? */
-  knownRunbook: boolean,
-) {
+export default function main({ severity, customerImpact, knownRunbook }: Alert) {
   if (customerImpact) {
     return @./page_human;
   }
