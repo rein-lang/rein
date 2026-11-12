@@ -81,7 +81,6 @@ A call follows each reference in the same call. The `trace` lists the functions 
 
 ```sh
 cargo install --path crates/rein        # puts `rein` on PATH
-rein install claude-code --project      # the agent hook: writes .claude/settings.json
 cd examples
 rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin

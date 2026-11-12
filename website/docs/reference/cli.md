@@ -40,7 +40,7 @@ A small language for agent decision flows
 * `serve` — Serve the agent interface. Holds live runs in memory
 * `agent-context` — Print the block an agent needs to use the visible flows
 * `hook` — The agent hook entry point. Reads one event on stdin. Run by the agent, not by hand
-* `install` — Install a program. A folder path links it. `claude-code` writes the agent hook. Any other name is a pnpm package
+* `install` — Install a program. A folder path links it. Any other name is a pnpm package
 * `uninstall` — Remove an installed program package. Runs `pnpm remove` in the npm project
 * `update` — Update installed program packages within their ranges. Runs `pnpm update --ignore-scripts`
 * `lsp` — Run the language server on stdio
@@ -230,21 +230,15 @@ The agent hook entry point. Reads one event on stdin. Run by the agent, not by h
 
 ## `rein install`
 
-Install a program. A folder path links it. `claude-code` writes the agent hook. Any other name is a pnpm package.
+Install a program. A folder path links it. Any other name is a pnpm package.
 
-The rule, in order: a path to an existing directory is linked into the user programs folder. The literal `claude-code` writes the hook (`--project` or `--user` pick the settings file). Anything else is passed to `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
+The rule: a path to an existing directory is linked into the user programs folder. Anything else is passed to `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
 
-**Usage:** `rein install [OPTIONS] <TOOL>`
+**Usage:** `rein install <SOURCE>`
 
 ###### **Arguments:**
 
-* `<TOOL>` — A program folder, `claude-code`, or a package such as `pr-handling@^1`
-
-###### **Options:**
-
-* `--project` — For `claude-code`: write to the project's settings (`.claude/settings.json`). Default
-* `--user` — For `claude-code`: write to the user's settings (`~/.claude/settings.json`)
-* `--dry-run` — For `claude-code`: print the resulting file and write nothing
+* `<SOURCE>` — A program folder to link, or a package such as `pr-handling@^1`
 
 
 

@@ -223,14 +223,9 @@ fn missing_pnpm_is_a_clear_error() {
 
 #[cfg(unix)]
 #[test]
-fn install_keeps_the_hook_and_the_folder_link_before_packages() {
+fn install_links_a_folder_and_sends_every_other_name_to_pnpm() {
     let sb = Sandbox::new("rule");
     let pnpm = stub_pnpm(&sb);
-
-    // `claude-code` is the hook. It does not reach pnpm.
-    let hook = sb.rein(&sb.work(), &["install", "claude-code", "--dry-run"]).env("REIN_PNPM", &pnpm).output().unwrap();
-    assert_eq!(hook.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&hook.stdout).contains("rein hook --caller claude-code"));
 
     // An existing directory is linked. It does not reach pnpm.
     write(&sb.work().join("pr-handling/main.rein"), ENTRY);
@@ -238,4 +233,9 @@ fn install_keeps_the_hook_and_the_folder_link_before_packages() {
     assert_eq!(link.status.code(), Some(0), "{}", String::from_utf8_lossy(&link.stderr));
     assert!(sb.programs().join("pr-handling").symlink_metadata().is_ok());
     assert!(calls(&sb).is_empty());
+
+    // Any other name is a package, `claude-code` included.
+    let other = sb.rein(&sb.work(), &["install", "claude-code"]).env("REIN_PNPM", &pnpm).output().unwrap();
+    assert_eq!(other.status.code(), Some(0), "{}", String::from_utf8_lossy(&other.stderr));
+    assert_eq!(calls(&sb), [vec![npm_dir(&sb), "add".into(), "--ignore-scripts".into(), "claude-code".into()]]);
 }

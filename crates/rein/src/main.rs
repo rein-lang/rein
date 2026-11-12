@@ -3,7 +3,6 @@
 mod cli;
 mod graph;
 mod hook;
-mod install;
 mod live_run;
 mod lsp;
 mod mcp;
@@ -151,23 +150,13 @@ enum Command {
         #[arg(long)]
         caller: Option<String>,
     },
-    /// Install a program. A folder path links it. `claude-code` writes the agent hook. Any other name is a pnpm package.
+    /// Install a program. A folder path links it. Any other name is a pnpm package.
     ///
-    /// The rule, in order: a path to an existing directory is linked into the user programs folder. The literal
-    /// `claude-code` writes the hook (`--project` or `--user` pick the settings file). Anything else is passed to
-    /// `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
+    /// The rule: a path to an existing directory is linked into the user programs folder. Anything else is passed
+    /// to `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
     Install {
-        /// A program folder, `claude-code`, or a package such as `pr-handling@^1`.
-        tool: String,
-        /// For `claude-code`: write to the project's settings (`.claude/settings.json`). Default.
-        #[arg(long, conflicts_with = "user")]
-        project: bool,
-        /// For `claude-code`: write to the user's settings (`~/.claude/settings.json`).
-        #[arg(long)]
-        user: bool,
-        /// For `claude-code`: print the resulting file and write nothing.
-        #[arg(long)]
-        dry_run: bool,
+        /// A program folder to link, or a package such as `pr-handling@^1`.
+        source: String,
     },
     /// Remove an installed program package. Runs `pnpm remove` in the npm project.
     Uninstall {
@@ -205,14 +194,11 @@ fn main() -> ExitCode {
         }
         Command::AgentContext { format } => cli::agent_context(matches!(format, Format::Json)),
         Command::Hook { caller } => hook::run(caller.as_deref()),
-        Command::Install { tool, project: _, user, dry_run } => {
-            if Path::new(&tool).is_dir() {
-                programs::install(Path::new(&tool))
-            } else if tool == "claude-code" {
-                let target = if user { install::Target::User } else { install::Target::Project };
-                install::run(&tool, target, dry_run)
+        Command::Install { source } => {
+            if Path::new(&source).is_dir() {
+                programs::install(Path::new(&source))
             } else {
-                packages::install(&tool)
+                packages::install(&source)
             }
         }
         Command::Uninstall { name } => packages::uninstall(&name),
