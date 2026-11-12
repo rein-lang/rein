@@ -285,10 +285,10 @@ fn hook_malformed_payload_is_a_no_op_with_stderr() {
 
 #[test]
 fn install_other_name_is_a_package_for_pnpm() {
-    // Not a folder, so it goes to pnpm. A missing pnpm stops it before any network use.
+    // `-g` installs for the user, so it runs in the user folder. A missing pnpm stops it before any network use.
     let sb = Sandbox::new("install-other");
     let repo = temp_dir("install-other-repo");
-    let out = sb.command(&repo, &["install", "cursor"]).env("REIN_PNPM", sb.tmp.join("no-pnpm")).output().unwrap();
+    let out = sb.command(&repo, &["install", "-g", "cursor"]).env("REIN_PNPM", sb.tmp.join("no-pnpm")).output().unwrap();
     assert_eq!(code(&out), 1);
     assert!(String::from_utf8_lossy(&out.stderr).contains("pnpm is not installed"));
 }

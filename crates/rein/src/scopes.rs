@@ -6,7 +6,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use rein_core::flows::{self, Flow};
+use rein_core::flows::{self, Flow, FLOW_DIR};
 
 /// The user programs folder: `REIN_HOME`, else `$XDG_CONFIG_HOME/rein/programs`, else
 /// `~/.config/rein/programs`.
@@ -19,6 +19,18 @@ pub fn user_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(config.join("rein").join("programs"))
+}
+
+/// The `rein/` folder that repo-bound installs use: the nearest one from `cwd` up, as project scope finds it. Without
+/// one, `rein/` at the git repository root (the nearest folder with `.git`). The folder is not created here.
+pub fn project_rein_dir(cwd: &Path) -> Result<PathBuf, String> {
+    if let Some(dir) = cwd.ancestors().map(|d| d.join(FLOW_DIR)).find(|d| d.is_dir()) {
+        return Ok(dir);
+    }
+    cwd.ancestors()
+        .find(|d| d.join(".git").exists())
+        .map(|root| root.join(FLOW_DIR))
+        .ok_or_else(|| "not in a repository; use -g to install for the user".to_string())
 }
 
 /// The system scope folders, in precedence order: `REIN_SYSTEM_DIRS`, else the platform defaults.

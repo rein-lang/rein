@@ -1,5 +1,5 @@
-//! Program packages in `<user programs folder>/npm/`: discovery in `rein list`, and the pnpm commands. Each test
-//! gets its own temp folders. The pnpm tests put a stub script in `REIN_PNPM`, so no network and no real pnpm run.
+//! `rein install`, `uninstall` and `update`: the arguments reach pnpm, in the npm folder of the scope, and project-scope
+//! discovery. Each test gets its own temp folders. The pnpm tests put a stub script in `REIN_PNPM`, so no pnpm runs.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,8 @@ use serde_json::Value;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-/// A temp folder with `home/`, `programs/` (the user programs folder) and `work/` (the command's cwd).
+/// A temp folder with `home/`, `programs/` (the user programs folder), `work/` (outside any repository) and `repo/`
+/// (a git repository with no `rein/` yet).
 struct Sandbox {
     base: PathBuf,
 }
@@ -23,6 +24,8 @@ impl Sandbox {
         let base = std::env::temp_dir().join(format!("rein-packages-{tag}-{}-{nanos}-{n}", std::process::id()));
         fs::create_dir_all(base.join("home")).unwrap();
         fs::create_dir_all(base.join("work")).unwrap();
+        fs::create_dir_all(base.join("repo/.git")).unwrap();
+        fs::create_dir_all(base.join("repo/sub")).unwrap();
         Sandbox { base }
     }
 
@@ -32,6 +35,10 @@ impl Sandbox {
 
     fn work(&self) -> PathBuf {
         self.base.join("work")
+    }
+
+    fn repo(&self) -> PathBuf {
+        self.base.join("repo")
     }
 
     /// A `rein` command run from `cwd`. HOME, REIN_HOME and TMPDIR point into the sandbox.
@@ -64,11 +71,10 @@ const ENTRY: &str = "/** A program. */\nexport default function main() {\n  retu
 
 const ENTRY_WITH_QUESTION: &str = "/**\n * Plain tool.\n */\nexport default function main(\n  /** Is it urgent? */\n  urgent: boolean,\n) {\n  if (urgent) {\n    return \"yes\";\n  }\n  return \"no\";\n}\n";
 
-/// Lays out one package the way pnpm does: the files under `node_modules/.pnpm/<store>/node_modules/<name>`,
-/// and a symlink at `node_modules/<link>`. An npm alias has `link` different from `name`.
-#[cfg(unix)]
-fn pnpm_package(programs: &Path, store: &str, name: &str, link: &str, manifest: &str, entry: Option<&str>) {
-    let modules = programs.join("npm/node_modules");
+/// Lays out one package the way pnpm does under `<base>/npm`: the files under `node_modules/.pnpm/<store>/node_modules/
+/// <name>`, and a symlink at `node_modules/<link>`. An npm alias has `link` different from `name`.
+fn pnpm_package(base: &Path, store: &str, name: &str, link: &str, manifest: &str, entry: Option<&str>) {
+    let modules = base.join("npm/node_modules");
     let target = modules.join(".pnpm").join(store).join("node_modules").join(name);
     write(&target.join("package.json"), manifest);
     if let Some(text) = entry {
@@ -79,30 +85,40 @@ fn pnpm_package(programs: &Path, store: &str, name: &str, link: &str, manifest: 
     std::os::unix::fs::symlink(&target, &link_path).unwrap();
 }
 
-#[cfg(unix)]
-#[test]
-fn list_finds_packages_by_their_link_names() {
-    let sb = Sandbox::new("list");
-    let p = sb.programs();
-    pnpm_package(&p, "plain-tool@1.0.0", "plain-tool", "plain-tool",
+/// Packages used by the discovery tests, under `base/npm`.
+fn lay_out_packages(base: &Path) {
+    pnpm_package(base, "plain-tool@1.0.0", "plain-tool", "plain-tool",
         r#"{"name": "plain-tool", "version": "1.0.0", "description": "A plain tool.", "engines": {"rein": "^0.1.0"}}"#,
         Some(ENTRY_WITH_QUESTION));
-    pnpm_package(&p, "@scope+tool@2.0.0", "@scope/tool", "@scope/tool",
+    pnpm_package(base, "@scope+tool@2.0.0", "@scope/tool", "@scope/tool",
         r#"{"name": "@scope/tool", "version": "2.0.0", "description": "A scoped tool."}"#, Some(ENTRY));
-    pnpm_package(&p, "pr@1.0.0", "pr", "pr-v1",
+    pnpm_package(base, "pr@1.0.0", "pr", "pr-v1",
         r#"{"name": "pr", "version": "1.0.0", "description": "PR handling, version one.", "engines": {"rein": "^0.1.0"}}"#,
         Some(ENTRY));
-    pnpm_package(&p, "pr@2.0.0", "pr", "pr-v2",
+    pnpm_package(base, "pr@2.0.0", "pr", "pr-v2",
         r#"{"name": "pr", "version": "2.0.0", "description": "PR handling, version two.", "engines": {"rein": "^0.2.0"}}"#,
         Some(ENTRY));
-    pnpm_package(&p, "lodash-like@4.0.0", "lodash-like", "lodash-like", r#"{"name": "lodash-like", "version": "4.0.0"}"#, None);
+    pnpm_package(base, "lodash-like@4.0.0", "lodash-like", "lodash-like", r#"{"name": "lodash-like", "version": "4.0.0"}"#, None);
+}
 
-    let out = sb.rein(&sb.work(), &["list", "--json"]).output().unwrap();
+fn names(list: &[Value]) -> Vec<&str> {
+    list.iter().map(|f| f["name"].as_str().unwrap()).collect()
+}
+
+fn rein_list(sb: &Sandbox, cwd: &Path) -> Vec<Value> {
+    let out = sb.rein(cwd, &["list", "--json"]).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    let list: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
-    let names: Vec<&str> = list.iter().map(|f| f["name"].as_str().unwrap()).collect();
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn list_finds_user_packages_by_their_link_names() {
+    let sb = Sandbox::new("list-user");
+    lay_out_packages(&sb.programs());
+    let list = rein_list(&sb, &sb.work());
     // The non-Rein package and the `.pnpm` store are not programs. The two aliases are two programs.
-    assert_eq!(names, ["@scope/tool", "plain-tool", "pr-v1", "pr-v2"]);
+    assert_eq!(names(&list), ["@scope/tool", "plain-tool", "pr-v1", "pr-v2"]);
 
     let by = |name: &str| list.iter().find(|f| f["name"] == name).unwrap();
     assert!(list.iter().all(|f| f["scope"] == "user" && f["shadowed"] == false), "{list:?}");
@@ -114,9 +130,8 @@ fn list_finds_packages_by_their_link_names() {
     assert_eq!(by("@scope/tool")["version"], "2.0.0");
     assert_eq!(by("pr-v1")["description"], "PR handling, version one.");
     assert!(by("pr-v1").get("warning").is_none());
-    let running = env!("CARGO_PKG_VERSION");
     assert_eq!(by("pr-v2")["description"], "PR handling, version two.");
-    assert_eq!(by("pr-v2")["warning"], format!("needs rein ^0.2.0; this is rein {running}"));
+    assert_eq!(by("pr-v2")["warning"], format!("needs rein ^0.2.0; this is rein {}", env!("CARGO_PKG_VERSION")));
 
     // A package runs by its link name, and `rein show` prints its source.
     let step = sb.rein(&sb.work(), &["step", "plain-tool", "--json"]).output().unwrap();
@@ -126,6 +141,18 @@ fn list_finds_packages_by_their_link_names() {
     let show = sb.rein(&sb.work(), &["show", "pr-v2"]).output().unwrap();
     assert_eq!(show.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&show.stdout).contains("// main.rein"));
+}
+
+#[cfg(unix)]
+#[test]
+fn list_finds_repo_packages_in_the_project_rein_npm_folder() {
+    let sb = Sandbox::new("list-project");
+    lay_out_packages(&sb.repo().join("rein"));
+    // `npm` is the package project of its scope. A folder named `npm` with a flow in it is not a program.
+    write(&sb.repo().join("rein/npm/main.rein"), ENTRY);
+    let list = rein_list(&sb, &sb.repo().join("sub"));
+    assert_eq!(names(&list), ["@scope/tool", "plain-tool", "pr-v1", "pr-v2"]);
+    assert!(list.iter().all(|f| f["scope"] == "project"), "{list:?}");
 }
 
 /// A stub pnpm. It logs each call as its cwd, then one line per argument, then `END`. `remove missing-pkg` fails.
@@ -151,55 +178,111 @@ fn calls(sb: &Sandbox) -> Vec<Vec<String>> {
     log.split("END\n").filter(|c| !c.is_empty()).map(|c| c.lines().map(str::to_string).collect()).collect()
 }
 
-/// The npm project folder as pnpm reports its cwd: canonical.
+/// A folder as pnpm reports its cwd: canonical.
 #[cfg(unix)]
-fn npm_dir(sb: &Sandbox) -> String {
-    fs::canonicalize(sb.programs().join("npm")).unwrap().display().to_string()
+fn canon(path: &Path) -> String {
+    fs::canonicalize(path).unwrap().display().to_string()
+}
+
+/// Shorthand for one expected pnpm call: its cwd, then its arguments.
+#[cfg(unix)]
+fn call(cwd: &Path, args: &[&str]) -> Vec<String> {
+    std::iter::once(canon(cwd)).chain(args.iter().map(|a| a.to_string())).collect()
 }
 
 #[cfg(unix)]
 #[test]
-fn install_runs_pnpm_add_with_ignore_scripts_in_the_npm_folder() {
-    let sb = Sandbox::new("install");
+fn install_without_global_runs_in_the_repo_rein_npm_folder() {
+    let sb = Sandbox::new("repo-install");
     let pnpm = stub_pnpm(&sb);
-    let out = sb.rein(&sb.work(), &["install", "pr-handling@^1"]).env("REIN_PNPM", &pnpm).output().unwrap();
+    let out = sb.rein(&sb.repo().join("sub"), &["install", "pr-handling@^1"]).env("REIN_PNPM", &pnpm).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(calls(&sb), [vec![npm_dir(&sb), "add".into(), "--ignore-scripts".into(), "pr-handling@^1".into()]]);
-
-    // The first use made the folder's own manifest. It is private, so it cannot be published.
-    let manifest: Value = serde_json::from_str(&fs::read_to_string(sb.programs().join("npm/package.json")).unwrap()).unwrap();
+    // No `rein/` existed, so it is made at the git root. The user folder is not touched.
+    let npm = sb.repo().join("rein/npm");
+    assert_eq!(calls(&sb), [call(&npm, &["add", "--ignore-scripts", "pr-handling@^1"])]);
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(npm.join("package.json")).unwrap()).unwrap();
     assert_eq!(manifest["private"], true);
+    assert!(!sb.programs().exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn install_passes_every_source_to_pnpm_unchanged() {
-    let sb = Sandbox::new("sources");
+fn global_flag_runs_in_the_user_folder_and_is_not_passed_on() {
+    let sb = Sandbox::new("global");
     let pnpm = stub_pnpm(&sb);
-    for spec in ["github:owner/repo", "pr-v1@npm:pr-handling@^1", "file:../pr-handling"] {
-        let out = sb.rein(&sb.work(), &["install", spec]).env("REIN_PNPM", &pnpm).output().unwrap();
-        assert_eq!(out.status.code(), Some(0), "{spec}: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    let args: Vec<String> = calls(&sb).iter().map(|c| c[3].clone()).collect();
-    assert_eq!(args, ["github:owner/repo", "pr-v1@npm:pr-handling@^1", "file:../pr-handling"]);
+    let user = sb.programs().join("npm");
+    let out = sb.rein(&sb.repo(), &["install", "pr-handling@^2", "-g"]).env("REIN_PNPM", &pnpm).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = sb.rein(&sb.repo(), &["uninstall", "--global", "pr-v1"]).env("REIN_PNPM", &pnpm).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        calls(&sb),
+        [call(&user, &["add", "--ignore-scripts", "pr-handling@^2"]), call(&user, &["remove", "pr-v1"])]
+    );
+    assert!(!sb.repo().join("rein/npm").exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn uninstall_and_update_run_the_pnpm_commands() {
-    let sb = Sandbox::new("remove");
+fn outside_a_repository_without_global_is_an_error() {
+    let sb = Sandbox::new("no-repo");
     let pnpm = stub_pnpm(&sb);
-    for args in [&["uninstall", "pr-v1"][..], &["update"], &["update", "pr-v2"]] {
-        let out = sb.rein(&sb.work(), args).env("REIN_PNPM", &pnpm).output().unwrap();
+    let out = sb.rein(&sb.work(), &["install", "pr-handling"]).env("REIN_PNPM", &pnpm).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not in a repository; use -g to install for the user"));
+    assert!(calls(&sb).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn every_argument_reaches_pnpm_unchanged() {
+    let sb = Sandbox::new("passthrough");
+    let pnpm = stub_pnpm(&sb);
+    let npm = sb.repo().join("rein/npm");
+    let runs: [&[&str]; 6] = [
+        &["install", "--save-exact", "pr-handling@1"],
+        &["install", "github:owner/repo"],
+        &["install", "file:../pr-handling", "./my-program"],
+        &["install", "pr-v1@npm:pr-handling@^1"],
+        &["update", "--latest"],
+        &["install", "--ignore-scripts=false", "file:../x"],
+    ];
+    for args in runs {
+        let out = sb.rein(&sb.repo().join("sub"), args).env("REIN_PNPM", &pnpm).output().unwrap();
         assert_eq!(out.status.code(), Some(0), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
-    let npm = npm_dir(&sb);
-    let expected = [
-        vec![npm.clone(), "remove".into(), "pr-v1".into()],
-        vec![npm.clone(), "update".into(), "--ignore-scripts".into()],
-        vec![npm, "update".into(), "--ignore-scripts".into(), "pr-v2".into()],
-    ];
-    assert_eq!(calls(&sb), expected);
+    assert_eq!(
+        calls(&sb),
+        [
+            call(&npm, &["add", "--ignore-scripts", "--save-exact", "pr-handling@1"]),
+            call(&npm, &["add", "--ignore-scripts", "github:owner/repo"]),
+            call(&npm, &["add", "--ignore-scripts", "file:../pr-handling", "./my-program"]),
+            call(&npm, &["add", "--ignore-scripts", "pr-v1@npm:pr-handling@^1"]),
+            call(&npm, &["update", "--ignore-scripts", "--latest"]),
+            // The user's own `--ignore-scripts=false` replaces the default, so only one flag reaches pnpm.
+            call(&npm, &["add", "--ignore-scripts=false", "file:../x"]),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn uninstall_and_update_pass_their_arguments() {
+    let sb = Sandbox::new("remove");
+    let pnpm = stub_pnpm(&sb);
+    let npm = sb.repo().join("rein/npm");
+    for args in [&["uninstall", "pr-v1", "--silent"][..], &["update"], &["update", "pr-v2"]] {
+        let out = sb.rein(&sb.repo(), args).env("REIN_PNPM", &pnpm).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    assert_eq!(
+        calls(&sb),
+        [
+            call(&npm, &["remove", "pr-v1", "--silent"]),
+            call(&npm, &["update", "--ignore-scripts"]),
+            call(&npm, &["update", "--ignore-scripts", "pr-v2"]),
+        ]
+    );
 }
 
 #[cfg(unix)]
@@ -207,7 +290,7 @@ fn uninstall_and_update_run_the_pnpm_commands() {
 fn pnpm_exit_code_and_stderr_pass_through() {
     let sb = Sandbox::new("exit");
     let pnpm = stub_pnpm(&sb);
-    let out = sb.rein(&sb.work(), &["uninstall", "missing-pkg"]).env("REIN_PNPM", &pnpm).output().unwrap();
+    let out = sb.rein(&sb.work(), &["uninstall", "-g", "missing-pkg"]).env("REIN_PNPM", &pnpm).output().unwrap();
     assert_eq!(out.status.code(), Some(7));
     assert!(String::from_utf8_lossy(&out.stderr).contains("stub: no such package"));
 }
@@ -216,26 +299,18 @@ fn pnpm_exit_code_and_stderr_pass_through() {
 #[test]
 fn missing_pnpm_is_a_clear_error() {
     let sb = Sandbox::new("nopnpm");
-    let out = sb.rein(&sb.work(), &["install", "pr-handling"]).env("REIN_PNPM", sb.base.join("no-such-pnpm")).output().unwrap();
+    let out = sb
+        .rein(&sb.repo(), &["install", "pr-handling"])
+        .env("REIN_PNPM", sb.base.join("no-such-pnpm"))
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("pnpm is not installed"));
 }
 
-#[cfg(unix)]
 #[test]
-fn install_links_a_folder_and_sends_every_other_name_to_pnpm() {
-    let sb = Sandbox::new("rule");
-    let pnpm = stub_pnpm(&sb);
-
-    // An existing directory is linked. It does not reach pnpm.
-    write(&sb.work().join("pr-handling/main.rein"), ENTRY);
-    let link = sb.rein(&sb.work(), &["install", "pr-handling"]).env("REIN_PNPM", &pnpm).output().unwrap();
-    assert_eq!(link.status.code(), Some(0), "{}", String::from_utf8_lossy(&link.stderr));
-    assert!(sb.programs().join("pr-handling").symlink_metadata().is_ok());
-    assert!(calls(&sb).is_empty());
-
-    // Any other name is a package, `claude-code` included.
-    let other = sb.rein(&sb.work(), &["install", "claude-code"]).env("REIN_PNPM", &pnpm).output().unwrap();
-    assert_eq!(other.status.code(), Some(0), "{}", String::from_utf8_lossy(&other.stderr));
-    assert_eq!(calls(&sb), [vec![npm_dir(&sb), "add".into(), "--ignore-scripts".into(), "claude-code".into()]]);
+fn install_needs_arguments() {
+    let sb = Sandbox::new("noargs");
+    let out = sb.rein(&sb.repo(), &["install"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
 }

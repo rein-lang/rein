@@ -10,7 +10,7 @@ mod packages;
 mod programs;
 mod scopes;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -150,23 +150,28 @@ enum Command {
         #[arg(long)]
         caller: Option<String>,
     },
-    /// Install a program. A folder path links it. Any other name is a pnpm package.
+    /// Install a program package: runs `pnpm add` with these arguments.
     ///
-    /// The rule: a path to an existing directory is linked into the user programs folder. Anything else is passed
-    /// to `pnpm add --ignore-scripts` in `<user programs folder>/npm/`, such as `pr-handling@^1` or `file:../pr-handling`.
+    /// The arguments go to pnpm unchanged, so any pnpm flag works. `-g` or `--global` installs for the user: it runs
+    /// in `<user programs folder>/npm/`, and rein does not pass it on. Without `-g`, it runs in the repo's
+    /// `rein/npm/`. Outside a repository, use `-g`. `--ignore-scripts` is added first, unless the arguments set it.
     Install {
-        /// A program folder to link, or a package such as `pr-handling@^1`.
-        source: String,
+        /// Arguments for `pnpm add`, such as `pr-handling@^1`, `file:../pr-handling` or `--save-exact`.
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+        args: Vec<String>,
     },
-    /// Remove an installed program package. Runs `pnpm remove` in the npm project.
+    /// Remove an installed program package: runs `pnpm remove` with these arguments. `-g` picks the user folder.
     Uninstall {
-        /// Package name, as `rein list` shows it. An alias is its own name.
-        name: String,
+        /// Arguments for `pnpm remove`, such as a package name. `-g` picks the user folder.
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+        args: Vec<String>,
     },
-    /// Update installed program packages within their ranges. Runs `pnpm update --ignore-scripts`.
+    /// Update installed program packages: runs `pnpm update --ignore-scripts` with these arguments. `-g` picks the
+    /// user folder.
     Update {
-        /// Package to update. Default: every installed package.
-        name: Option<String>,
+        /// Arguments for `pnpm update`, such as a package name or `--latest`. `-g` picks the user folder.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+        args: Vec<String>,
     },
     /// Run the language server on stdio.
     Lsp,
@@ -194,15 +199,9 @@ fn main() -> ExitCode {
         }
         Command::AgentContext { format } => cli::agent_context(matches!(format, Format::Json)),
         Command::Hook { caller } => hook::run(caller.as_deref()),
-        Command::Install { source } => {
-            if Path::new(&source).is_dir() {
-                programs::install(Path::new(&source))
-            } else {
-                packages::install(&source)
-            }
-        }
-        Command::Uninstall { name } => packages::uninstall(&name),
-        Command::Update { name } => packages::update(name.as_deref()),
+        Command::Install { args } => packages::run("add", &args),
+        Command::Uninstall { args } => packages::run("remove", &args),
+        Command::Update { args } => packages::run("update", &args),
         Command::Lsp => lsp::serve(),
         Command::DocsCli => {
             let options = clap_markdown::MarkdownOptions::new().show_footer(false);

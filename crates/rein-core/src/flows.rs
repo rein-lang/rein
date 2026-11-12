@@ -82,11 +82,12 @@ pub fn discover(cwd: &Path, user_dir: Option<&Path>, system_dirs: &[PathBuf]) ->
         }
         if scoped.is_dir() {
             found.extend(flows_in(&scoped, Scope::Project));
+            found.extend(npm_programs(&scoped.join(NPM_DIR), Scope::Project));
         }
     }
     if let Some(user) = user_dir {
         found.extend(flows_in(user, Scope::User));
-        found.extend(npm_programs(&user.join(NPM_DIR)));
+        found.extend(npm_programs(&user.join(NPM_DIR), Scope::User));
     }
     for dir in system_dirs {
         found.extend(flows_in(dir, Scope::System));
@@ -125,6 +126,8 @@ fn flows_in(folder: &Path, scope: Scope) -> Vec<Flow> {
     let Ok(entries) = fs::read_dir(folder) else { return Vec::new() };
     let mut flows: Vec<Flow> = entries
         .filter_map(Result::ok)
+        // `npm` is the package project of its scope, so it is never a program.
+        .filter(|e| e.file_name().to_str() != Some(NPM_DIR))
         .filter_map(|e| program(e.path(), scope))
         .collect();
     flows.sort_by(|a, b| a.name.cmp(&b.name));
@@ -155,7 +158,7 @@ struct Engines {
 /// Packages installed in `npm_dir/node_modules`. pnpm links each direct dependency at its top level, so each
 /// top-level entry is one program, named by its link name. An npm alias such as `pr-v1` is a program of its own.
 /// A scope folder such as `@scope` holds `@scope/name` programs. Dot entries (`.pnpm`) are skipped.
-fn npm_programs(npm_dir: &Path) -> Vec<Flow> {
+fn npm_programs(npm_dir: &Path, scope: Scope) -> Vec<Flow> {
     let modules = npm_dir.join("node_modules");
     let Ok(entries) = fs::read_dir(&modules) else { return Vec::new() };
     let mut names = Vec::new();
@@ -181,7 +184,7 @@ fn npm_programs(npm_dir: &Path) -> Vec<Flow> {
         .into_iter()
         .filter_map(|name| {
             // A package without a Rein entry is not a program. `program` returns None for it.
-            let mut flow = program(modules.join(&name), Scope::User)?;
+            let mut flow = program(modules.join(&name), scope)?;
             flow.name = name;
             Some(flow)
         })

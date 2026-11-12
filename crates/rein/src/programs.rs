@@ -1,12 +1,10 @@
-//! Programs as named apps: `rein list`, `rein show`, and `rein install <path>`. The MCP host uses
-//! the same functions.
+//! Programs as named apps: `rein list` and `rein show`. The MCP host uses the same functions.
 
 use std::fs;
-use std::path::{Path, PathBuf};
 
-use rein_core::flows::{self, Scope, MANIFEST};
+use rein_core::flows::MANIFEST;
 use rein_core::project::Project;
-use rein_core::step::{invalid_request, StepResponse};
+use rein_core::step::invalid_request;
 use serde_json::Value;
 
 use crate::cli::flow_json;
@@ -104,54 +102,6 @@ pub fn show(name: &str) -> u8 {
             1
         }
     }
-}
-
-/// `rein install <path>`: links a program folder into the user programs folder under its name.
-pub fn install(path: &Path) -> u8 {
-    match link(path) {
-        Ok((name, target)) => {
-            println!("installed {name} -> {}", target.display());
-            0
-        }
-        Err(message) => {
-            eprintln!("error: {message}");
-            1
-        }
-    }
-}
-
-fn link(path: &Path) -> Result<(String, PathBuf), String> {
-    let root = fs::canonicalize(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let flow = flows::program(root.clone(), Scope::User)
-        .ok_or_else(|| format!("{} is not a program: it has no {MANIFEST} or main.rein", root.display()))?;
-    // A trust boundary: the name becomes a path under the user folder. `npm` is the package project, so it is taken.
-    let valid = flow.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if flow.name.is_empty() || !valid || flow.name == flows::NPM_DIR {
-        return Err(format!("invalid program name `{}`", flow.name));
-    }
-    let project = Project::load(&root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
-    if let StepResponse::Error { message, .. } = Run::start(project, flow.entry.clone()).last() {
-        return Err(format!("{} cannot start: {message}", flow.name));
-    }
-    let dir = scopes::user_dir().ok_or("no user programs folder; set HOME or REIN_HOME")?;
-    fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let target = dir.join(&flow.name);
-    if target.symlink_metadata().is_ok() {
-        return Err(format!("{} already exists", target.display()));
-    }
-    symlink(&root, &target).map_err(|e| format!("cannot link {}: {e}", target.display()))?;
-    Ok((flow.name, target))
-}
-
-// ponytail: a link keeps the program live while its author edits it; copy instead if installs must be frozen.
-#[cfg(unix)]
-fn symlink(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(from, to)
-}
-
-#[cfg(not(unix))]
-fn symlink(_: &Path, _: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::other("install needs symlinks; only Unix is supported"))
 }
 
 #[cfg(test)]
