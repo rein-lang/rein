@@ -87,7 +87,7 @@ rein graph support-ticket               # its decision flow as Mermaid (--format
 rein serve --mcp                        # the MCP host for agents (see docs/interface.md)
 ```
 
-A program is a visible folder with a `rein.json` manifest and a `main.rein`: `repo/rein/<program>/` (project), `~/.config/rein/programs/<program>/` (user, filled by `rein install <path>`), or `/etc/rein/<program>/` (system). The closest scope wins a name clash. See [spec.md section 1a](docs/spec.md#1a-flows-and-scopes).
+To install, update, or remove a program, see [Install a program](docs/install-programs.md).
 
 Check an example:
 
