@@ -1532,3 +1532,70 @@ fn program_references_resolve_through_the_scopes() {
     fs::remove_dir_all(&root).unwrap();
     fs::remove_dir_all(&home).unwrap();
 }
+
+/// Installs `pr-handling` in the user scope of `home`, as `program_references_resolve_through_the_scopes` does.
+fn install_pr_handling(home: &Path) -> PathBuf {
+    let program = home.join("pr-handling");
+    fs::create_dir_all(&program).unwrap();
+    fs::write(program.join("main.rein"), PR_HANDLING).unwrap();
+    fs::write(program.join("review.rein"), "/** Review. */\nexport default function review(\n  /** The PR link. */\n  pr: string,\n) {\n  return `Review ${pr}.`;\n}\n").unwrap();
+    fs::write(program.join("rein.json"), r#"{"entry":"main.rein"}"#).unwrap();
+    program
+}
+
+#[test]
+fn a_project_without_program_refs_checks_and_completes_without_programs() {
+    let root = temp_project("norefs");
+    let home = root.with_extension("home");
+    install_pr_handling(&home);
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+
+    // The file references only a local function, so the checker finds nothing wrong.
+    let main = uri_of(&root, "main.rein");
+    server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
+    let diags = server.wait_diagnostics(&main, |d| d.is_empty());
+    assert!(diags.is_empty(), "{diags:?}");
+
+    // After `@./` the local functions only. The installed program is not offered.
+    let items = server.request(2, "textDocument/completion", at(&main, 2, 12));
+    let names = labels(&items);
+    assert_eq!(names, ["@./target"], "{items}");
+
+    // After a bare `@` the installed programs are still offered next to the local ones.
+    let items = server.request(3, "textDocument/completion", at(&main, 2, 10));
+    assert!(labels(&items).contains(&"@pr-handling".to_string()), "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn an_unsaved_buffer_of_an_installed_program_shows_in_the_hand_off() {
+    let root = temp_project("overlay");
+    let home = root.with_extension("home");
+    let program = install_pr_handling(&home);
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    // Open in the editor, the installed program's entry has an edit that is not saved.
+    let edited = PR_HANDLING.replace("Handle a PR.", "Handle a PR, unsaved.");
+    server.open(&uri_of(&program, "main.rein"), &edited);
+
+    // The hand-off's hover shows the buffer's doc comment, not the file on disk.
+    let hover = server.request(2, "textDocument/hover", at(&handoff, 5, 12));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("Handle a PR, unsaved."), "{text}");
+    assert!(text.contains("program `pr-handling`"), "{text}");
+
+    // Completion after `@pr-handling/` still lists the program's functions.
+    let items = server.request(3, "textDocument/completion", at(&handoff, 5, 22));
+    assert_eq!(labels(&items), ["@pr-handling/main", "@pr-handling/review"], "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+}

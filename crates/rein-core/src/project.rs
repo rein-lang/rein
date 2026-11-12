@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
 use crate::check::{check_function, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
+use crate::flows::Flow;
 use crate::parser::parse;
 
 /// The function every project starts from. It is `main.rein` at the project root.
@@ -23,13 +24,15 @@ pub struct SourceFile {
     pub parse_diagnostics: Vec<Diagnostic>,
 }
 
-/// Gives the root and entry function of a program by name, or why there is none.
-pub type FindProgram = dyn Fn(&str) -> Result<(PathBuf, String), String>;
+/// Gives the installed program called by name, as the scopes resolve it, or why there is none.
+pub type FindProgram = dyn Fn(&str) -> Result<Flow, String>;
 
 /// Another installed program that this project hands off to, with the entry function a hand-off starts at.
 pub struct Linked {
     pub project: Box<Project>,
     pub entry: String,
+    /// The program as the scopes found it: its folder, scope and version.
+    pub flow: Flow,
 }
 
 pub struct Project {
@@ -107,8 +110,15 @@ impl Project {
     /// Reads every `*.rein` file under `root`. Skips hidden dirs, `target/` and `node_modules/`.
     /// Follows symlinks. A file that cannot be read is kept with an error diagnostic.
     pub fn load(root: &Path) -> io::Result<Self> {
+        Self::load_with(root, &[])
+    }
+
+    /// [`Project::load`], with `open` texts replacing the files on disk. The language server passes its open buffers.
+    pub fn load_with(root: &Path, open: &[(PathBuf, String)]) -> io::Result<Self> {
         let mut sources = Vec::new();
         collect(root, &mut sources, &mut BTreeSet::new())?;
+        // A later pair for the same name replaces the disk copy, as `build` keeps the last one.
+        sources.extend(open.iter().map(|(path, text)| (path.clone(), Ok(text.clone()))));
         Ok(Self::build(root.to_path_buf(), sources))
     }
 
@@ -216,14 +226,19 @@ impl Project {
     /// and entry of a program by name, as the scopes resolve it. The CLI passes it, because scopes live on the
     /// machine, not here.
     pub fn link_programs(&mut self, find: &FindProgram) {
+        self.link_programs_with(find, &[]);
+    }
+
+    /// [`Project::link_programs`], with `open` texts replacing the files of each linked program on disk.
+    pub fn link_programs_with(&mut self, find: &FindProgram, open: &[(PathBuf, String)]) {
         let mut queue: VecDeque<String> = program_names(&self.files).into_iter().collect();
         while let Some(name) = queue.pop_front() {
             if self.programs.contains_key(&name) {
                 continue;
             }
-            let loaded = find(&name).and_then(|(root, entry)| {
-                let project = Project::load(&root).map_err(|e| format!("cannot read program `{name}`: {e}"))?;
-                Ok(Linked { project: Box::new(project), entry })
+            let loaded = find(&name).and_then(|flow| {
+                let project = Project::load_with(&flow.root, open).map_err(|e| format!("cannot read program `{name}`: {e}"))?;
+                Ok(Linked { project: Box::new(project), entry: flow.entry.clone(), flow })
             });
             if let Ok(linked) = &loaded {
                 queue.extend(program_names(&linked.project.files));

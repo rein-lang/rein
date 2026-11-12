@@ -58,9 +58,15 @@ pub fn build_project(docs: &Docs, root: &Path) -> Project {
         (Project::find_root(&path) == root).then(|| (path, text.clone()))
     }));
     let mut project = Project::from_sources(root.to_path_buf(), by_path.into_iter().collect());
-    // Scopes resolve from the project root, as `rein check` run there does. The server's own directory is unrelated.
-    let visible = crate::scopes::discover_from(root);
-    project.link_programs(&move |name| crate::scopes::find_in(&visible, name).map(|f| (f.root, f.entry)));
+    // The scopes are searched only when a `@program` reference names a program. Scopes resolve from the project root,
+    // as `rein check` run there does. The server's own directory is unrelated.
+    if !project.program_refs().is_empty() {
+        let visible = crate::scopes::discover_from(root);
+        // Open buffers of other programs replace their files on disk, as they do in this project.
+        let open: Vec<(PathBuf, String)> =
+            docs.iter().filter_map(|(uri, text)| Some((doc_path(uri)?, text.clone()))).collect();
+        project.link_programs_with(&move |name| crate::scopes::find_in(&visible, name), &open);
+    }
     project
 }
 
