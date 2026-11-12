@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rein debug</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: #fff; color: #111; }
+  header { padding: 8px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 8px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; }
+  main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 45px); }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  aside { border-right: 1px solid #ddd; padding: 12px 16px; overflow-y: auto; }
+  h2 { font-size: 12px; text-transform: uppercase; color: #666; margin: 16px 0 6px; }
+  .control { margin: 0 0 12px; }
+  .control label { display: block; font-weight: 600; }
+  .control small { display: block; color: #666; }
+  .control.set label::after { content: " (set)"; color: #16a34a; font-weight: 400; }
+  .control.focus { outline: 2px solid #d97706; outline-offset: 4px; }
+  input[type=text], select { width: 100%; font: inherit; padding: 4px 6px; }
+  button { font: inherit; margin: 2px 4px 2px 0; }
+  button[aria-pressed=true] { background: #16a34a; color: #fff; border-color: #16a34a; }
+  #step { padding: 12px 16px; border-bottom: 1px solid #ddd; }
+  #step .kind { font-weight: 700; text-transform: uppercase; font-size: 12px; }
+  #step.done { background: #dcfce7; }
+  #step.question, #step.request { background: #fef3c7; }
+  #step.error { background: #fee2e2; }
+  #step pre { white-space: pre-wrap; font: inherit; margin: 4px 0; }
+  .trace { color: #666; }
+  .legend { padding: 0 16px; }
+  .legend span { margin-right: 12px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border: 2px solid; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+  .legend .taken { background: #dcfce7; border-color: #16a34a; }
+  .legend .current { background: #fde68a; border-color: #d97706; }
+  .legend .dimmed { border-color: #999; opacity: 0.4; }
+  #diagram { padding: 12px 16px; overflow: auto; }
+  #diagram .question-node { cursor: pointer; }
+</style>
+</head>
+<body>
+<header><h1>rein debug <code id="entry"></code></h1><button id="back" type="button">Back</button><button id="reset" type="button">Reset</button></header>
+<main>
+<aside id="controls" aria-label="Inputs and answers"></aside>
+<section>
+<div id="step" aria-live="polite"></div>
+<p class="legend"><span><i class="taken"></i>taken</span><span><i class="current"></i>current</span><span><i class="dimmed"></i>not taken</span></p>
+<div id="diagram"></div>
+</section>
+</main>
+<script type="module">
+import mermaid from "__MERMAID__";
+mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+const initial = __INITIAL__;
+const state = { entry: initial.entry, inputs: { ...initial.inputs }, answers: { ...initial.answers }, order: Object.keys(initial.answers) };
+let schema = { inputs: [], answers: [] };
+let renders = 0;
+let pending = 0;
+const $ = (id) => document.getElementById(id);
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  e.append(...kids);
+  return e;
+}
+
+// An empty value unsets the key.
+function setAnswer(key, value) {
+  state.order = state.order.filter((k) => k !== key);
+  if (!value) delete state.answers[key];
+  else { state.answers[key] = value; state.order.push(key); }
+  walk();
+}
+
+function setInput(name, value) {
+  if (!value) delete state.inputs[name];
+  else state.inputs[name] = value;
+  walk();
+}
+
+// One control per key: yes/no buttons, a list of the options, or a text box.
+function control(item, value, onChange) {
+  const id = "c-" + item.key;
+  let field;
+  if (item.type === "boolean") {
+    field = el("span", {}, ...["yes", "no"].map((v) =>
+      el("button", { type: "button", "aria-pressed": String(value === v), onclick: () => onChange(value === v ? "" : v) }, v)));
+  } else if (item.type === "union") {
+    field = el("select", { id, onchange: (e) => onChange(e.target.value) },
+      el("option", { value: "" }, "(unset)"), ...item.options.map((o) => el("option", { value: o }, o)));
+    field.value = value ?? "";
+  } else {
+    const placeholder = item.fields ? "{" + item.fields.map((f) => `"${f}": ...`).join(", ") + "}" : "(unset)";
+    field = el("input", { id, type: "text", placeholder, onchange: (e) => onChange(e.target.value.trim()) });
+    field.value = value ?? "";
+  }
+  const kind = item.type === "string" || item.type === "struct" ? ` (${item.type})` : "";
+  return el("div", { class: "control" + (value ? " set" : ""), "data-key": item.key },
+    el("label", { for: id }, item.key), el("small", {}, item.description + kind), field);
+}
+
+function drawControls() {
+  const box = $("controls");
+  box.replaceChildren();
+  if (schema.inputs.length) box.append(el("h2", {}, "Inputs"));
+  for (const i of schema.inputs) {
+    const item = { key: i.name, type: "string", description: i.description };
+    box.append(control(item, state.inputs[i.name], (v) => setInput(i.name, v)));
+  }
+  box.append(el("h2", {}, "Answers"));
+  for (const a of schema.answers) box.append(control(a, state.answers[a.key], (v) => setAnswer(a.key, v)));
+}
+
+function focusKey(key) {
+  const c = document.querySelector(`.control[data-key="${CSS.escape(key)}"]`);
+  if (!c) return;
+  document.querySelectorAll(".control.focus").forEach((e) => e.classList.remove("focus"));
+  c.classList.add("focus");
+  c.scrollIntoView({ block: "center" });
+  c.querySelector("select, input, button")?.focus();
+}
+
+// Buttons or a text box that answer the current question or request.
+function answerBox(item) {
+  if (item.type === "boolean") return el("div", {}, ...["yes", "no"].map((v) => el("button", { type: "button", onclick: () => setAnswer(item.key, v) }, v)));
+  if (item.type === "union") return el("div", {}, ...item.options.map((o) => el("button", { type: "button", onclick: () => setAnswer(item.key, o) }, o)));
+  const input = el("input", { type: "text", "aria-label": item.key, placeholder: item.key });
+  return el("form", { onsubmit: (e) => { e.preventDefault(); setAnswer(item.key, input.value.trim()); } }, input, el("button", {}, "Answer"));
+}
+
+// The current step: the question, the request, the final instruction, or the error.
+function drawStep(step) {
+  const box = $("step");
+  box.className = step.kind;
+  const parts = [el("div", { class: "kind" }, step.kind + (step.key ? " " + step.key : ""))];
+  const known = schema.answers.find((a) => a.key === step.key);
+  if (step.kind === "question") {
+    parts.push(el("pre", {}, step.description), answerBox(known || { key: step.key, type: step.type, options: step.options }));
+  } else if (step.kind === "request") {
+    const r = step.response;
+    parts.push(el("pre", {}, step.instruction), el("div", {}, "Then answer: " + r.description),
+      answerBox(known || { key: step.key, type: r.type, options: r.options }));
+  } else if (step.kind === "done") {
+    parts.push(el("pre", {}, step.instruction));
+  } else {
+    parts.push(el("pre", {}, step.message), ...(step.diagnostics || []).map((d) => el("div", {}, `${d.file}:${d.line}:${d.column}: ${d.message}`)));
+  }
+  if (step.trace && step.trace.length) parts.push(el("div", { class: "trace" }, "trace: " + step.trace.join(" -> ")));
+  box.replaceChildren(...parts);
+}
+
+async function drawDiagram(text, keys) {
+  const { svg } = await mermaid.render("flow" + renders++, text);
+  const box = $("diagram");
+  box.innerHTML = svg;
+  for (const g of box.querySelectorAll("g.node")) {
+    const m = g.id.match(/^flowchart-(.+)-\d+$/);
+    const key = m && keys[m[1]];
+    if (key) { g.classList.add("question-node"); g.addEventListener("click", () => focusKey(key)); }
+  }
+}
+
+async function walk() {
+  const ticket = ++pending;
+  const body = JSON.stringify({ entry: state.entry, inputs: state.inputs, answers: state.answers });
+  const out = await (await fetch("/walk", { method: "POST", headers: { "Content-Type": "application/json" }, body })).json();
+  if (ticket !== pending) return;
+  drawControls();
+  drawStep(out.step);
+  await drawDiagram(out.mermaid, out.keys);
+  document.body.dataset.renders = String(renders);
+}
+
+$("back").addEventListener("click", () => { const key = state.order.at(-1); if (key) setAnswer(key, ""); });
+$("reset").addEventListener("click", () => { state.inputs = { ...initial.inputs }; state.answers = {}; state.order = []; walk(); });
+$("entry").textContent = state.entry;
+schema = await (await fetch("/schema")).json();
+walk();
+</script>
+</body>
+</html>
