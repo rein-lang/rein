@@ -44,6 +44,7 @@ pub fn refresh(connection: &Connection, docs: &Docs, published: &mut BTreeSet<Ur
             .project_diagnostics()
             .iter()
             .chain(project.manifest_diagnostics())
+            .chain(project.lock_diagnostics())
             .map(|d| to_lsp("", d))
             .collect();
         if !extra.is_empty() {

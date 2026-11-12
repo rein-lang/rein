@@ -45,6 +45,8 @@ pub struct Project {
     pub max_line_length: u64,
     /// Errors in `rein.json`. They apply to every file of the project.
     manifest_diagnostics: Vec<Diagnostic>,
+    /// Findings about `rein.lock`. Filled by [`Project::link_programs`], because they need the called programs.
+    lock_diagnostics: Vec<Diagnostic>,
 }
 
 /// The `rein.json` field that sets the line limit of a function.
@@ -126,7 +128,7 @@ impl Project {
         }
         let (max_function_lines, max_line_length, manifest_diagnostics) = read_limits(&root);
         let mut project =
-            Self { root, files, programs: BTreeMap::new(), max_function_lines, max_line_length, manifest_diagnostics };
+            Self { root, files, programs: BTreeMap::new(), max_function_lines, max_line_length, manifest_diagnostics, lock_diagnostics: Vec::new() };
         project.bind_structs();
         project
     }
@@ -209,6 +211,7 @@ impl Project {
             });
             self.programs.insert(name, loaded);
         }
+        self.lock_diagnostics = crate::lock::diagnostics(self);
     }
 
     /// The function to run after a hand-off from `from` to `target`. A target in another program is already
@@ -231,6 +234,11 @@ impl Project {
     /// Errors in `rein.json`, such as a `maxFunctionLines` or a `maxLineLength` that is not a positive integer.
     pub fn manifest_diagnostics(&self) -> &[Diagnostic] {
         &self.manifest_diagnostics
+    }
+
+    /// Findings about `rein.lock`: a changed called program is an error, a missing lock a warning.
+    pub fn lock_diagnostics(&self) -> &[Diagnostic] {
+        &self.lock_diagnostics
     }
 
     /// The entry file, `main.rein` in the root. Project errors point here.

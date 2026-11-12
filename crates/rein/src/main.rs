@@ -5,6 +5,7 @@ mod graph;
 mod hook;
 mod live_run;
 mod list;
+mod lock;
 mod lsp;
 mod mcp;
 mod packages;
@@ -135,6 +136,15 @@ enum Command {
         /// Program name (see `rein list`).
         name: String,
     },
+    /// Pin the programs this program hands off to: writes `rein.lock` with the content hash of each.
+    Lock {
+        /// Program to lock: a `.rein` file, or a name (see `rein list`). Default: the project around the current directory.
+        #[arg(conflicts_with = "root")]
+        program: Option<String>,
+        /// Project root. Default: the nearest directory with main.rein.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Serve the agent interface. Holds live runs in memory.
     Serve {
         /// Speak MCP on stdio. The only transport today.
@@ -195,6 +205,7 @@ fn main() -> ExitCode {
         Command::Graph { program, root, refs, format, output } => graph::run(program, root, refs, format, output.as_deref()),
         Command::List { args } => list::run(&args),
         Command::Show { name } => programs::show(&name),
+        Command::Lock { program, root } => lock::run(program, root),
         Command::Serve { mcp: true } => mcp::serve(),
         Command::Serve { mcp: false } => {
             eprintln!("error: only `rein serve --mcp` is supported");
