@@ -86,11 +86,36 @@ fn page_has_the_controls_and_the_pinned_mermaid() {
 }
 
 #[test]
+fn page_keeps_the_state_in_the_url_and_has_a_copy_button() {
+    let html = page(&first(&[]));
+    let parts = [
+        "history.replaceState",
+        "URLSearchParams",
+        "location.search",
+        "id=\"copy\"",
+        "Copy link",
+        "navigator.clipboard",
+    ];
+    for part in parts {
+        assert!(html.contains(part), "{part}");
+    }
+}
+
+#[test]
+fn start_url_carries_the_starting_state_as_its_query() {
+    let url = start_url(&first(&[("main.draft", "no")]), 4000);
+    assert_eq!(url, "http://127.0.0.1:4000/?entry=main&in.pr=https%3A%2F%2Fx%2Fpr%2F1&a.main.draft=no");
+    let bare = start_url(&first(&[("main.draft", "")]), 4000);
+    assert_eq!(bare, "http://127.0.0.1:4000/?entry=main&in.pr=https%3A%2F%2Fx%2Fpr%2F1");
+}
+
+#[test]
 fn routes_and_the_host_check() {
     let server = Server { project: pr_handling(), first: first(&[]), port: 4000 };
     assert_eq!(server.respond("GET", "/nope", "").0, "404 Not Found");
     assert_eq!(server.respond("GET", "/schema", "").1, "application/json");
     assert_eq!(server.respond("GET", "/", "").1, "text/html");
+    assert_eq!(server.respond("GET", "/?entry=main&a.main.draft=no", "").1, "text/html");
     assert!(server.local_host("127.0.0.1:4000") && server.local_host("localhost:4000"));
     assert!(!server.local_host("evil.example:4000"));
 }
