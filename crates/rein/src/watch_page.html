@@ -4,10 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rein watch</title>
+<link rel="icon" href="data:,">
 <style>
-:root { --bg: #f6f7f9; --fg: #1d2330; --muted: #5b6474; --card: #ffffff; --line: #d9dee7; --accent: #2f6fde; --ok: #1d7a3a; --wait: #9a6700; --stop: #7a5a5a; }
+:root { --bg: #f6f7f9; --fg: #1d2330; --muted: #5b6474; --card: #ffffff; --line: #d9dee7; --accent: #2f6fde; --ok: #1d7a3a; --wait: #9a6700; --stop: #7a5a5a; --err: #b42318; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --bg: #15171c; --fg: #e6e9ef; --muted: #9aa3b2; --card: #1e2229; --line: #353c48; --accent: #7aa7ff; --ok: #6cc98a; --wait: #e0b050; --stop: #b49a9a; }
+  :root:not([data-theme="light"]) { --bg: #15171c; --fg: #e6e9ef; --muted: #9aa3b2; --card: #1e2229; --line: #353c48; --accent: #7aa7ff; --ok: #6cc98a; --wait: #e0b050; --stop: #b49a9a; --err: #ff8a80; }
 }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
 main { max-width: 960px; margin: 0 auto; padding: 16px; }
@@ -28,6 +29,7 @@ p { margin: 6px 0; }
 .badge.waiting { color: var(--wait); }
 .badge.done { color: var(--ok); }
 .badge.stopped { color: var(--stop); }
+.badge.error, .error { color: var(--err); }
 .step { font-weight: 600; overflow-wrap: anywhere; }
 .fn { border-left: 3px solid var(--line); padding-left: 8px; margin-top: 8px; }
 .fn.reached { border-color: var(--accent); }
@@ -88,6 +90,7 @@ function runView(run) {
   const head = el("div", "run-head");
   head.append(el("strong", null, run.program || "(no program)"), el("span", "badge " + run.status, run.status));
   box.append(head, el("p", "meta", "run " + run.run + " · entry " + (run.entry || "-")), stepView(run.step));
+  if (run.error) box.append(el("p", "error", "Error: " + run.error));
   if (run.trace.length) box.append(el("p", "meta", "Path: " + run.trace.join(" → ")));
   for (const f of run.functions) box.append(functionView(run, f));
   return box;
@@ -97,6 +100,9 @@ function agentView(a) {
   const card = el("article", a.alive ? "agent" : "agent ended");
   const title = a.transport + (a.pid ? " · pid " + a.pid : "");
   card.append(el("h2", null, title), row("cwd", a.cwd), row("session", a.session), row("state", a.alive ? "alive" : "ended"));
+  for (const e of a.errors || []) {
+    card.append(el("p", "error", "Start failed" + (e.program ? " (" + e.program + ")" : "") + ": " + e.message));
+  }
   if (!a.runs.length) card.append(el("p", "meta", "No runs."));
   for (const r of a.runs) card.append(runView(r));
   return card;

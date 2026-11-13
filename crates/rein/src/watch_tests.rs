@@ -127,14 +127,15 @@ fn stateless_step_calls_extend_a_run_or_start_a_new_one() {
     let a = agent_named(&agents(&dir, 1003 + 60_000), "step-s1");
     let runs = a["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 2, "{a}");
-    assert_eq!(runs[0]["events"].as_array().unwrap().len(), 2);
+    // Runs are newest first: the call that did not extend is runs[0].
+    assert_eq!(runs[1]["events"].as_array().unwrap().len(), 2);
     assert_eq!(
-        runs[0]["functions"][0]["answers"],
+        runs[1]["functions"][0]["answers"],
         json!({"draft": "no", "task": "merge"})
     );
-    assert_eq!(runs[0]["inputs"], json!({"pr": "https://x/pr/1"}));
-    assert_eq!(runs[0]["step"]["key"], "merge.ci");
-    assert_eq!(runs[1]["events"].as_array().unwrap().len(), 1);
+    assert_eq!(runs[1]["inputs"], json!({"pr": "https://x/pr/1"}));
+    assert_eq!(runs[1]["step"]["key"], "merge.ci");
+    assert_eq!(runs[0]["events"].as_array().unwrap().len(), 1);
     assert_eq!(a["alive"], true);
     assert_eq!(
         agent_named(&agents(&dir, 1003 + 11 * 60_000), "step-s1")["alive"],
@@ -183,4 +184,69 @@ fn host_check_gives_403_and_the_routes_answer() {
     assert_eq!((status, kind), ("200 OK", "text/html"));
     assert!(page.contains("rein watch"));
     assert_eq!(respond(&dir, "GET", "/nope").0, "404 Not Found");
+}
+
+#[test]
+fn error_only_run_and_a_failed_start_show_their_message() {
+    let dir = folder("errors");
+    let message = "missing input `pr`; give it with --input pr=<value>";
+    let error = json!({"kind": "error", "version": 1, "message": message, "key": null, "diagnostics": [], "answers": {}, "trace": ["main"]});
+    write(
+        &dir,
+        "step-s2.jsonl",
+        &[
+            json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null, "cwd": "/w", "session": "s2"}),
+            json!({"ts": 1001, "event": "step", "program": null, "request": {"entry": "main", "answers": {}}, "step": error}),
+        ],
+    );
+    write(
+        &dir,
+        "mcp-5-1000.jsonl",
+        &[
+            json!({"ts": 1000, "event": "agent", "transport": "mcp", "pid": pid_self(), "cwd": "/w", "session": null}),
+            json!({"ts": 1001, "event": "start", "run": null, "program": "x", "entry": "main", "step": {"kind": "error", "version": 1, "message": "no such program", "answers": {}, "trace": []}}),
+        ],
+    );
+    let list = agents(&dir, 2000);
+    let step_run = &agent_named(&list, "step-s2")["runs"][0];
+    assert_eq!(step_run["status"], "error");
+    assert_eq!(step_run["error"], message);
+    assert!(step_run["step"].is_null());
+    let mcp = agent_named(&list, "mcp-5-1000");
+    assert_eq!(mcp["runs"], json!([]));
+    assert_eq!(
+        mcp["errors"],
+        json!([{"ts": 1001, "program": "x", "message": "no such program"}])
+    );
+}
+
+#[test]
+fn runs_and_agents_are_newest_first() {
+    let dir = folder("order");
+    let call = |ts: u64, answers: Value| json!({"ts": ts, "event": "step", "program": null, "request": {"entry": "main", "answers": answers}, "step": question("main.task", &["main"])});
+    write(
+        &dir,
+        "step-old.jsonl",
+        &[
+            json!({"ts": 100, "event": "agent", "transport": "step", "pid": null, "cwd": "/a", "session": "old"}),
+            call(101, json!({"main.draft": "no"})),
+        ],
+    );
+    write(
+        &dir,
+        "step-new.jsonl",
+        &[
+            json!({"ts": 200, "event": "agent", "transport": "step", "pid": null, "cwd": "/b", "session": "new"}),
+            call(201, json!({"main.draft": "no"})),
+            call(300, json!({"main.draft": "yes"})),
+        ],
+    );
+    let list = agents(&dir, 400);
+    assert_eq!(list[0]["id"], "step-new");
+    assert_eq!(list[1]["id"], "step-old");
+    let runs = list[0]["runs"].as_array().unwrap();
+    assert_eq!(
+        (runs[0]["last_ts"].clone(), runs[1]["last_ts"].clone()),
+        (json!(300), json!(201))
+    );
 }

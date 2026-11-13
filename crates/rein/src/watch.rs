@@ -18,6 +18,9 @@ use crate::{cli, graph as graph_cmd, http};
 /// A step-file agent with no event for this long has ended.
 const STEP_IDLE_MS: u64 = 10 * 60 * 1000;
 
+/// How many errors of an agent the page keeps.
+const MAX_ERRORS: usize = 5;
+
 /// The functions of each program already loaded in one poll. None when the program does not load.
 type Programs = HashMap<String, Option<Vec<String>>>;
 
@@ -121,11 +124,19 @@ fn agent(path: &Path, now: u64, programs: &mut Programs) -> Option<Value> {
     } else {
         pid.is_some_and(process_alive)
     };
-    let runs = if step { step_runs(&lines) } else { event_runs(&lines) };
+    let mut runs = if step { step_runs(&lines) } else { event_runs(&lines) };
+    runs.sort_by_key(|r| std::cmp::Reverse(r.last_ts));
     let runs: Vec<Value> = runs.iter().map(|r| r.to_json(programs)).collect();
+    // A start with no run id made no run. Its error is kept here, the last few.
+    let errors: Vec<Value> = lines
+        .iter()
+        .filter(|v| v["event"] == "start" && v["run"].is_null() && v["step"]["kind"] == "error")
+        .map(|v| json!({"ts": ts_of(v), "program": v["program"], "message": v["step"]["message"]}))
+        .collect();
+    let errors = errors[errors.len().saturating_sub(MAX_ERRORS)..].to_vec();
     Some(json!({
         "id": id, "transport": transport, "pid": pid, "cwd": header["cwd"], "session": header["session"],
-        "alive": alive, "last_ts": last_ts, "runs": runs,
+        "alive": alive, "last_ts": last_ts, "runs": runs, "errors": errors,
     }))
 }
 
@@ -153,6 +164,8 @@ struct Run {
     last_ts: u64,
     /// The last step that is not an error, or null. An error leaves the run where it was.
     step: Value,
+    /// The message of the last error step, or none.
+    error: Option<String>,
     stopped: bool,
     answers: Map<String, Value>,
     inputs: Value,
@@ -168,6 +181,7 @@ impl Run {
             started_ts: ts,
             last_ts: ts,
             step: Value::Null,
+            error: None,
             stopped: false,
             answers: Map::new(),
             inputs: json!({}),
@@ -176,16 +190,24 @@ impl Run {
     }
 
     fn see_step(&mut self, step: &Value) {
-        if step.is_object() && step["kind"] != "error" {
+        if !step.is_object() {
+            return;
+        }
+        if step["kind"] == "error" {
+            self.error = step["message"].as_str().map(str::to_string);
+        } else {
             self.step = step.clone();
         }
     }
 
+    /// `error` when no step has been good yet and the last step was an error.
     fn status(&self) -> &'static str {
         if self.stopped {
             "stopped"
         } else if self.step["kind"] == "done" {
             "done"
+        } else if self.step.is_null() && self.error.is_some() {
+            "error"
         } else {
             "waiting"
         }
@@ -195,8 +217,9 @@ impl Run {
         let trace = self.step["trace"].as_array().cloned().unwrap_or_default();
         json!({
             "run": self.id, "program": self.program, "entry": self.entry, "status": self.status(),
-            "started_ts": self.started_ts, "last_ts": self.last_ts, "step": self.step, "trace": trace,
-            "inputs": self.inputs, "functions": self.functions(programs, &trace), "events": self.events,
+            "started_ts": self.started_ts, "last_ts": self.last_ts, "step": self.step, "error": self.error,
+            "trace": trace, "inputs": self.inputs, "functions": self.functions(programs, &trace),
+            "events": self.events,
         })
     }
 
