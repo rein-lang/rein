@@ -86,6 +86,7 @@ rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin
 rein graph support-ticket               # its decision flow as Mermaid (--format dot|json, -o graph.svg)
 rein serve --mcp                        # the MCP host for agents (see docs/interface.md)
+rein watch                              # a page of the agents that use rein now
 ```
 
 To install, update, or remove a program, see [Install a program](docs/install-programs.md).

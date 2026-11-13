@@ -115,7 +115,8 @@ fn agent(path: &Path, now: u64, programs: &mut Programs) -> Option<Value> {
     let alive = if step {
         now.saturating_sub(last_ts) < STEP_IDLE_MS
     } else {
-        pid.is_some_and(process_alive)
+        // ponytail: pid 0 would signal this process group, so it never counts as alive.
+        pid.is_some_and(|p| p > 0 && process_alive(p))
     };
     let mut runs = if step { step_runs(&lines) } else { event_runs(&lines) };
     runs.sort_by_key(|r| std::cmp::Reverse(r.last_ts));
