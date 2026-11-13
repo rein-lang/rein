@@ -266,12 +266,16 @@ fn runs_and_agents_are_newest_first() {
 #[test]
 fn a_folder_program_shows_the_folder_name_from_the_agent_cwd() {
     let dir = folder("folder-program");
+    // The program folder has a main.rein, so it is the program the run used.
+    let program = dir.join("rein-dependabot-handler");
+    fs::create_dir_all(&program).unwrap();
+    fs::write(program.join("main.rein"), "export default function main() {\n  return `done`;\n}\n").unwrap();
     write(
         &dir,
         "step-f1.jsonl",
         &[
             json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null,
-                "cwd": "/x/rein-dependabot-handler", "session": "f1"}),
+                "cwd": program.to_str().unwrap(), "session": "f1"}),
             json!({"ts": 1001, "event": "step", "program": ".",
                 "request": {"entry": "main", "answers": {}}, "step": question("main.task", &["main"])}),
         ],
@@ -312,7 +316,37 @@ fn a_program_that_does_not_load_has_no_mermaid() {
     let dir = folder("no-mermaid");
     folder_program_log(&dir, "/no/such/folder", &[("main", 1001)]);
     let a = agent_named(&agents(&dir, 1001), "step-g1");
-    assert!(a["runs"][0]["mermaid"].is_null(), "{a}");
+    assert!(a["runs"][0].get("mermaid").is_some_and(Value::is_null), "{a}");
+    assert!(a["runs"][0].get("mermaid_full").is_some_and(Value::is_null), "{a}");
+}
+
+#[test]
+fn a_dotted_program_with_no_main_rein_loads_nothing() {
+    let dir = folder("dotted-no-main");
+    let empty = dir.join("empty-tree");
+    fs::create_dir_all(&empty).unwrap();
+    folder_program_log(&dir, empty.to_str().unwrap(), &[("main", 1001)]);
+    let a = agent_named(&agents(&dir, 1001), "step-g1");
+    // No folder is named, so the program keeps its written name and nothing is loaded.
+    assert_eq!(a["runs"][0]["program"], ".", "{a}");
+    assert!(a["runs"][0].get("mermaid").is_some_and(Value::is_null), "{a}");
+}
+
+#[test]
+fn a_non_string_log_field_is_null_and_does_not_break_the_list() {
+    let dir = folder("non-string");
+    write(
+        &dir,
+        "step-n1.jsonl",
+        &[
+            json!({"ts": 1000, "event": "agent", "transport": "step", "pid": "x", "cwd": 5, "session": {"a": 1}}),
+            json!({"ts": 1001, "event": "step", "program": 7,
+                "request": {"entry": "main", "answers": {}}, "step": question("main.task", &["main"])}),
+        ],
+    );
+    let a = agent_named(&agents(&dir, 1001), "step-n1");
+    assert!(a["cwd"].is_null() && a["session"].is_null() && a["pid"].is_null(), "{a}");
+    assert!(a["runs"][0]["program"].is_null(), "{a}");
 }
 
 #[test]

@@ -135,7 +135,8 @@ fn agent(path: &Path, now: u64, programs: &mut Programs) -> Option<Value> {
         .collect();
     let errors = errors[errors.len().saturating_sub(MAX_ERRORS)..].to_vec();
     Some(json!({
-        "id": id, "transport": transport, "pid": pid, "cwd": header["cwd"], "session": header["session"],
+        "id": id, "transport": transport, "pid": pid, "cwd": string_or_null(&header["cwd"]),
+        "session": string_or_null(&header["session"]),
         "alive": alive, "last_ts": last_ts, "runs": runs, "errors": errors,
     }))
 }
@@ -149,6 +150,11 @@ fn process_alive(pid: u64) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// The value when it is a string, else null. The log is written by other processes, so a field may hold anything.
+fn string_or_null(v: &Value) -> Value {
+    v.as_str().map_or(Value::Null, |s| json!(s))
 }
 
 fn ts_of(v: &Value) -> u64 {
@@ -213,20 +219,21 @@ impl Run {
         }
     }
 
-    /// The run as JSON. `graph` builds the Mermaid walk of the run; only the newest run of an agent gets one.
-    fn to_json(&self, programs: &mut Programs, cwd: &str, graph: bool) -> Value {
+    /// The run as JSON. Only the newest run of an agent (`newest`) loads its program: it gets the graph and the
+    /// changed-program check. Older runs list their functions from the trace and the answers.
+    fn to_json(&self, programs: &mut Programs, cwd: &str, newest: bool) -> Value {
         let trace = self.step["trace"].as_array().cloned().unwrap_or_default();
         let folder = self.program.as_str().and_then(|p| program_of::resolve_folder(p, cwd));
         let program = folder
             .as_ref()
             .and_then(|f| f.file_name())
-            .map_or_else(|| self.program.clone(), |n| json!(n.to_string_lossy()));
+            .map_or_else(|| string_or_null(&self.program), |n| json!(n.to_string_lossy()));
         let name = self.program.as_str().unwrap_or_default();
-        let loaded = program_of::program(programs, folder.as_deref(), name);
+        let loaded = if newest { program_of::program(programs, folder.as_deref(), name) } else { None };
         let names: Vec<String> = trace.iter().filter_map(Value::as_str).map(str::to_string).collect();
         // A program changed since the run gives no graph, rather than a wrong one.
         let changed = loaded.as_deref().is_some_and(|l| !program_of::matches_run(l, &names, &self.answers));
-        let (mermaid, mermaid_full) = match (&loaded, graph) {
+        let (mermaid, mermaid_full) = match (&loaded, newest) {
             (Some(l), true) if !changed => {
                 let (path, full) = program_of::walk_mermaid(l, &self.step, self.entry.as_str().unwrap_or_default(), &names);
                 (Some(path), Some(full))

@@ -12,6 +12,7 @@ let last = [];
 const openState = new Map();
 const graphs = new Map();
 let mermaidPromise = null;
+let renderSeq = 0;
 let renders = 0;
 
 function el(tag, cls, text) {
@@ -62,7 +63,7 @@ function pills(run) {
 function graphFor(key, run) {
   let g = graphs.get(key);
   if (!g) {
-    g = { wrap: el("div", "graph-wrap"), box: el("div", "graph"), mode: "path", drawn: null, want: null, token: 0, scrollLeft: 0, scrollTop: 0, centered: false, texts: {} };
+    g = { wrap: el("div", "graph-wrap"), box: el("div", "graph"), mode: "path", drawn: null, want: null, token: 0, saved: null, texts: {} };
     const modes = el("div", "modes");
     modes.setAttribute("role", "group");
     modes.setAttribute("aria-label", "Graph");
@@ -73,7 +74,6 @@ function graphFor(key, run) {
       button.addEventListener("click", () => {
         g.mode = mode;
         for (const [m, b] of Object.entries(buttons)) b.setAttribute("aria-pressed", String(m === mode));
-        g.centered = false;
         if (!ensure(g)) {
           sizeSvg(g);
           centerCurrent(g);
@@ -81,14 +81,11 @@ function graphFor(key, run) {
       });
     }
     modes.append(buttons.path, buttons.full);
-    g.box.addEventListener("scroll", () => {
-      g.scrollLeft = g.box.scrollLeft;
-      g.scrollTop = g.box.scrollTop;
-    });
     g.wrap.append(modes, g.box);
     graphs.set(key, g);
   }
   g.texts = { path: run.mermaid, full: run.mermaid_full };
+  g.seen = renderSeq;
   ensure(g);
   return g.wrap;
 }
@@ -121,16 +118,13 @@ function sizeSvg(g) {
   svg.style.width = natural && vb.width ? vb.width + "px" : "100%";
 }
 
-// Puts the current node in the middle of the box, so it shows without a scroll.
+// Puts the current node in the middle of the box. Called after each draw of the graph, never on a plain poll.
 function centerCurrent(g) {
   const node = g.box.querySelector("g.node.current");
-  if (!node || g.centered) return;
-  g.centered = true;
+  if (!node) return;
   const r = node.getBoundingClientRect(), b = g.box.getBoundingClientRect();
   g.box.scrollLeft += r.left + r.width / 2 - (b.left + g.box.clientWidth / 2);
   g.box.scrollTop += r.top + r.height / 2 - (b.top + g.box.clientHeight / 2);
-  g.scrollLeft = g.box.scrollLeft;
-  g.scrollTop = g.box.scrollTop;
 }
 
 function loadMermaid() {
@@ -179,7 +173,7 @@ function runView(agent, run, newest) {
   if (run.step && run.step.kind === "question") {
     const d = details(key + "|question", "Question text", "text");
     d.append(el("p", null, run.step.description || "(no text)"));
-    if (run.step.options) d.append(defs([["options", run.step.options.join(" | ")]]));
+    if (Array.isArray(run.step.options)) d.append(defs([["options", run.step.options.map(short).join(" | ")]]));
     box.append(d);
   } else if (run.step && run.step.kind) {
     const d = details(key + "|instruction", "Instruction", "text");
@@ -210,7 +204,7 @@ function runView(agent, run, newest) {
 }
 
 function agentView(a) {
-  const title = a.cwd ? a.cwd.split("/").filter(Boolean).pop() : "";
+  const title = typeof a.cwd === "string" ? a.cwd.split("/").filter(Boolean).pop() : "";
   const card = el("article", a.alive ? "agent" : "agent ended");
   const head = el("div", "agent-head");
   head.append(
@@ -248,16 +242,31 @@ function summary(list, shown) {
 }
 
 // Keeps the focus on the same summary after a poll rebuilds the page.
+// One card per agent. A card that cannot be built shows a short line, and the other cards still render.
+function safeAgentView(a) {
+  try {
+    return agentView(a);
+  } catch (e) {
+    return el("article", "agent", "Cannot show this agent.");
+  }
+}
+
 function render(list) {
   const shown = list.filter((a) => endedBox.checked || a.alive);
   const focused = document.activeElement && document.activeElement.dataset.focusKey;
-  const cards = shown.map(agentView);
+  // Moving a box into a new card resets its scroll. The position is read before the cards are built, and put back
+  // after, so a poll keeps the reader's place.
+  for (const g of graphs.values()) g.saved = g.box.isConnected ? [g.box.scrollLeft, g.box.scrollTop] : null;
+  const seq = ++renderSeq;
+  const cards = shown.map(safeAgentView);
   if (!cards.length) cards.push(el("p", "empty", "No agents use rein right now."));
   agentsBox.replaceChildren(...cards);
   summaryBox.replaceChildren(...summary(list, shown));
-  for (const g of graphs.values()) if (g.box.isConnected) { g.box.scrollLeft = g.scrollLeft; g.box.scrollTop = g.scrollTop; }
+  for (const g of graphs.values()) if (g.saved && g.box.isConnected) [g.box.scrollLeft, g.box.scrollTop] = g.saved;
+  // Graphs of runs that are no longer the newest run of a shown agent are dropped.
   const ids = new Set(list.map((a) => a.id));
-  for (const key of [...openState.keys(), ...graphs.keys()]) if (!ids.has(key.split("|")[0])) { openState.delete(key); graphs.delete(key); }
+  for (const [key, g] of graphs) if (g.seen !== seq) graphs.delete(key);
+  for (const key of openState.keys()) if (!ids.has(key.split("|")[0])) openState.delete(key);
   if (focused) agentsBox.querySelector('[data-focus-key="' + CSS.escape(focused) + '"]')?.focus({ preventScroll: true });
 }
 

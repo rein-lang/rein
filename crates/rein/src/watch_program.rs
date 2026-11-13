@@ -30,9 +30,9 @@ pub fn resolve_folder(program: &str, cwd: &str) -> Option<PathBuf> {
         return None;
     }
     let joined = if absolute { PathBuf::from(program) } else { Path::new(cwd).join(program) };
-    let dotted = program == "." || program == ".." || program.starts_with("./") || program.starts_with("../");
-    let folder = dotted || ((absolute || program.contains('/')) && joined.join("main.rein").is_file());
-    if !folder {
+    // A folder needs a main.rein in it, so a path to a tree with no program is never walked.
+    let pathlike = absolute || program.contains('/') || program.starts_with('.');
+    if !pathlike || !joined.join("main.rein").is_file() {
         return None;
     }
     let mut out = PathBuf::new();
@@ -52,7 +52,9 @@ pub fn resolve_folder(program: &str, cwd: &str) -> Option<PathBuf> {
 /// load.
 pub fn program(programs: &mut Programs, folder: Option<&Path>, name: &str) -> Option<Rc<Loaded>> {
     let key = folder.map_or_else(|| name.to_string(), |f| f.display().to_string());
-    if key.is_empty() {
+    // A path that names no folder with a program, and no .rein file, is not a flow name: it is never loaded as one.
+    let unloadable_path = folder.is_none() && (name.starts_with('.') || name.starts_with('/')) && !Path::new(name).is_file();
+    if key.is_empty() || unloadable_path {
         return None;
     }
     programs
@@ -103,10 +105,8 @@ pub fn walk_mermaid(loaded: &Loaded, step: &Value, entry: &str, trace: &[String]
         None => graph::flow(&loaded.project, entry),
     };
     let full = graph::mermaid(&g);
-    if trace.is_empty() {
-        return (full.clone(), full);
-    }
-    let mut on_path = trace.to_vec();
+    // With no trace yet, the path is the entry function alone.
+    let mut on_path = if trace.is_empty() { vec![entry.to_string()] } else { trace.to_vec() };
     if let Some(current) = &g.current {
         if let Some(n) = g.nodes.iter().find(|n| n.id == current.node) {
             if !on_path.contains(&n.function) {
