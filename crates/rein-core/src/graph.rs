@@ -1,14 +1,14 @@
 //! The program graph behind `rein graph`: the decision flow of every function, or only the references.
 //! Node ids and order come from the function names and the source order, so the output is stable.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::Serialize;
 
 use crate::ast::{Awaited, Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
 use crate::eval;
 use crate::project::{Project, SourceFile};
-use crate::step::{key_parts, Answers, StepResponse};
+use crate::step::{inputs_of, owners, Answers, StepResponse, CALL};
 
 /// Version of the JSON schema. Bump it when a field changes meaning or goes away.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -133,7 +133,18 @@ pub fn walk<'a>(project: &'a Project, entry: &str, response: &'a StepResponse) -
         StepResponse::Error { .. } => return flow(project, entry),
     };
     let mut b = Builder::new(project, entry, "flow");
-    b.walk = Some((answers, trace.iter().map(String::as_str).collect()));
+    // The graph draws functions, not calls. A function that the walk visits in several calls is drawn with the
+    // answers of its first call, in the order `rein step` walks: `main.a>fn` before `main.b>fn`.
+    // The walk is stepped again to learn the call of each hop. When it does not give the response's trace, as for
+    // a logged run of a program that changed since, each function on the trace is read through its plain keys.
+    let plain = |o: &str| o.rsplit_once(CALL).map_or(o, |(_, f)| f).to_string();
+    let stepped = owners(project, entry, answers);
+    let walked = if stepped.iter().map(|o| plain(o)).eq(trace.iter().cloned()) { stepped } else { trace.clone() };
+    let mut first: HashMap<String, String> = HashMap::new();
+    for owner in walked {
+        first.entry(plain(&owner)).or_insert(owner);
+    }
+    b.walk = Some((answers, first));
     b.flow();
     let mut path: Vec<String> = Vec::new();
     for id in trace.iter().filter_map(|f| b.paths.remove(f)).flatten() {
@@ -178,8 +189,8 @@ struct Builder<'a> {
     function: &'a str,
     fid: usize,
     step: usize,
-    /// The answers and the trace of a walk, when there is one.
-    walk: Option<(&'a Answers, HashSet<&'a str>)>,
+    /// The answers of a walk, when there is one, and the owner of the first call of each function it walks.
+    walk: Option<(&'a Answers, HashMap<String, String>)>,
     /// The answers of the function being drawn, for the walk.
     vars: HashMap<String, String>,
     /// The nodes the walk took, per function, in walk order.
@@ -209,17 +220,12 @@ impl<'a> Builder<'a> {
             self.function = name;
             self.fid = i;
             self.step = 0;
-            let answers = self.walk.as_ref().filter(|(_, trace)| trace.contains(name.as_str())).map(|(a, _)| *a);
-            if let Some(answers) = answers {
-                // ponytail: one drawing per function, so the answers of all its calls merge; the last key wins.
-                let given = answers
-                    .iter()
-                    .filter_map(|(k, v)| key_parts(k).filter(|(f, _)| f == name).map(|(_, n)| (n.to_string(), v.clone())))
-                    .collect();
-                self.vars = eval::with_struct_fields(&sf.function, &given);
+            let walked = self.walk.as_ref().and_then(|(a, first)| first.get(name.as_str()).map(|o| (*a, o.clone())));
+            if let Some((answers, owner)) = &walked {
+                self.vars = eval::with_struct_fields(&sf.function, &inputs_of(owner, answers));
                 self.paths.entry(name.to_string()).or_default().push(id.clone());
             }
-            self.block(&sf.function, &sf.function.body, (id, None), answers.is_some());
+            self.block(&sf.function, &sf.function.body, (id, None), walked.is_some());
         }
     }
 

@@ -880,3 +880,22 @@ fn a_key_with_a_call_scope_that_is_not_an_answer_is_unknown() {
     assert_eq!(key.as_deref(), Some("main.nope>find.ready"));
     assert!(message.contains("unknown key"), "{message}");
 }
+
+#[test]
+fn a_prefixed_key_for_a_call_the_walk_never_makes_is_unknown() {
+    let p = project(&[
+        ("main.rein", "/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: boolean = await @./fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "/** Fn. */\nexport default async function fn() {\n  /** Inner? */\n  const ok: boolean = await @./leaf;\n\n  return `Fn ends.`;\n}\n"),
+        ("leaf.rein", "/** Leaf. */\nexport default function leaf(\n  /** Leaf ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Leaf ok.`;\n  }\n\n  return `Leaf not ok.`;\n}\n"),
+    ]);
+    for key in ["main.a>leaf.ok", "main.a>fn.ok>fn.ok", "leaf.ok>leaf.ok"] {
+        let r = step(&p, &req("main", &[(key, "yes")]));
+        let StepResponse::Error { key: k, message, .. } = r else { panic!("{key}: {r:?}") };
+        assert_eq!(k.as_deref(), Some(key));
+        assert!(message.contains("unknown key"), "{message}");
+    }
+    let r = step(&p, &req("main", &[("main.a>fn.ok>leaf.ok", "yes")]));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "main.a>fn.ok");
+    assert!(instruction.starts_with("Leaf ok."), "{instruction}");
+}

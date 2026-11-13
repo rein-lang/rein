@@ -279,8 +279,11 @@ impl Run {
                         .answers
                         .iter()
                         .filter_map(|(k, v)| {
-                            let (f, n) = rein_core::step::key_parts(k)?;
-                            (f == name.as_str()).then(|| (n.to_string(), v.clone()))
+                            // An answer inside a call names its call, such as `ok (main.b)`, so two calls stay apart.
+                            let (owner, n) = k.rsplit_once('.')?;
+                            let (scope, f) = owner.rsplit_once(rein_core::step::CALL).unwrap_or(("", owner));
+                            let n = if scope.is_empty() { n.to_string() } else { format!("{n} ({scope})") };
+                            (f == name.as_str()).then(|| (n, v.clone()))
                         })
                         .collect();
                     json!({"name": name, "visited": trace.contains(&name.as_str()), "answers": answers})

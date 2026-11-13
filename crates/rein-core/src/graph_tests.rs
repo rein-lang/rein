@@ -162,3 +162,43 @@ fn await_is_a_request_node_with_a_call_edge_and_the_flow_goes_on() {
     assert!(mermaid(&g).contains(&format!("{} ==>", node.id)), "{}", mermaid(&g));
     assert!(dot(&g).contains("style=bold"), "{}", dot(&g));
 }
+
+#[test]
+fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
+    let p = project(&[
+        ("main.rein", "/** Found. */\ninterface Found {\n  /** Any? */\n  any: boolean;\n}\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: Found = await @./fn(subject=`first`);\n\n  /** Second? */\n  const b: Found = await @./fn(subject=`second`);\n\n  if (a.any) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "/** Fn. */\nexport default async function fn(\n  /** The subject. */\n  subject: string,\n) {\n  /** Inner? */\n  const ok: boolean = await @./leaf;\n\n  return `Fn ${subject} ends.`;\n}\n"),
+        ("leaf.rein", "/** Leaf. */\nexport default function leaf(\n  /** Leaf ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Leaf ok.`;\n  }\n\n  return `Leaf not ok.`;\n}\n"),
+    ]);
+    // The text `rein step` gives, and the label of the node the graph marks current.
+    let walk_of = |pairs: &[(&str, &str)]| {
+        let mut req = crate::step::StepRequest {
+            version: crate::step::PROTOCOL_VERSION,
+            entry: "main".into(),
+            answers: Default::default(),
+            flow: None,
+            inputs: Default::default(),
+        };
+        for (k, v) in pairs {
+            req.answers.insert(k.to_string(), v.to_string());
+        }
+        let response = crate::step::step(&p, &req);
+        let StepResponse::Request { instruction, .. } = &response else { panic!("{response:?}") };
+        let text = instruction.lines().next().unwrap_or_default().to_string();
+        let g = walk(&p, "main", &response);
+        let current = g.current.expect("current").node;
+        (text, g.nodes.iter().find(|n| n.id == current).unwrap().label.clone())
+    };
+    // The walk is the call `main.a`. The answer of `main.b` sorts last, but the walk does not reach it.
+    let (text, label) = walk_of(&[("main.a>fn.ok>leaf.ok", "yes"), ("main.b>fn.ok>leaf.ok", "no")]);
+    assert_eq!((text.as_str(), label.as_str()), ("Leaf ok.", "Leaf ok."));
+    // The review's answers: `main.a` is answered, so the walk is the call `main.b`.
+    let review = [
+        ("main.a>fn.ok>leaf.ok", "yes"),
+        ("main.b>fn.ok>leaf.ok", "no"),
+        ("main.a>fn.ok", "true"),
+        ("main.a", r#"{"any": true}"#),
+    ];
+    let (text, label) = walk_of(&review);
+    assert_eq!((text.as_str(), label.as_str()), ("Leaf not ok.", "Leaf not ok."));
+}

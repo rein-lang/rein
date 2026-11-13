@@ -8,11 +8,11 @@
 //! JSON-RPC server sends a [`StepRequest`] and returns a [`StepResponse`] unchanged. A loaded
 //! [`Project`] is `Send + Sync`, so a daemon can load it once and step many requests.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{Function, Input, InputType, Struct};
+use crate::ast::{walk_stmts, Awaited, Binding, Function, Input, InputType, ReturnValue, Stmt, Struct};
 use crate::diagnostic::{line_col, Severity};
 use crate::eval::{self, Outcome};
 use crate::project::{Project, ENTRY};
@@ -156,6 +156,24 @@ pub struct StepDiagnostic {
 
 /// Steps the flow from `req.entry` as far as the answers allow.
 pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
+    run(project, req, &mut Vec::new())
+}
+
+/// The owner of each function a step walks, in walk order, as [`scoped`] gives it: `main`, then `main.b>fn`.
+/// `rein graph` reads a function's answers through the first of its owners. A `string` input of `entry` is walked
+/// as `<name>`: no condition reads an input, so the walk is the same as with the real inputs.
+pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<String> {
+    let inputs = project.get(entry).map_or_else(BTreeMap::new, |sf| {
+        sf.function.text_inputs().map(|i| (i.name.value.clone(), format!("<{}>", i.name.value))).collect()
+    });
+    let req = StepRequest { version: PROTOCOL_VERSION, entry: entry.to_string(), answers: answers.clone(), flow: None, inputs };
+    let mut owners = Vec::new();
+    run(project, &req, &mut owners);
+    owners
+}
+
+/// [`step`], pushing the owner of each function it walks to `owners`.
+fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepResponse {
     let answers = req.answers.clone();
     if req.version != PROTOCOL_VERSION {
         return invalid_request(format!(
@@ -214,6 +232,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
         };
         // The owner of this visit's answer keys: `fn`, or `main.b>fn` inside the call `main.b`.
         let owner = scoped(&scope, &current);
+        owners.push(owner.clone());
         let mut inputs = inputs_of(&owner, &req.answers);
         inputs.extend(strings.iter().map(|(k, v)| (k.clone(), v.clone())));
         let outcome = match eval::run(&sf.function, &inputs, &project.bindings(&current)) {
@@ -446,13 +465,76 @@ fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, St
 /// inside a call, such as `main.b>fn.ok`, names `fn.ok`, and each part before a `>` must name a `const` answer.
 fn declared<'a>(project: &'a Project, key: &str) -> Option<(&'a Function, &'a Input)> {
     let (owner, name) = key.rsplit_once('.')?;
-    let mut parts: Vec<&str> = owner.split(CALL).collect();
-    let function = parts.pop()?;
-    if parts.iter().any(|call| declared(project, call).is_none()) {
-        return None;
-    }
-    let f = &project.get(function)?.function;
+    let f = &project.get(owner_function(project, owner)?)?.function;
     f.input(name).or_else(|| f.response(name)).map(|i| (f, i))
+}
+
+/// The function that `owner` names, such as `fn` for `main.a>fn`, when each call in it is one a walk can make:
+/// each part before a `>` is `<function>.<const>`, an `await` whose target reaches the next part's function
+/// through hand-offs. `None` for any other owner, so its keys are unknown.
+fn owner_function<'a>(project: &Project, owner: &'a str) -> Option<&'a str> {
+    let mut reach: Option<BTreeSet<String>> = None;
+    let mut parts = owner.split(CALL).peekable();
+    while let Some(part) = parts.next() {
+        let last = parts.peek().is_none();
+        let function = if last { part } else { part.rsplit_once('.')?.0 };
+        if reach.as_ref().is_some_and(|r| !r.contains(function)) {
+            return None;
+        }
+        if last {
+            return Some(function);
+        }
+        reach = Some(call_reach(project, function, part.rsplit_once('.')?.1)?);
+    }
+    None
+}
+
+/// The functions a walk can be in during the call `<function>.<name>`: the target of that `await`, and each
+/// function the target reaches through hand-offs. `None` when `name` is not an `await` of a function.
+fn call_reach(project: &Project, function: &str, name: &str) -> Option<BTreeSet<String>> {
+    let f = &project.get(function)?.function;
+    let mut target = None;
+    walk_stmts(&f.body, &mut |s| {
+        if let Stmt::Request { response, awaited: Awaited::Call(value), .. } = s {
+            if response.name.value == name {
+                target = target.or(ref_key(value));
+            }
+        }
+    });
+    let mut queue = vec![follow(project, function, target?)?];
+    let mut seen = BTreeSet::new();
+    while let Some(g) = queue.pop() {
+        if !seen.insert(g.clone()) {
+            continue;
+        }
+        let Some(sf) = project.get(&g) else { continue };
+        walk_stmts(&sf.function.body, &mut |s| {
+            if let Stmt::Return(r) = s {
+                if let Some(next) = ref_key(&r.value).and_then(|k| follow(project, &g, k)) {
+                    queue.push(next);
+                }
+            }
+        });
+    }
+    Some(seen)
+}
+
+/// The reference key a returned or awaited value names, such as `./x` or `program/fn`. `None` for text.
+fn ref_key(v: &ReturnValue) -> Option<&str> {
+    match v {
+        ReturnValue::Ref(r) => Some(&r.value),
+        ReturnValue::Call(c) => Some(c.callee.key()),
+        ReturnValue::Text(_) | ReturnValue::Template(_) => None,
+    }
+}
+
+/// The function that the reference `key`, written in `from`, runs, named as the walk names it. `None` for a
+/// template or a reference that does not resolve.
+fn follow(project: &Project, from: &str, key: &str) -> Option<String> {
+    match project.bindings(from).get(key)? {
+        Binding::Function(path) => Some(project.qualify(from, path)),
+        _ => None,
+    }
 }
 
 /// Separates the caller's answer key from the callee in the key of a call with return: `main.b>fn.ok`.

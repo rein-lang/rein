@@ -157,7 +157,7 @@ Anyone can build and share a program, so two authors can pick the same name. The
 - The answer has the doc and type rules of a `request` answer, and the call has the argument rules of a hand-off. Why: no new rules to learn.
 - A template cannot be awaited. Why: it gives text, not a run. Put the text in `request(...)` instead.
 - `rein graph` draws an `await` as a request node with a `call` edge to the callee. Why: the flow goes on from the answer, unlike a hand-off, which ends the function.
-- Each call has its own answer keys: the caller's answer key, `>`, then the callee's key, such as `main.b>fn.ok`. Why: with one key per function, two calls of `fn` shared their answers, and a recursive call reused the outer level's answers and could never end. The prefix names the call site, so a key stays readable and stable across steps. A hand-off that is not awaited keeps its old key, so no existing program changes.
+- Each call has its own answer keys: the caller's answer key, `>`, then the callee's key, such as `main.b>fn.ok`. Why: with one key per function, two calls of `fn` shared their answers, and a recursive call reused the outer level's answers and could never end. The prefix names the call site, so a key stays readable and stable across steps. A hand-off adds no prefix of its own: outside any call it keeps its old key, so no existing program changes, and inside a call it keeps the call's prefix.
 
 ## Planned (not built)
 

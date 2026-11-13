@@ -113,7 +113,8 @@ enum Command {
         root: Option<PathBuf>,
     },
     /// Print the program graph: functions, questions, branches, outcomes, and hand-offs. With answers, mark the
-    /// path the flow takes.
+    /// path the flow takes. The graph shows functions, not calls: a function called several times with `await` is
+    /// marked with the answers of its first call.
     Graph {
         #[command(flatten)]
         args: graph::GraphArgs,
@@ -124,6 +125,8 @@ enum Command {
         args: debug::DebugArgs,
     },
     /// Show the agents that use rein now: their programs, answers and the step each run waits on, in a browser page.
+    /// The flow graph shows functions, not calls: a function called several times with `await` is marked with the
+    /// answers of its first call.
     Watch {
         #[command(flatten)]
         args: watch::WatchArgs,
