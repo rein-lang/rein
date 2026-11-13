@@ -263,7 +263,7 @@ impl Run {
             let answered = self
                 .answers
                 .keys()
-                .filter_map(|k| k.rsplit_once('.').map(|(f, _)| f.to_string()));
+                .filter_map(|k| rein_core::step::key_parts(k).map(|(f, _)| f.to_string()));
             for name in seen.chain(answered) {
                 if !names.contains(&name) {
                     names.push(name);
@@ -279,7 +279,7 @@ impl Run {
                         .answers
                         .iter()
                         .filter_map(|(k, v)| {
-                            let (f, n) = k.rsplit_once('.')?;
+                            let (f, n) = rein_core::step::key_parts(k)?;
                             (f == name.as_str()).then(|| (n.to_string(), v.clone()))
                         })
                         .collect();

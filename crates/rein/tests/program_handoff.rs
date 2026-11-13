@@ -208,7 +208,7 @@ fn await_of_a_program_follows_the_dependency_rule_and_returns_its_result() {
     let out = rein(&home, &["check", handler.to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 
-    let draft = "@pr-handling/main.draft=false";
+    let draft = "main.handled>@pr-handling/main.draft=false";
     let out = rein(&home, &["step", "handler", "--input", "pr=u/1", "--answer", draft, "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!((v["kind"].as_str(), v["key"].as_str()), (Some("request"), Some("main.handled")), "{v}");

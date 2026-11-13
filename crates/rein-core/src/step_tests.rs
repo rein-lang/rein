@@ -734,10 +734,10 @@ fn await_walks_the_callee_then_asks_the_caller_for_its_answer() {
     let p = await_project();
     let r = step(&p, &req("main", &[]));
     let StepResponse::Question { key, trace: t, .. } = r else { panic!("{r:?}") };
-    assert_eq!(key, "find.ready");
+    assert_eq!(key, "main.found>find.ready");
     assert_eq!(t, trace(&["main", "find"]));
 
-    let r = step(&p, &req("main", &[("find.ready", "yes")]));
+    let r = step(&p, &req("main", &[("main.found>find.ready", "yes")]));
     let StepResponse::Request { key, function, instruction, response, trace: t, .. } = r else { panic!("{r:?}") };
     assert_eq!(key, "main.found");
     assert_eq!(function, "main");
@@ -746,7 +746,7 @@ fn await_walks_the_callee_then_asks_the_caller_for_its_answer() {
     assert_eq!(t, trace(&["main", "find"]));
 
     let found = r#"{"repos": "a/b", "none": false}"#;
-    let r = step(&p, &req("main", &[("find.ready", "yes"), ("main.found", found)]));
+    let r = step(&p, &req("main", &[("main.found>find.ready", "yes"), ("main.found", found)]));
     let StepResponse::Done { instruction, trace: t, .. } = r else { panic!("{r:?}") };
     assert_eq!(instruction, "Work on a/b.");
     assert_eq!(t, trace(&["main"]));
@@ -755,7 +755,7 @@ fn await_walks_the_callee_then_asks_the_caller_for_its_answer() {
 #[test]
 fn a_hand_off_inside_the_callee_ends_in_the_caller_request() {
     let p = await_project();
-    let r = step(&p, &req("main", &[("find.ready", "no")]));
+    let r = step(&p, &req("main", &[("main.found>find.ready", "no")]));
     let StepResponse::Request { key, instruction, trace: t, .. } = r else { panic!("{r:?}") };
     assert_eq!(key, "main.found");
     assert_eq!(instruction, "Build the list, then list the projects.\n\nThen answer `main.found` with the result.");
@@ -782,16 +782,16 @@ fn an_await_inside_the_callee_asks_the_inner_caller_first() {
     ]);
     let r = step(&p, &req("main", &[]));
     let StepResponse::Request { key, instruction, trace: t, .. } = r else { panic!("{r:?}") };
-    assert_eq!(key, "outer.ready");
-    assert_eq!(instruction, "Check it.\n\nThen answer `outer.ready` with the result.");
+    assert_eq!(key, "main.done>outer.ready");
+    assert_eq!(instruction, "Check it.\n\nThen answer `main.done>outer.ready` with the result.");
     assert_eq!(t, trace(&["main", "outer", "outer/inner"]));
 
-    let r = step(&p, &req("main", &[("outer.ready", "yes")]));
+    let r = step(&p, &req("main", &[("main.done>outer.ready", "yes")]));
     let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
     assert_eq!(key, "main.done");
     assert_eq!(instruction, "Ship it.\n\nThen answer `main.done` with the result.");
 
-    let r = step(&p, &req("main", &[("outer.ready", "yes"), ("main.done", "no")]));
+    let r = step(&p, &req("main", &[("main.done>outer.ready", "yes"), ("main.done", "no")]));
     let StepResponse::Done { instruction, .. } = r else { panic!("{r:?}") };
     assert_eq!(instruction, "Keep it open.");
 }
@@ -803,15 +803,80 @@ fn await_of_another_program_walks_it_with_its_own_keys() {
     let pr = [("pr", "u/1")];
     let r = step(&p, &req_with("main", &[], &pr));
     let StepResponse::Question { key, .. } = r else { panic!("{r:?}") };
-    assert_eq!(key, "@pr-handling/main.draft");
+    assert_eq!(key, "main.merged>@pr-handling/main.draft");
 
-    let r = step(&p, &req_with("main", &[("@pr-handling/main.draft", "yes")], &pr));
+    let r = step(&p, &req_with("main", &[("main.merged>@pr-handling/main.draft", "yes")], &pr));
     let StepResponse::Request { key, instruction, trace: t, .. } = r else { panic!("{r:?}") };
     assert_eq!(key, "main.merged");
     assert_eq!(instruction, "Skip u/1.\n\nThen answer `main.merged` with the result.");
     assert_eq!(t, trace(&["main", "@pr-handling/main"]));
 
-    let r = step(&p, &req_with("main", &[("@pr-handling/main.draft", "yes"), ("main.merged", "no")], &pr));
+    let r = step(&p, &req_with("main", &[("main.merged>@pr-handling/main.draft", "yes"), ("main.merged", "no")], &pr));
     let StepResponse::Done { instruction, .. } = r else { panic!("{r:?}") };
     assert_eq!(instruction, "Report u/1 as open.");
+}
+
+#[test]
+fn each_await_of_the_same_function_gets_its_own_answers() {
+    let p = project(&[
+        ("main.rein", "/** Found. */\ninterface Found {\n  /** Any? */\n  any: boolean;\n}\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: Found = await @./fn(subject=`first`);\n\n  /** Second? */\n  const b: Found = await @./fn(subject=`second`);\n\n  if (a.any) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "/** Fn. */\nexport default async function fn(\n  /** The subject. */\n  subject: string,\n) {\n  /** Inner? */\n  const ok: boolean = await request(`Check ${subject}.`);\n\n  return `Fn ${subject} ends.`;\n}\n"),
+    ]);
+    let r = step(&p, &req("main", &[]));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!((key.as_str(), instruction.as_str()), ("main.a>fn.ok", "Check first."));
+
+    let given = [("main.a>fn.ok", "true"), ("main.a", r#"{"any": true}"#)];
+    let r = step(&p, &req("main", &given));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!((key.as_str(), instruction.as_str()), ("main.b>fn.ok", "Check second."));
+
+    let given = [("main.a>fn.ok", "true"), ("main.a", r#"{"any": true}"#), ("main.b>fn.ok", "false")];
+    let r = step(&p, &req("main", &given));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "main.b");
+    assert_eq!(instruction, "Fn second ends.\n\nThen answer `main.b` with the result.");
+}
+
+#[test]
+fn a_recursive_await_asks_each_level_and_ends_when_the_answers_end_it() {
+    let p = project(&[(
+        "walk.rein",
+        "/** Next item. */\ninterface Next {\n  /** The next item. */\n  item: string;\n}\n\n/** Walk. */\nexport default async function walk(\n  /** The item. */\n  item: string,\n) {\n  /** Is this the last item? */\n  const last: boolean = await request(`Is ${item} the last item?`);\n\n  if (last) {\n    return `Walk ${item} ends.`;\n  }\n\n  /** Next item? */\n  const next: Next = await request(`Pick the item after ${item}.`);\n\n  /** Deeper? */\n  const deeper: boolean = await @./walk(item=next.item);\n\n  return `Walk ${item} returned.`;\n}\n",
+    )]);
+    let top = [("walk.last", "false"), ("walk.next", r#"{"item": "mid"}"#)];
+    let r = step(&p, &req_with("walk", &top, &[("item", "top")]));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!((key.as_str(), instruction.as_str()), ("walk.deeper>walk.last", "Is mid the last item?"));
+
+    let mut given = top.to_vec();
+    given.extend([("walk.deeper>walk.last", "false"), ("walk.deeper>walk.next", r#"{"item": "end"}"#)]);
+    let r = step(&p, &req_with("walk", &given, &[("item", "top")]));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!((key.as_str(), instruction.as_str()), ("walk.deeper>walk.deeper>walk.last", "Is end the last item?"));
+
+    given.push(("walk.deeper>walk.deeper>walk.last", "true"));
+    let r = step(&p, &req_with("walk", &given, &[("item", "top")]));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "walk.deeper>walk.deeper");
+    assert_eq!(instruction, "Walk end ends.\n\nThen answer `walk.deeper>walk.deeper` with the result.");
+
+    given.push(("walk.deeper>walk.deeper", "true"));
+    let r = step(&p, &req_with("walk", &given, &[("item", "top")]));
+    let StepResponse::Request { key, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "walk.deeper");
+
+    given.push(("walk.deeper", "true"));
+    let r = step(&p, &req_with("walk", &given, &[("item", "top")]));
+    let StepResponse::Done { instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(instruction, "Walk top returned.");
+}
+
+#[test]
+fn a_key_with_a_call_scope_that_is_not_an_answer_is_unknown() {
+    let p = await_project();
+    let r = step(&p, &req("main", &[("main.nope>find.ready", "yes")]));
+    let StepResponse::Error { key, message, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key.as_deref(), Some("main.nope>find.ready"));
+    assert!(message.contains("unknown key"), "{message}");
 }

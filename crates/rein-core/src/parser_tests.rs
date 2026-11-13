@@ -547,3 +547,9 @@ fn await_outside_a_const_answer_gives_the_fix() {
         assert!(msg.contains("const name: Type = await @program(...)"), "{body}: {msg}");
     }
 }
+
+#[test]
+fn a_doc_comment_before_a_bare_await_gives_the_await_hint() {
+    let msg = one_error("/** d */\nexport default async function f() {\n  /** Q? */\n  await @./x;\n  return `y`\n}");
+    assert!(msg.contains("const name: Type = await @program(...)"), "{msg}");
+}

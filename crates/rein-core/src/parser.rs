@@ -356,6 +356,9 @@ impl Parser {
             Tok::Else => Err(Diagnostic::error(self.span(), NO_ELSE)),
             Tok::Doc(_) => {
                 let doc = self.doc_block().ok_or_else(|| self.unexpected("statement"))?;
+                if matches!(self.peek(), Tok::Ident(w) if w == "await") {
+                    return Err(Diagnostic::error(self.span(), AWAIT_NEEDS_CONST));
+                }
                 if !matches!(self.peek(), Tok::Reserved(w) if w == "const") {
                     return Err(Diagnostic::error(doc.span, DOC_PLACES));
                 }

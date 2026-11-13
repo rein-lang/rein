@@ -196,8 +196,11 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     // The `string` values of the function being run. The entry gets them from the request; a hand-off
     // passes them on, bound to the target's `string` parameters by name.
     let mut strings: BTreeMap<String, String> = req.inputs.clone();
-    // The callers that wait in an `await`, innermost last: the function, and the answer the callee's text fills.
-    let mut callers: Vec<(String, String)> = Vec::new();
+    // The key prefix of the call being walked: empty at the top, else the caller's answer key, such as `main.b`.
+    let mut scope = String::new();
+    // The callers that wait in an `await`, innermost last: the function, its scope, and the answer the callee's
+    // text fills.
+    let mut callers: Vec<(String, String, String)> = Vec::new();
     for _ in 0..HOP_LIMIT {
         trace.push(current.clone());
         let Some(sf) = project.get(&current) else {
@@ -209,7 +212,9 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                 trace,
             );
         };
-        let mut inputs = inputs_of(&current, &req.answers);
+        // The owner of this visit's answer keys: `fn`, or `main.b>fn` inside the call `main.b`.
+        let owner = scoped(&scope, &current);
+        let mut inputs = inputs_of(&owner, &req.answers);
         inputs.extend(strings.iter().map(|(k, v)| (k.clone(), v.clone())));
         let outcome = match eval::run(&sf.function, &inputs, &project.bindings(&current)) {
             Ok(outcome) => outcome,
@@ -224,16 +229,20 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
             // A call with return: walk the callee as a hand-off, and remember who waits for its text.
             Outcome::Call { target, args, response } => match bind(project, &current, &target, args) {
                 Ok((target, bound)) => {
-                    callers.push((std::mem::replace(&mut current, target), response));
+                    // Each call gets its own keys, so a second call of `fn`, or a recursive call, asks again.
+                    let caller = std::mem::replace(&mut current, target);
+                    let caller_scope = std::mem::replace(&mut scope, format!("{owner}.{response}"));
+                    callers.push((caller, caller_scope, response));
                     strings = bound;
                 }
                 Err(message) => return failure(message, None, Vec::new(), answers, trace),
             },
             Outcome::Text(text) => {
                 // The callee of an `await` ended. Its text is a request whose answer is the caller's `const`.
-                if let Some((caller, response)) = callers.pop() {
-                    let instruction = format!("{text}\n\nThen answer `{caller}.{response}` with the result.");
-                    return request(project, &caller, &response, instruction, answers, trace);
+                if let Some((caller, caller_scope, response)) = callers.pop() {
+                    let caller_owner = scoped(&caller_scope, &caller);
+                    let instruction = format!("{text}\n\nThen answer `{caller_owner}.{response}` with the result.");
+                    return request(project, &caller, &caller_owner, &response, instruction, answers, trace);
                 }
                 let instruction = text;
                 return StepResponse::Done {
@@ -261,7 +270,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                 let (r#type, options) = type_of(input);
                 return StepResponse::Question {
                     version: PROTOCOL_VERSION,
-                    key: format!("{current}.{name}"),
+                    key: format!("{owner}.{name}"),
                     function: current.clone(),
                     name,
                     r#type,
@@ -272,7 +281,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                 };
             }
             Outcome::Request { instruction, response } => {
-                return request(project, &current, &response, instruction, answers, trace);
+                return request(project, &current, &owner, &response, instruction, answers, trace);
             }
         }
     }
@@ -306,10 +315,12 @@ fn bind(
     Ok((target, bound))
 }
 
-/// A request for the `const` answer `response` of `function`, after the agent does `instruction`.
+/// A request for the `const` answer `response` of `function`, after the agent does `instruction`. `owner` is the
+/// function with its call scope, as [`scoped`] gives it; the key is `<owner>.<response>`.
 fn request(
     project: &Project,
     function: &str,
+    owner: &str,
     response: &str,
     instruction: String,
     answers: Answers,
@@ -331,7 +342,7 @@ fn request(
     };
     StepResponse::Request {
         version: PROTOCOL_VERSION,
-        key: format!("{function}.{response}"),
+        key: format!("{owner}.{response}"),
         function: function.to_string(),
         instruction,
         response: spec,
@@ -431,11 +442,35 @@ fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, St
     Ok(())
 }
 
-/// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key.
+/// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key. A key
+/// inside a call, such as `main.b>fn.ok`, names `fn.ok`, and each part before a `>` must name a `const` answer.
 fn declared<'a>(project: &'a Project, key: &str) -> Option<(&'a Function, &'a Input)> {
-    let (function, name) = key.rsplit_once('.')?;
+    let (owner, name) = key.rsplit_once('.')?;
+    let mut parts: Vec<&str> = owner.split(CALL).collect();
+    let function = parts.pop()?;
+    if parts.iter().any(|call| declared(project, call).is_none()) {
+        return None;
+    }
     let f = &project.get(function)?.function;
     f.input(name).or_else(|| f.response(name)).map(|i| (f, i))
+}
+
+/// Separates the caller's answer key from the callee in the key of a call with return: `main.b>fn.ok`.
+pub const CALL: char = '>';
+
+/// `function` inside the call `scope`: `main.b>fn`, or `fn` at the top, where `scope` is empty.
+fn scoped(scope: &str, function: &str) -> String {
+    if scope.is_empty() {
+        function.to_string()
+    } else {
+        format!("{scope}{CALL}{function}")
+    }
+}
+
+/// The function and the name an answer key names, without its call scope: `main.b>fn.ok` gives `("fn", "ok")`.
+pub fn key_parts(key: &str) -> Option<(&str, &str)> {
+    let (owner, name) = key.rsplit_once('.')?;
+    Some((owner.rsplit_once(CALL).map_or(owner, |(_, f)| f), name))
 }
 
 /// The error for a `string` input that was not given.
