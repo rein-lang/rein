@@ -279,3 +279,38 @@ fn a_folder_program_shows_the_folder_name_from_the_agent_cwd() {
     let a = agent_named(&agents(&dir, 1001), "step-f1");
     assert_eq!(a["runs"][0]["program"], "rein-dependabot-handler", "{a}");
 }
+
+/// The step-file log of a folder program: one call per `(entry, ts)`, all with the program `.`.
+fn folder_program_log(dir: &Path, cwd: &str, calls: &[(&str, u64)]) {
+    let mut lines = vec![json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null,
+        "cwd": cwd, "session": "g1"})];
+    for (entry, ts) in calls {
+        lines.push(json!({"ts": ts, "event": "step", "program": ".",
+            "request": {"entry": entry, "answers": {}}, "step": question("main.task", &["main"])}));
+    }
+    write(dir, "step-g1.jsonl", &lines);
+}
+
+#[test]
+fn the_newest_run_of_a_loadable_program_has_its_walk_as_mermaid() {
+    let dir = folder("mermaid");
+    let example = format!("{}/../../examples/rein/merge-pr", env!("CARGO_MANIFEST_DIR"));
+    // The older run is not the newest, so it gets no graph. The newest one does.
+    folder_program_log(&dir, &example, &[("main", 1001), ("review", 1002)]);
+    let a = agent_named(&agents(&dir, 1002), "step-g1");
+    let runs = a["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{a}");
+    let mermaid = runs[0]["mermaid"].as_str().unwrap_or_default();
+    assert!(mermaid.starts_with("flowchart TD"), "{mermaid}");
+    assert!(mermaid.lines().any(|l| l.trim_start().starts_with("class ") && l.ends_with(" current")), "{mermaid}");
+    assert!(runs[1]["mermaid"].is_null(), "{a}");
+    assert_eq!(runs[0]["functions"].as_array().unwrap().len(), 5, "{a}");
+}
+
+#[test]
+fn a_program_that_does_not_load_has_no_mermaid() {
+    let dir = folder("no-mermaid");
+    folder_program_log(&dir, "/no/such/folder", &[("main", 1001)]);
+    let a = agent_named(&agents(&dir, 1001), "step-g1");
+    assert!(a["runs"][0]["mermaid"].is_null(), "{a}");
+}

@@ -15,6 +15,7 @@ mod programs;
 mod run_log;
 mod scopes;
 mod watch;
+mod watch_program;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
