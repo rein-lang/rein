@@ -40,6 +40,9 @@ pub struct Project {
     /// The programs named by `@program/function`, by name. Filled by [`Project::link_programs`]. A name that did
     /// not load holds the reason. Their functions are reached as `name:function`, such as `pr-handling:main`.
     pub programs: BTreeMap<String, Result<Linked, String>>,
+    /// The programs this package declares in its `package.json`, or `None` when it has none. A `@program` hand-off
+    /// resolves only when the program that writes it declares that program.
+    dependencies: Option<crate::dependencies::Dependencies>,
     /// Key = function name.
     pub files: BTreeMap<String, SourceFile>,
     /// The most lines a function may have: `maxFunctionLines` in `rein.json`, else the default.
@@ -176,10 +179,12 @@ impl Project {
         }
         let (max_function_lines, max_line_length, manifest_diagnostics) = read_limits(&root);
         let entry = read_entry(&root);
+        let dependencies = crate::dependencies::read(&root);
         let mut project = Self {
             root,
             files,
             programs: BTreeMap::new(),
+            dependencies,
             max_function_lines,
             max_line_length,
             manifest_diagnostics,
@@ -246,6 +251,17 @@ impl Project {
         }
     }
 
+    /// Why the program that holds function `from` may not hand off to the program `key` names, or `None` when it may.
+    /// `from` is a function of this project, or `@program/path` in a linked program. A program without a
+    /// `package.json` may hand off to any program.
+    fn undeclared(&self, from: &str, key: &str) -> Option<String> {
+        let owner = match from.strip_prefix('@').and_then(|f| f.split_once('/')) {
+            Some((program, _)) => &self.linked(program)?.project,
+            None => self,
+        };
+        owner.dependencies.as_ref()?.undeclared(key.split('/').next().unwrap_or(key))
+    }
+
     fn linked(&self, program: &str) -> Option<&Linked> {
         self.programs.get(program)?.as_ref().ok()
     }
@@ -299,7 +315,10 @@ impl Project {
                 match bindings.get(&key) {
                     Some(b) => queue.extend(bound_path(b).map(|t| self.qualify(&from, &t))),
                     None if is_program_key(&key) => {
-                        let reason = self.program_binding(&key).err().unwrap_or_default();
+                        let reason = self
+                            .undeclared(&from, &key)
+                            .or_else(|| self.program_binding(&key).err())
+                            .unwrap_or_default();
                         out.push(Diagnostic::error(Span::default(), format!("`{from}` hands off to `@{key}`: {reason}")));
                     }
                     None => {}
@@ -355,6 +374,9 @@ impl Project {
             // The programs a linked program names are linked here, at the top, so they resolve here.
             let program_keys = linked.project.files.get(path).map(|sf| keys(&sf.function)).unwrap_or_default();
             for key in program_keys.into_iter().filter(|k| is_program_key(k)) {
+                if self.undeclared(name, &key).is_some() {
+                    continue;
+                }
                 if let Ok(b) = self.program_binding(&key) {
                     out.insert(key, b);
                 }
@@ -372,6 +394,9 @@ impl Project {
     /// A std name (no `./` or `../`) is a std item. Anything else is a path relative to `from`.
     pub fn binding_for(&self, from: &str, key: &str) -> Result<Binding<'_>, String> {
         if is_program_key(key) {
+            if let Some(reason) = self.undeclared(from, key) {
+                return Err(reason);
+            }
             return self.program_binding(key);
         }
         if !(key.starts_with("./") || key.starts_with("../")) {
