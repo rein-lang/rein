@@ -53,6 +53,7 @@ impl Sandbox {
 
     fn command(&self, cwd: &Path, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_rein"));
+        cmd.env("REIN_RUNS_DIR", "");
         cmd.args(args)
             .current_dir(cwd)
             .env("HOME", &self.home)

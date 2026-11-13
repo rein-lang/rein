@@ -14,6 +14,7 @@ fn repo() -> PathBuf {
 
 fn rein(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(args)
         .current_dir(repo())
         .output()

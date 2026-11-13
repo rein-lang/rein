@@ -17,6 +17,7 @@ fn example() -> PathBuf {
 /// Runs `rein` with `args`, and `stdin` as its standard input when given.
 fn rein(args: &[&str], stdin: Option<&str>) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

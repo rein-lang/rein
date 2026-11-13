@@ -7,6 +7,7 @@ use std::process::{Command, Output, Stdio};
 
 fn rein(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(args)
         .env("REIN_HOME", home)
         .env("REIN_SYSTEM_DIRS", home.join("none"))
@@ -92,6 +93,7 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     // On stdin the answer is a real JSON object.
     let request = r#"{"entry":"main","answers":{"main.pick":{"pr":"https://x/pr/2","task":"review"},"@pr-handling/main.draft":"false"}}"#;
     let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(["step", "picker", "--stdin"])
         .env("REIN_HOME", &home)
         .env("REIN_SYSTEM_DIRS", home.join("none"))
