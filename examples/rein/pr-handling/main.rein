@@ -15,6 +15,7 @@ export default function main({ pr, draft, task }: Input) {
     return `Stop. The pull request ${pr} is a draft. Wait until the author
     marks it ready.`;
   }
+
   switch (task) {
     case "review":
       return @./review(pr=pr);

@@ -12,6 +12,7 @@ export default function main({ category, vip }: Ticket) {
   if (vip) {
     return @./escalate;
   }
+
   switch (category) {
     case "billing":
       return @./refund;

@@ -18,19 +18,11 @@ export default async function review(
       question=`This is my own pull request ${pr}. Who reviews it?`,
     );
   }
+
   if (security_sensitive) {
-    /** Did the security review find a problem that must be fixed? */
-    const security_problem: boolean = await request(
-      delegate(model=`use opus model`, task=`review the pull request ${pr}
-      with a security focus and list each problem with file and line`),
-    );
-    if (security_problem) {
-      return @./review/post_review(kind=`request changes`,
-        body=`each security problem, with its file and line`, pr=pr);
-    }
-    return @./review/post_review(kind=`approve`,
-      body=`the security checks you made`, pr=pr);
+    return @./review/security_review(pr=pr);
   }
+
   /** What is the result of the code review? */
   const verdict: "clean" | "small problems" | "blocking problems" =
     await request(

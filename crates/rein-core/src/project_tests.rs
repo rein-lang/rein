@@ -816,6 +816,15 @@ fn struct_files_are_checked_for_line_length() {
     assert!(project.check()["ticket.struct"].iter().any(|d| d.message.starts_with("line has 81 characters")));
 }
 
+#[test]
+fn a_missing_blank_line_around_an_if_is_a_warning_not_an_error() {
+    let text = "/** Long. */\nexport default function long(/** A? */ a: boolean) {\n  if (a) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
+    let project = project_of(&[("long", text)]);
+    let diags = &project.check()["long"];
+    assert!(has(diags, Severity::Warning, "add an empty line after the `if` block"), "{diags:?}");
+    assert!(!diags.iter().any(|d| d.severity == Severity::Error), "{diags:?}");
+}
+
 /// A function named `name` with a boolean question `a`: it returns `yes` when `a` holds, else `no`.
 fn branch(name: &str, yes: &str, no: &str) -> String {
     format!(

@@ -214,36 +214,10 @@ expression: text
       "id": "f4_3",
       "kind": "request",
       "function": "review",
-      "label": "request: delegate(model=`use opus model`, task=`review the pull request ${pr}\nwith a security focus and list each problem with file and line`)"
-    },
-    {
-      "id": "f4_4",
-      "kind": "question",
-      "function": "review",
-      "label": "Did the security review find a problem that must be fixed?\nsecurity_problem: boolean",
-      "name": "security_problem",
-      "type": "boolean"
-    },
-    {
-      "id": "f4_5",
-      "kind": "done",
-      "function": "review",
-      "label": "@./review/post_review(kind=`request changes`, body=`each security problem, with its file and line`, pr=pr)"
-    },
-    {
-      "id": "f4_6",
-      "kind": "done",
-      "function": "review",
-      "label": "@./review/post_review(kind=`approve`, body=`the security checks you made`, pr=pr)"
-    },
-    {
-      "id": "f4_7",
-      "kind": "request",
-      "function": "review",
       "label": "request: delegate(model=`use haiku model`, task=`review the pull request ${pr}\nand list each problem with file and line`)"
     },
     {
-      "id": "f4_8",
+      "id": "f4_4",
       "kind": "question",
       "function": "review",
       "label": "What is the result of the code review?\nverdict: \"clean\" | \"small problems\" | \"blocking problems\"",
@@ -251,19 +225,19 @@ expression: text
       "type": "\"clean\" | \"small problems\" | \"blocking problems\""
     },
     {
-      "id": "f4_9",
+      "id": "f4_5",
       "kind": "done",
       "function": "review",
       "label": "@./review/post_review(kind=`approve`, body=`one line on what you checked`, pr=pr)"
     },
     {
-      "id": "f4_10",
+      "id": "f4_6",
       "kind": "done",
       "function": "review",
       "label": "@./review/post_review(kind=`comment`, body=`each small problem, with its file and line`, pr=pr)"
     },
     {
-      "id": "f4_11",
+      "id": "f4_7",
       "kind": "done",
       "function": "review",
       "label": "@./review/post_review(kind=`request changes`, body=`each blocking problem, with its file and line`, pr=pr)"
@@ -279,6 +253,38 @@ expression: text
       "kind": "done",
       "function": "review/post_review",
       "label": "Post one review on the pull request ${pr}. Type: ${kind}. Body:\n${body}. Do not merge in this run."
+    },
+    {
+      "id": "f6",
+      "kind": "function",
+      "function": "review/security_review",
+      "label": "review/security_review(pr)"
+    },
+    {
+      "id": "f6_0",
+      "kind": "request",
+      "function": "review/security_review",
+      "label": "request: delegate(model=`use opus model`, task=`review the pull request ${pr}\nwith a security focus and list each problem with file and line`)"
+    },
+    {
+      "id": "f6_1",
+      "kind": "question",
+      "function": "review/security_review",
+      "label": "Did the security review find a problem that must be fixed?\nsecurity_problem: boolean",
+      "name": "security_problem",
+      "type": "boolean"
+    },
+    {
+      "id": "f6_2",
+      "kind": "done",
+      "function": "review/security_review",
+      "label": "@./post_review(kind=`request changes`, body=`each security problem, with its file and line`, pr=pr)"
+    },
+    {
+      "id": "f6_3",
+      "kind": "done",
+      "function": "review/security_review",
+      "label": "@./post_review(kind=`approve`, body=`the security checks you made`, pr=pr)"
     }
   ],
   "edges": [
@@ -511,9 +517,21 @@ expression: text
     },
     {
       "from": "f4_2",
+      "to": "f6",
+      "kind": "handoff",
+      "label": "yes",
+      "args": [
+        {
+          "name": "pr",
+          "value": "pr"
+        }
+      ]
+    },
+    {
+      "from": "f4_2",
       "to": "f4_3",
       "kind": "flow",
-      "label": "yes"
+      "label": "no"
     },
     {
       "from": "f4_3",
@@ -524,7 +542,7 @@ expression: text
       "from": "f4_4",
       "to": "f4_5",
       "kind": "flow",
-      "label": "yes"
+      "label": "clean"
     },
     {
       "from": "f4_5",
@@ -535,7 +553,7 @@ expression: text
       "from": "f4_4",
       "to": "f4_6",
       "kind": "flow",
-      "label": "no"
+      "label": "small problems"
     },
     {
       "from": "f4_6",
@@ -543,46 +561,13 @@ expression: text
       "kind": "template"
     },
     {
-      "from": "f4_2",
+      "from": "f4_4",
       "to": "f4_7",
-      "kind": "flow",
-      "label": "no"
-    },
-    {
-      "from": "f4_7",
-      "to": "f4_8",
-      "kind": "flow"
-    },
-    {
-      "from": "f4_8",
-      "to": "f4_9",
-      "kind": "flow",
-      "label": "clean"
-    },
-    {
-      "from": "f4_9",
-      "to": "f5",
-      "kind": "template"
-    },
-    {
-      "from": "f4_8",
-      "to": "f4_10",
-      "kind": "flow",
-      "label": "small problems"
-    },
-    {
-      "from": "f4_10",
-      "to": "f5",
-      "kind": "template"
-    },
-    {
-      "from": "f4_8",
-      "to": "f4_11",
       "kind": "flow",
       "label": "blocking problems"
     },
     {
-      "from": "f4_11",
+      "from": "f4_7",
       "to": "f5",
       "kind": "template"
     },
@@ -590,6 +575,38 @@ expression: text
       "from": "f5",
       "to": "f5_0",
       "kind": "flow"
+    },
+    {
+      "from": "f6",
+      "to": "f6_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f6_0",
+      "to": "f6_1",
+      "kind": "flow"
+    },
+    {
+      "from": "f6_1",
+      "to": "f6_2",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f6_2",
+      "to": "f5",
+      "kind": "template"
+    },
+    {
+      "from": "f6_1",
+      "to": "f6_3",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f6_3",
+      "to": "f5",
+      "kind": "template"
     }
   ]
 }

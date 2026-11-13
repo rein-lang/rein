@@ -22,6 +22,7 @@ export default function merge({ pr, ci, conflicts, review }: Input) {
       if (conflicts) {
         return `Rebase ${pr} on its base. Push. Then start this program again.`;
       }
+
       switch (review) {
         case "approved":
           return `Merge the pull request ${pr}. Then delete its branch.`;

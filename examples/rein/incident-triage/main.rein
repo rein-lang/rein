@@ -18,6 +18,7 @@ export default function main({
   if (customer_impact) {
     return @./page_human;
   }
+
   switch (severity) {
     case "sev1":
       return @./page_human;
@@ -26,6 +27,7 @@ export default function main({
       if (known_runbook) {
         return @./follow;
       }
+
       return @./open;
   }
 }

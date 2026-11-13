@@ -146,6 +146,51 @@ pub fn check_line_length(text: &str, max: u64) -> Vec<Diagnostic> {
     diags
 }
 
+/// Checks the blank lines around each `if` of a function. The line above an `if` is empty, unless the `if` is the
+/// first statement of its block. The line below an `if` block's closing `}` is empty, unless the next non-empty line
+/// is a `}` or the file ends. These are warnings, so a program with them still runs. `text` is the file's source.
+pub fn check_if_blank_lines(f: &Function, text: &str) -> Vec<Diagnostic> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out = Vec::new();
+    if_blank_lines_in(&f.body, &lines, text, &mut out);
+    out
+}
+
+fn if_blank_lines_in(stmts: &[Stmt], lines: &[&str], text: &str, out: &mut Vec<Diagnostic>) {
+    for (i, stmt) in stmts.iter().enumerate() {
+        match stmt {
+            Stmt::If { then, span, .. } => {
+                let (first, _) = line_col(text, span.start);
+                let (close, _) = line_col(text, span.end);
+                let blank_above = first == 0 || lines[first - 1].trim().is_empty();
+                if i > 0 && !blank_above {
+                    out.push(Diagnostic::warning(Span::new(span.start, span.start + "if".len()), "add an empty line before `if`"));
+                }
+                if !blank_below_block(lines, close) {
+                    out.push(Diagnostic::warning(Span::new(span.end - 1, span.end), "add an empty line after the `if` block"));
+                }
+                if_blank_lines_in(then, lines, text, out);
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    if_blank_lines_in(&case.body, lines, text, out);
+                }
+            }
+            Stmt::Request { .. } | Stmt::Return(_) => {}
+        }
+    }
+}
+
+/// True when the line after the closing `}` at line `close` is empty, or the next non-empty line is a `}`, or no
+/// non-empty line follows.
+fn blank_below_block(lines: &[&str], close: usize) -> bool {
+    let rest = &lines[close + 1..];
+    match rest.iter().find(|l| !l.trim().is_empty()) {
+        None => true,
+        Some(next) => rest[0].trim().is_empty() || next.trim_start().starts_with('}'),
+    }
+}
+
 /// Checks the length of one function file. The function's lines run from its `export default` line to its
 /// closing `}`, both included. Blank and comment lines count. The doc comment above it does not.
 /// `text` is the file's source, and `max` the limit. Longer than `max` is an error on the function header.

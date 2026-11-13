@@ -14,6 +14,7 @@ export default function mergePr({ docs_only, ci }: Input) {
   if (docs_only) {
     return `approved`;
   }
+
   switch (ci) {
     case "green":
       return @./merge_pr/review_code;
