@@ -153,7 +153,7 @@ Each rein process that steps a flow appends JSON Lines to a shared folder. `rein
 
 - The folder is `$REIN_RUNS_DIR`, else `$XDG_STATE_HOME/rein/runs`, else `~/.local/state/rein/runs`. Set `REIN_RUNS_DIR` to an empty string to turn logging off.
 - Each process appends to its own file. Lines are never rewritten.
-  - `mcp-<pid>-<start_ms>.jsonl`: `rein serve --mcp`. One file per server.
+  - `mcp-<pid>-<start_ms>.jsonl`: `rein serve --mcp`. One file per server, made at server start, so an idle server still shows.
   - `run-<pid>-<start_ms>.jsonl`: `rein run`. Its run id is `run-1`.
   - `step-<session>.jsonl`: `rein step`, one file per `CLAUDE_CODE_SESSION_ID`, or `nosession` when unset. The name keeps only `[A-Za-z0-9_-]`.
 - Each line is one JSON object with `ts` (unix milliseconds) and `event`. The first line of a file is `agent`. The events are:

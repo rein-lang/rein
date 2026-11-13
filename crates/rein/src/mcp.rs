@@ -60,10 +60,12 @@ fn unknown(run_id: &str) -> String {
 
 impl Host {
     fn new() -> Host {
+        let mut log = Log::process("mcp");
+        log.announce();
         Host {
             runs: Arc::default(),
             next: Arc::default(),
-            log: Arc::new(Mutex::new(Log::process("mcp"))),
+            log: Arc::new(Mutex::new(log)),
         }
     }
 

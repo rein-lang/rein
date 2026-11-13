@@ -211,3 +211,26 @@ fn rein_step_appends_one_step_line_per_call_and_one_header() {
     assert_eq!(log[2]["request"]["answers"]["main.category"], "how_to");
     fs::remove_dir_all(&base).unwrap();
 }
+
+#[test]
+fn serve_mcp_writes_its_header_at_start_even_with_no_run() {
+    let base = scratch("mcp");
+    let runs = base.join("runs");
+    let env = [
+        ("REIN_RUNS_DIR", runs.to_str().unwrap()),
+        ("CLAUDE_CODE_SESSION_ID", "sess-mcp"),
+    ];
+    // Closing stdin before `initialize` makes the server exit with an error. The header is written before that.
+    let (pid, _) = rein(&["serve", "--mcp"], Some(""), &env);
+
+    let file = only_file(&runs);
+    let name = file.file_name().unwrap().to_str().unwrap().to_string();
+    assert!(name.starts_with(&format!("mcp-{pid}-")), "{name}");
+    let log = lines(&file);
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!(log[0]["event"], "agent");
+    assert_eq!(log[0]["transport"], "mcp");
+    assert_eq!(log[0]["pid"], pid);
+    assert_eq!(log[0]["session"], "sess-mcp");
+    fs::remove_dir_all(&base).unwrap();
+}
