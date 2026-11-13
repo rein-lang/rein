@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -120,7 +120,8 @@ fn agent(path: &Path, now: u64, programs: &mut Programs) -> Option<Value> {
     };
     let mut runs = if step { step_runs(&lines) } else { event_runs(&lines) };
     runs.sort_by_key(|r| std::cmp::Reverse(r.last_ts));
-    let runs: Vec<Value> = runs.iter().map(|r| r.to_json(programs)).collect();
+    let cwd = header["cwd"].as_str().unwrap_or_default();
+    let runs: Vec<Value> = runs.iter().map(|r| r.to_json(programs, cwd)).collect();
     // A start with no run id made no run. Its error is kept here, the last few.
     let errors: Vec<Value> = lines
         .iter()
@@ -207,24 +208,33 @@ impl Run {
         }
     }
 
-    fn to_json(&self, programs: &mut Programs) -> Value {
+    fn to_json(&self, programs: &mut Programs, cwd: &str) -> Value {
         let trace = self.step["trace"].as_array().cloned().unwrap_or_default();
+        let folder = self.program.as_str().and_then(|p| resolve_folder(p, cwd));
+        let program = folder
+            .as_ref()
+            .and_then(|f| f.file_name())
+            .map_or_else(|| self.program.clone(), |n| json!(n.to_string_lossy()));
         json!({
-            "run": self.id, "program": self.program, "entry": self.entry, "status": self.status(),
+            "run": self.id, "program": program, "entry": self.entry, "status": self.status(),
             "started_ts": self.started_ts, "last_ts": self.last_ts, "step": self.step, "error": self.error,
-            "trace": trace, "inputs": self.inputs, "functions": self.functions(programs, &trace),
+            "trace": trace, "inputs": self.inputs,
+            "functions": self.functions(programs, &trace, folder.as_deref()),
             "events": self.events,
         })
     }
 
     /// The functions of the program, with `visited` from the trace and the answers that start with each name. A
     /// program that does not load lists the functions seen in the trace and the answers.
-    fn functions(&self, programs: &mut Programs, trace: &[Value]) -> Value {
+    fn functions(&self, programs: &mut Programs, trace: &[Value], folder: Option<&Path>) -> Value {
         let trace: Vec<&str> = trace.iter().filter_map(Value::as_str).collect();
-        let loaded = self.program.as_str().and_then(|name| {
+        let key = folder
+            .map(|f| f.display().to_string())
+            .or_else(|| self.program.as_str().map(str::to_string));
+        let loaded = key.and_then(|key| {
             programs
-                .entry(name.to_string())
-                .or_insert_with(|| load_functions(name))
+                .entry(key.clone())
+                .or_insert_with(|| load_functions(folder, &key))
                 .clone()
         });
         let names: Vec<String> = loaded.unwrap_or_else(|| {
@@ -337,8 +347,33 @@ fn step_runs(lines: &[Value]) -> Vec<Run> {
 }
 
 /// The functions of a program, sorted, without templates. None when the program does not load.
-fn load_functions(name: &str) -> Option<Vec<String>> {
-    let (project, _) = cli::load_flow(None, Some(name.to_string())).ok()?;
+/// The folder a relative program path names (`.`, `..`, `./x`, `../x`), resolved against the agent's cwd. None for
+/// a flow name.
+fn resolve_folder(program: &str, cwd: &str) -> Option<PathBuf> {
+    let relative = program == "." || program == ".." || program.starts_with("./") || program.starts_with("../");
+    if !relative || cwd.is_empty() {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for part in Path::new(cwd).join(program).components() {
+        match part {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+/// The functions of a program: the folder it is, or the flow name. None when the program does not load.
+fn load_functions(folder: Option<&Path>, name: &str) -> Option<Vec<String>> {
+    let loaded = match folder {
+        Some(dir) => cli::load_flow(Some(dir.to_path_buf()), None),
+        None => cli::load_flow(None, Some(name.to_string())),
+    };
+    let (project, _) = loaded.ok()?;
     let mut names: Vec<String> = project
         .functions()
         .filter(|(_, sf)| !sf.function.is_template())

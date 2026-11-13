@@ -262,3 +262,20 @@ fn runs_and_agents_are_newest_first() {
         (json!(300), json!(201))
     );
 }
+
+#[test]
+fn a_folder_program_shows_the_folder_name_from_the_agent_cwd() {
+    let dir = folder("folder-program");
+    write(
+        &dir,
+        "step-f1.jsonl",
+        &[
+            json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null,
+                "cwd": "/x/rein-dependabot-handler", "session": "f1"}),
+            json!({"ts": 1001, "event": "step", "program": ".",
+                "request": {"entry": "main", "answers": {}}, "step": question("main.task", &["main"])}),
+        ],
+    );
+    let a = agent_named(&agents(&dir, 1001), "step-f1");
+    assert_eq!(a["runs"][0]["program"], "rein-dependabot-handler", "{a}");
+}

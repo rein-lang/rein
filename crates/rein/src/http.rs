@@ -3,15 +3,30 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::time::Duration;
 
 /// The largest request body read. Both servers take short requests.
 const MAX_BODY: usize = 1 << 20;
+
+/// How long a client may take to send its request. The servers answer one client at a time, so a silent client
+/// must not hold the others.
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The answer to one request: status line, content type, body.
 pub type Reply = (&'static str, &'static str, String);
 
 /// Reads one request from `stream`, answers it with `respond(method, path, body)`, and closes.
 pub fn answer(stream: TcpStream, port: u16, respond: impl Fn(&str, &str, &str) -> Reply) -> std::io::Result<()> {
+    answer_within(stream, port, READ_TIMEOUT, respond)
+}
+
+fn answer_within(
+    stream: TcpStream,
+    port: u16,
+    timeout: Duration,
+    respond: impl Fn(&str, &str, &str) -> Reply,
+) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(timeout))?;
     let reader = BufReader::new(stream.try_clone()?);
     exchange(reader, stream, port, respond)
 }
@@ -67,4 +82,39 @@ pub fn exchange<R: BufRead, W: Write>(
 /// The Host header names this server, so a page of another site cannot read it through DNS rebinding.
 pub fn local_host(host: &str, port: u16) -> bool {
     host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    /// An idle client holds the one-at-a-time server for the timeout only. The next client still gets its answer.
+    #[test]
+    fn a_silent_client_does_not_block_the_next_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let port = addr.port();
+        let server = std::thread::spawn(move || {
+            for stream in listener.incoming().take(2).flatten() {
+                let _ = answer_within(stream, port, Duration::from_millis(200), |_, _, _| {
+                    ("200 OK", "text/plain", "answered\n".to_string())
+                });
+            }
+        });
+        // Connects and sends nothing.
+        let idle = TcpStream::connect(addr).unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        client
+            .write_all(format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+        assert!(reply.ends_with("answered\n"), "{reply}");
+        server.join().unwrap();
+        drop(idle);
+    }
 }

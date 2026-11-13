@@ -31,6 +31,9 @@ p { margin: 6px 0; }
 .badge.stopped { color: var(--stop); }
 .badge.error, .error { color: var(--err); }
 .step { font-weight: 600; overflow-wrap: anywhere; }
+.run-title { font-size: 15px; margin: 0; }
+.earlier { margin-top: 10px; }
+.earlier > summary { color: var(--muted); cursor: pointer; font-size: 13px; }
 .fn { border-left: 3px solid var(--line); padding-left: 8px; margin-top: 8px; }
 .fn.reached { border-color: var(--accent); }
 </style>
@@ -49,6 +52,7 @@ const agentsBox = document.getElementById("agents");
 const endedBox = document.getElementById("ended");
 const statusLine = document.getElementById("status");
 let last = [];
+const openEarlier = new Map();
 
 // Every value from the log is set with textContent. The log holds strings that agents wrote.
 function el(tag, cls, text) {
@@ -88,7 +92,7 @@ function functionView(run, f) {
 function runView(run) {
   const box = el("section", "run");
   const head = el("div", "run-head");
-  head.append(el("strong", null, run.program || "(no program)"), el("span", "badge " + run.status, run.status));
+  head.append(el("h3", "run-title", run.program || "(no program)"), el("span", "badge " + run.status, run.status));
   box.append(head, el("p", "meta", "run " + run.run + " · entry " + (run.entry || "-")), stepView(run.step));
   if (run.error) box.append(el("p", "error", "Error: " + run.error));
   if (run.trace.length) box.append(el("p", "meta", "Path: " + run.trace.join(" → ")));
@@ -104,7 +108,17 @@ function agentView(a) {
     card.append(el("p", "error", "Start failed" + (e.program ? " (" + e.program + ")" : "") + ": " + e.message));
   }
   if (!a.runs.length) card.append(el("p", "meta", "No runs."));
-  for (const r of a.runs) card.append(runView(r));
+  const [newest, ...earlier] = a.runs;
+  if (newest) card.append(runView(newest));
+  if (earlier.length) {
+    // Keeps its open state across refreshes, keyed by agent id.
+    const details = el("details", "earlier");
+    details.append(el("summary", null, earlier.length + (earlier.length === 1 ? " earlier run" : " earlier runs")));
+    details.open = openEarlier.get(a.id) === true;
+    details.addEventListener("toggle", () => openEarlier.set(a.id, details.open));
+    for (const r of earlier) details.append(runView(r));
+    card.append(details);
+  }
   return card;
 }
 
