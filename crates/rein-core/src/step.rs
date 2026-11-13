@@ -196,6 +196,8 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     // The `string` values of the function being run. The entry gets them from the request; a hand-off
     // passes them on, bound to the target's `string` parameters by name.
     let mut strings: BTreeMap<String, String> = req.inputs.clone();
+    // The callers that wait in an `await`, innermost last: the function, and the answer the callee's text fills.
+    let mut callers: Vec<(String, String)> = Vec::new();
     for _ in 0..HOP_LIMIT {
         trace.push(current.clone());
         let Some(sf) = project.get(&current) else {
@@ -215,27 +217,25 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
         };
         match outcome {
             // Auto-follow: the agent does not need to see a hop that asks nothing.
-            Outcome::Ref { target, args } => {
-                let target = project.qualify(&current, &target);
-                let Some(next) = project.get(&target) else {
-                    return failure(format!("unknown function `{target}`"), None, Vec::new(), answers, trace);
-                };
-                let mut given: BTreeMap<String, String> = args.into_iter().collect();
-                let mut bound = BTreeMap::new();
-                for input in next.function.text_inputs() {
-                    let name = &input.name.value;
-                    let Some(value) = given.remove(name) else {
-                        return failure(format!("`{target}` is missing argument `{name}`"), None, Vec::new(), answers, trace);
-                    };
-                    bound.insert(name.clone(), value);
+            Outcome::Ref { target, args } => match bind(project, &current, &target, args) {
+                Ok((target, bound)) => (current, strings) = (target, bound),
+                Err(message) => return failure(message, None, Vec::new(), answers, trace),
+            },
+            // A call with return: walk the callee as a hand-off, and remember who waits for its text.
+            Outcome::Call { target, args, response } => match bind(project, &current, &target, args) {
+                Ok((target, bound)) => {
+                    callers.push((std::mem::replace(&mut current, target), response));
+                    strings = bound;
                 }
-                if let Some(extra) = given.keys().next() {
-                    return failure(format!("`{target}` has no parameter `{extra}`"), None, Vec::new(), answers, trace);
+                Err(message) => return failure(message, None, Vec::new(), answers, trace),
+            },
+            Outcome::Text(text) => {
+                // The callee of an `await` ended. Its text is a request whose answer is the caller's `const`.
+                if let Some((caller, response)) = callers.pop() {
+                    let instruction = format!("{text}\n\nThen answer `{caller}.{response}` with the result.");
+                    return request(project, &caller, &response, instruction, answers, trace);
                 }
-                strings = bound;
-                current = target;
-            }
-            Outcome::Text(instruction) => {
+                let instruction = text;
                 return StepResponse::Done {
                     version: PROTOCOL_VERSION,
                     instruction,
@@ -271,41 +271,73 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                     trace,
                 };
             }
-            Outcome::Request {
-                instruction,
-                response,
-            } => {
-                let Some(input) = sf.function.response(&response) else {
-                    return failure(
-                        format!("unknown answer `{response}`"),
-                        None,
-                        Vec::new(),
-                        answers,
-                        trace,
-                    );
-                };
-                let (r#type, options) = type_of(input);
-                let spec = ResponseSpec {
-                    name: response.clone(),
-                    r#type,
-                    options,
-                    description: input.description.value.clone(),
-                    fields: sf.function.answer_struct(&response).and_then(|s| s.as_ref().ok()).map(field_specs),
-                };
-                return StepResponse::Request {
-                    version: PROTOCOL_VERSION,
-                    key: format!("{current}.{response}"),
-                    function: current.clone(),
-                    instruction,
-                    response: spec,
-                    answers,
-                    trace,
-                };
+            Outcome::Request { instruction, response } => {
+                return request(project, &current, &response, instruction, answers, trace);
             }
         }
     }
     let message = format!("flow did not finish in {HOP_LIMIT} steps (reference cycle?)");
     failure(message, None, Vec::new(), answers, trace)
+}
+
+/// The function a hand-off or a call from `from` goes to, and its `string` values, bound by name from `args`.
+fn bind(
+    project: &Project,
+    from: &str,
+    target: &str,
+    args: Vec<(String, String)>,
+) -> Result<(String, BTreeMap<String, String>), String> {
+    let target = project.qualify(from, target);
+    let Some(next) = project.get(&target) else {
+        return Err(format!("unknown function `{target}`"));
+    };
+    let mut given: BTreeMap<String, String> = args.into_iter().collect();
+    let mut bound = BTreeMap::new();
+    for input in next.function.text_inputs() {
+        let name = &input.name.value;
+        let Some(value) = given.remove(name) else {
+            return Err(format!("`{target}` is missing argument `{name}`"));
+        };
+        bound.insert(name.clone(), value);
+    }
+    if let Some(extra) = given.keys().next() {
+        return Err(format!("`{target}` has no parameter `{extra}`"));
+    }
+    Ok((target, bound))
+}
+
+/// A request for the `const` answer `response` of `function`, after the agent does `instruction`.
+fn request(
+    project: &Project,
+    function: &str,
+    response: &str,
+    instruction: String,
+    answers: Answers,
+    trace: Vec<String>,
+) -> StepResponse {
+    let Some(f) = project.get(function).map(|sf| &sf.function) else {
+        return failure(format!("unknown function `{function}`"), None, Vec::new(), answers, trace);
+    };
+    let Some(input) = f.response(response) else {
+        return failure(format!("unknown answer `{response}`"), None, Vec::new(), answers, trace);
+    };
+    let (r#type, options) = type_of(input);
+    let spec = ResponseSpec {
+        name: response.to_string(),
+        r#type,
+        options,
+        description: input.description.value.clone(),
+        fields: f.answer_struct(response).and_then(|s| s.as_ref().ok()).map(field_specs),
+    };
+    StepResponse::Request {
+        version: PROTOCOL_VERSION,
+        key: format!("{function}.{response}"),
+        function: function.to_string(),
+        instruction,
+        response: spec,
+        answers,
+        trace,
+    }
 }
 
 fn failure(

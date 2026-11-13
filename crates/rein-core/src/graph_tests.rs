@@ -145,3 +145,20 @@ fn walk_follows_a_compound_condition_and_stops_at_a_missing_answer() {
     assert_eq!(g.path, ["f0", "f0_0"]);
     assert_eq!(g.current.expect("current").key.as_deref(), Some("main.b"));
 }
+
+#[test]
+fn await_is_a_request_node_with_a_call_edge_and_the_flow_goes_on() {
+    let p = project(&[
+        ("main.rein", "/** M. */\nexport default async function main() {\n  /** Done? */\n  const done: boolean = await @./work(task=`t`);\n\n  if (done) {\n    return `close`;\n  }\n\n  return `open`;\n}\n"),
+        ("work.rein", "interface Input {\n  /** The task. */\n  task: string;\n  /** Ready? */\n  ready: boolean;\n}\n/** W. */\nexport default function work({ task, ready }: Input) {\n  if (ready) {\n    return `do ${task}`;\n  }\n\n  return `wait`;\n}\n"),
+    ]);
+    let g = flow(&p, "main");
+    let node = g.nodes.iter().find(|n| n.kind == NodeKind::Request).expect("await node");
+    assert_eq!(node.label, "await @./work\ndone: boolean");
+    let call = g.edges.iter().find(|e| e.kind == EdgeKind::Call).expect("call edge");
+    assert_eq!((call.from.as_str(), call.to.as_str()), (node.id.as_str(), "f1"));
+    assert_eq!((call.args[0].name.as_str(), call.args[0].value.as_str()), ("task", "`t`"));
+    assert!(g.edges.iter().any(|e| e.from == node.id && e.kind == EdgeKind::Flow), "the flow goes on from the answer");
+    assert!(mermaid(&g).contains(&format!("{} ==>", node.id)), "{}", mermaid(&g));
+    assert!(dot(&g).contains("style=bold"), "{}", dot(&g));
+}

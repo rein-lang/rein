@@ -98,6 +98,10 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
         }
         Ok(Outcome::Ref { target, .. }) => show_ref(&project, &target, json),
         Ok(Outcome::NeedInput(name)) => need_input(&sf.function, &name, json),
+        Ok(Outcome::Call { target, response, .. }) => {
+            let instruction = format!("Run `{target}` to its end. Its final instruction is the result.");
+            request(&sf.function, &instruction, &response, json)
+        }
     }
 }
 

@@ -719,3 +719,99 @@ fn double_equals_and_not_equal_branch_like_triple_forms() {
     assert_eq!(done(&ne, "green"), "b");
     assert_eq!(done(&ne, "red"), "a");
 }
+
+/// `main` awaits `find`. `find` asks `ready`, then ends in text, or hands off to `find/build_list`.
+fn await_project() -> Project {
+    project(&[
+        ("main.rein", "interface Found {\n  /** The repositories, comma-separated. */\n  repos: string;\n  /** Did the search find none? */\n  none: boolean;\n}\n/** Entry. */\nexport default async function main() {\n  /** The projects. */\n  const found: Found = await @./find(scope=`all`);\n\n  if (found.none) {\n    return `Nothing to do.`;\n  }\n\n  return `Work on ${found.repos}.`;\n}\n"),
+        ("find.rein", "interface Input {\n  /** Where to search. */\n  scope: string;\n  /** Is the list ready? */\n  ready: boolean;\n}\n/** Find projects. */\nexport default function find({ scope, ready }: Input) {\n  if (!ready) {\n    return @./find/build_list;\n  }\n\n  return `List the projects in ${scope}.`;\n}\n"),
+        ("find/build_list.rein", "/** Build the list. */\nexport default function buildList() {\n  return `Build the list, then list the projects.`;\n}\n"),
+    ])
+}
+
+#[test]
+fn await_walks_the_callee_then_asks_the_caller_for_its_answer() {
+    let p = await_project();
+    let r = step(&p, &req("main", &[]));
+    let StepResponse::Question { key, trace: t, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "find.ready");
+    assert_eq!(t, trace(&["main", "find"]));
+
+    let r = step(&p, &req("main", &[("find.ready", "yes")]));
+    let StepResponse::Request { key, function, instruction, response, trace: t, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "main.found");
+    assert_eq!(function, "main");
+    assert_eq!(instruction, "List the projects in all.\n\nThen answer `main.found` with the result.");
+    assert_eq!(response.r#type, "struct");
+    assert_eq!(t, trace(&["main", "find"]));
+
+    let found = r#"{"repos": "a/b", "none": false}"#;
+    let r = step(&p, &req("main", &[("find.ready", "yes"), ("main.found", found)]));
+    let StepResponse::Done { instruction, trace: t, .. } = r else { panic!("{r:?}") };
+    assert_eq!(instruction, "Work on a/b.");
+    assert_eq!(t, trace(&["main"]));
+}
+
+#[test]
+fn a_hand_off_inside_the_callee_ends_in_the_caller_request() {
+    let p = await_project();
+    let r = step(&p, &req("main", &[("find.ready", "no")]));
+    let StepResponse::Request { key, instruction, trace: t, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "main.found");
+    assert_eq!(instruction, "Build the list, then list the projects.\n\nThen answer `main.found` with the result.");
+    assert_eq!(t, trace(&["main", "find", "find/build_list"]));
+}
+
+#[test]
+fn a_given_caller_answer_replays_without_the_callee() {
+    let p = await_project();
+    let r = step(&p, &req("main", &[("main.found", r#"{"repos": "-", "none": true}"#)]));
+    let StepResponse::Done { instruction, trace: t, .. } = r else { panic!("{r:?}") };
+    assert_eq!(instruction, "Nothing to do.");
+    assert_eq!(t, trace(&["main"]));
+    let again = step(&p, &req("main", &[("main.found", r#"{"repos": "-", "none": true}"#)]));
+    assert_eq!(serde_json::to_string(&again).unwrap(), serde_json::to_string(&step(&p, &req("main", &[("main.found", r#"{"repos": "-", "none": true}"#)]))).unwrap());
+}
+
+#[test]
+fn an_await_inside_the_callee_asks_the_inner_caller_first() {
+    let p = project(&[
+        ("main.rein", "/** Entry. */\nexport default async function main() {\n  /** Is it done? */\n  const done: boolean = await @./outer;\n\n  if (done) {\n    return `Close it.`;\n  }\n\n  return `Keep it open.`;\n}\n"),
+        ("outer.rein", "/** Outer. */\nexport default async function outer() {\n  /** Is it ready? */\n  const ready: boolean = await @./outer/inner;\n\n  if (ready) {\n    return `Ship it.`;\n  }\n\n  return `Fix it.`;\n}\n"),
+        ("outer/inner.rein", "/** Inner. */\nexport default function inner() {\n  return `Check it.`;\n}\n"),
+    ]);
+    let r = step(&p, &req("main", &[]));
+    let StepResponse::Request { key, instruction, trace: t, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "outer.ready");
+    assert_eq!(instruction, "Check it.\n\nThen answer `outer.ready` with the result.");
+    assert_eq!(t, trace(&["main", "outer", "outer/inner"]));
+
+    let r = step(&p, &req("main", &[("outer.ready", "yes")]));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "main.done");
+    assert_eq!(instruction, "Ship it.\n\nThen answer `main.done` with the result.");
+
+    let r = step(&p, &req("main", &[("outer.ready", "yes"), ("main.done", "no")]));
+    let StepResponse::Done { instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(instruction, "Keep it open.");
+}
+
+#[test]
+fn await_of_another_program_walks_it_with_its_own_keys() {
+    let main = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR merged? */\n  const merged: boolean = await @pr-handling(pr=pr);\n\n  if (merged) {\n    return `Report ${pr} as merged.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
+    let p = crate::program_fixture::with_main(main.to_string());
+    let pr = [("pr", "u/1")];
+    let r = step(&p, &req_with("main", &[], &pr));
+    let StepResponse::Question { key, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "@pr-handling/main.draft");
+
+    let r = step(&p, &req_with("main", &[("@pr-handling/main.draft", "yes")], &pr));
+    let StepResponse::Request { key, instruction, trace: t, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "main.merged");
+    assert_eq!(instruction, "Skip u/1.\n\nThen answer `main.merged` with the result.");
+    assert_eq!(t, trace(&["main", "@pr-handling/main"]));
+
+    let r = step(&p, &req_with("main", &[("@pr-handling/main.draft", "yes"), ("main.merged", "no")], &pr));
+    let StepResponse::Done { instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(instruction, "Report u/1 as open.");
+}

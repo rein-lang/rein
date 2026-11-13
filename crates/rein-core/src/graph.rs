@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::ast::{Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
+use crate::ast::{Awaited, Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
 use crate::eval;
 use crate::project::{Project, SourceFile};
 use crate::step::{inputs_of, Answers, StepResponse};
@@ -89,6 +89,8 @@ pub enum EdgeKind {
     Handoff,
     /// A template call: the text comes from that template.
     Template,
+    /// `await @function(...)`: the function runs, and its result is the answer. The flow goes on from the `await`.
+    Call,
 }
 
 #[derive(Debug, Serialize)]
@@ -304,16 +306,21 @@ impl<'a> Builder<'a> {
                     self.block(f, &case.body, (node.clone(), Some(label)), hit);
                 }
             }
-            Stmt::Request { response, arg, .. } => {
-                let mut label = format!("request: {}", value_text(arg));
-                // A struct answer shows its name and struct, like `pick: Pick`.
-                if matches!(response.ty, InputType::Struct(_)) {
+            Stmt::Request { response, awaited, .. } => {
+                let mut label = match awaited {
+                    Awaited::Request { arg, .. } => format!("request: {}", value_text(arg)),
+                    Awaited::Call(target) => format!("await {}", return_text(target)),
+                };
+                // A struct answer, or the answer of a call, shows its name and type, like `pick: Pick`.
+                if matches!(response.ty, InputType::Struct(_)) || matches!(awaited, Awaited::Call(_)) {
                     label.push_str(&format!("\n{}: {}", response.name.value, response.ty.ts_type()));
                 }
                 let node = self.step_to(from, NodeKind::Request, label);
                 self.mark(on);
-                if let Value::Call(call) = arg {
-                    self.template_edges(&node, call);
+                match awaited {
+                    Awaited::Request { arg: Value::Call(call), .. } => self.template_edges(&node, call),
+                    Awaited::Call(target) => self.call_edge(&node, target),
+                    Awaited::Request { .. } => {}
                 }
                 let answered = on && self.vars.contains_key(&response.name.value);
                 self.block(f, rest, (node, None), answered);
@@ -384,6 +391,23 @@ impl<'a> Builder<'a> {
         self.mark(on);
     }
 
+    /// A `call` edge from the node of an `await` to the function it runs, with the named arguments. A target
+    /// that does not resolve gets no edge; `rein check` reports it.
+    fn call_edge(&mut self, node: &str, target: &ReturnValue) {
+        let (key, args) = match target {
+            ReturnValue::Ref(r) => (r.value.as_str(), Vec::new()),
+            ReturnValue::Call(call) => {
+                let args = call.args.iter().map(|a| Arg { name: arg_name(a), value: value_text(&a.value) }).collect();
+                (call.callee.key(), args)
+            }
+            ReturnValue::Text(_) | ReturnValue::Template(_) => return,
+        };
+        if let Ok(Binding::Function(path)) = self.project.binding_for(self.function, key) {
+            let to = self.target_node(&path);
+            self.edge((node.to_string(), None), &to, EdgeKind::Call, args);
+        }
+    }
+
     /// A dashed edge from `node` to each project template that `call` uses, at any depth.
     fn template_edges(&mut self, node: &str, call: &Call) {
         for c in call.calls() {
@@ -420,6 +444,16 @@ fn value_text(v: &Value) -> String {
         Value::Template(lit) => format!("`{}`", template_text(&lit.pieces)),
         Value::Name(n) => n.value.clone(),
         Value::Call(c) => call_text(c),
+    }
+}
+
+/// The target of an `await` as written: `@./x`, or `@program` without its arguments (the edge carries them).
+fn return_text(v: &ReturnValue) -> String {
+    match v {
+        ReturnValue::Ref(r) => format!("@{}", r.value),
+        ReturnValue::Call(c) => format!("@{}", c.callee.key()),
+        ReturnValue::Text(t) => t.value.clone(),
+        ReturnValue::Template(lit) => template_text(&lit.pieces),
     }
 }
 
@@ -505,7 +539,11 @@ pub fn mermaid(g: &Graph) -> String {
         out.push("    end".to_string());
     }
     for e in &g.edges {
-        let arrow = if e.kind == EdgeKind::Template { "-.->" } else { "-->" };
+        let arrow = match e.kind {
+            EdgeKind::Template => "-.->",
+            EdgeKind::Call => "==>",
+            EdgeKind::Flow | EdgeKind::Handoff => "-->",
+        };
         let lines = edge_lines(e);
         if lines.is_empty() {
             out.push(format!("    {} {arrow} {}", e.from, e.to));
@@ -581,6 +619,9 @@ pub fn dot(g: &Graph) -> String {
         }
         if e.kind == EdgeKind::Template {
             a.push("style=dashed".to_string());
+        }
+        if e.kind == EdgeKind::Call {
+            a.push("style=bold".to_string());
         }
         if !g.path.is_empty() {
             let walk = if e.taken { "color=\"#16a34a\", penwidth=2" } else { "color=gray80, fontcolor=gray70" };

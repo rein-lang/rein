@@ -1,7 +1,7 @@
 //! Where each name of a project is written: references to functions, and uses of parameters and answers.
 //! References, rename, call hierarchy and code lens all read these sites. They come from the parsed tree.
 
-use rein_core::ast::{walk_stmts, walk_vars, Binding, Call, Callee, Function, Input, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
+use rein_core::ast::{walk_stmts, walk_vars, Awaited, Binding, Call, Callee, Function, Input, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
 use rein_core::diagnostic::Span;
 use rein_core::lexer::{lex, Tok};
 use rein_core::project::Project;
@@ -28,7 +28,9 @@ pub fn calls(f: &Function) -> Vec<&Call> {
     let mut out = Vec::new();
     walk_stmts(&f.body, &mut |s| match s {
         Stmt::Return(Spanned { value: ReturnValue::Call(call), .. }) => out.extend(call.calls()),
-        Stmt::Request { arg: Value::Call(call), .. } => out.extend(call.calls()),
+        Stmt::Request { awaited: Awaited::Request { arg: Value::Call(call), .. } | Awaited::Call(ReturnValue::Call(call)), .. } => {
+            out.extend(call.calls())
+        }
         _ => {}
     });
     out
@@ -38,7 +40,9 @@ pub fn calls(f: &Function) -> Vec<&Call> {
 pub fn refs(f: &Function) -> Vec<(&Spanned<String>, Option<&Call>)> {
     let mut out = Vec::new();
     walk_stmts(&f.body, &mut |s| {
-        if let Stmt::Return(Spanned { value: ReturnValue::Ref(r), .. }) = s {
+        if let Stmt::Return(Spanned { value: ReturnValue::Ref(r), .. })
+        | Stmt::Request { awaited: Awaited::Call(ReturnValue::Ref(r)), .. } = s
+        {
             out.push((r, None));
         }
     });
@@ -83,7 +87,11 @@ pub fn name_uses(f: &Function) -> Vec<&Spanned<String>> {
     walk_stmts(&f.body, &mut |s| match s {
         Stmt::If { cond, .. } => walk_vars(cond, &mut |v| out.push(v)),
         Stmt::Switch { subject, .. } => out.push(subject),
-        Stmt::Request { arg, .. } => value_names(arg, &mut out),
+        Stmt::Request { awaited: Awaited::Request { arg, .. }, .. } => value_names(arg, &mut out),
+        Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)), .. } => {
+            call.args.iter().for_each(|a| value_names(&a.value, &mut out))
+        }
+        Stmt::Request { .. } => {}
         Stmt::Return(r) => match &r.value {
             ReturnValue::Template(lit) => template_names(lit, &mut out),
             ReturnValue::Call(call) => call.args.iter().for_each(|a| value_names(&a.value, &mut out)),
@@ -148,7 +156,7 @@ pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, S
     }
     let mut awaited = None;
     walk_stmts(&f.body, &mut |s| {
-        if let Stmt::Request { callee, .. } = s {
+        if let Stmt::Request { awaited: Awaited::Request { callee, .. }, .. } = s {
             if callee.span.contains(off) {
                 awaited = Some(callee.clone());
             }

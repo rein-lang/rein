@@ -1,0 +1,17 @@
+interface Input {
+  /** The repositories to work on, comma-separated. */
+  repos: string;
+  /** Does any of these repositories have an open pull request? */
+  has_open_prs: boolean;
+}
+
+/**
+ * Work on the open pull requests of the repositories, or open one.
+ */
+export default function openPrs({ repos, has_open_prs }: Input) {
+  if (!has_open_prs) {
+    return `Open a pull request for the oldest issue in ${repos}.`;
+  }
+
+  return `Merge the open pull requests in ${repos}, oldest first.`;
+}

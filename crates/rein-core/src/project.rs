@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
+use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
 use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
@@ -795,14 +795,15 @@ fn name_under(root: &Path, path: &Path) -> Option<String> {
 fn keys(f: &Function) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     walk_stmts(&f.body, &mut |s| match s {
-        Stmt::Return(r) => match &r.value {
-            ReturnValue::Ref(reference) => {
-                out.insert(reference.value.clone());
-            }
-            ReturnValue::Call(call) => out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string())),
-            ReturnValue::Text(_) | ReturnValue::Template(_) => {}
-        },
-        Stmt::Request { callee, arg, .. } => {
+        Stmt::Return(Spanned { value: ReturnValue::Ref(reference), .. })
+        | Stmt::Request { awaited: Awaited::Call(ReturnValue::Ref(reference)), .. } => {
+            out.insert(reference.value.clone());
+        }
+        Stmt::Return(Spanned { value: ReturnValue::Call(call), .. })
+        | Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)), .. } => {
+            out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string()));
+        }
+        Stmt::Request { awaited: Awaited::Request { callee, arg }, .. } => {
             out.insert(callee.value.clone());
             if let Value::Call(call) = arg {
                 out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string()));
@@ -826,12 +827,10 @@ fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<(Str
         };
         let callee_is_ref = |c: &crate::ast::Call| matches!(c.callee, Callee::Ref(_));
         match s {
-            Stmt::Return(r) => match &r.value {
-                ReturnValue::Ref(reference) => push(&reference.value),
-                ReturnValue::Call(call) => call.calls().into_iter().filter(|c| callee_is_ref(c)).for_each(|c| push(c.callee.key())),
-                _ => {}
-            },
-            Stmt::Request { arg: Value::Call(call), .. } => {
+            Stmt::Return(Spanned { value: ReturnValue::Ref(reference), .. })
+            | Stmt::Request { awaited: Awaited::Call(ReturnValue::Ref(reference)), .. } => push(&reference.value),
+            Stmt::Return(Spanned { value: ReturnValue::Call(call), .. })
+            | Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)) | Awaited::Request { arg: Value::Call(call), .. }, .. } => {
                 call.calls().into_iter().filter(|c| callee_is_ref(c)).for_each(|c| push(c.callee.key()));
             }
             _ => {}

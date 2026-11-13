@@ -383,8 +383,7 @@ export default async function f() {
 }"#);
     let Stmt::Request {
         response,
-        arg,
-        callee,
+        awaited: Awaited::Request { arg, callee },
         ..
     } = &f.body[0]
     else {
@@ -406,7 +405,7 @@ export default async function f() {
   const ok: boolean = await request(delegate(model="m", task="t"));
   return "y"
 }"#);
-    let Stmt::Request { arg, .. } = &f.body[0] else {
+    let Stmt::Request { awaited: Awaited::Request { arg, .. }, .. } = &f.body[0] else {
         panic!("expected request")
     };
     assert!(matches!(arg, Value::Call(c) if c.callee.key() == "delegate" && c.args.len() == 2));
@@ -421,7 +420,7 @@ fn request_answer_needs_a_doc_comment() {
 #[test]
 fn only_request_can_be_awaited() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q */\n  const x: boolean = await fetch(\"a\");\n  return \"y\"\n}");
-    assert!(msg.contains("only `request` can be awaited"), "{msg}");
+    assert!(msg.contains("only `request` or a reference like `@program` can be awaited"), "{msg}");
 }
 
 #[test]
@@ -517,4 +516,34 @@ fn a_struct_parameter_has_no_doc_comment() {
         msg.contains("a struct parameter has no doc comment"),
         "{msg}"
     );
+}
+
+#[test]
+fn await_of_a_reference_is_a_call_with_return() {
+    let f = ok(r#"/** d */
+export default async function f() {
+  /** The projects. */
+  const p: boolean = await @priority-projects(workplace=`w`);
+  /** Done? */
+  const d: boolean = await @./other;
+  return `y`
+}"#);
+    let Stmt::Request { response, awaited: Awaited::Call(ReturnValue::Call(call)), .. } = &f.body[0] else {
+        panic!("expected a call with return")
+    };
+    assert_eq!(response.name.value, "p");
+    assert_eq!(call.callee.key(), "priority-projects");
+    assert_eq!(call.args.len(), 1);
+    let Stmt::Request { awaited: Awaited::Call(ReturnValue::Ref(r)), .. } = &f.body[1] else {
+        panic!("expected a reference")
+    };
+    assert_eq!(r.value, "./other");
+}
+
+#[test]
+fn await_outside_a_const_answer_gives_the_fix() {
+    for body in ["  await @./x;\n  return `y`", "  return await @./x;"] {
+        let msg = one_error(&format!("/** d */\nexport default async function f() {{\n{body}\n}}"));
+        assert!(msg.contains("const name: Type = await @program(...)"), "{body}: {msg}");
+    }
 }

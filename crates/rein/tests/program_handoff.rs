@@ -189,3 +189,37 @@ fn a_package_reaches_only_the_programs_its_package_json_declares() {
     let out = rein(&home, &["check", handler.to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 }
+
+const AWAITER: &str = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR handled? */\n  const handled: boolean = await @pr-handling/main(pr=pr);\n\n  if (handled) {\n    return `Report ${pr} as handled.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
+
+#[test]
+fn await_of_a_program_follows_the_dependency_rule_and_returns_its_result() {
+    let home = std::env::temp_dir().join(format!("rein-handoff-await-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&home);
+    program(&home, "pr-handling", TARGET);
+    program(&home, "handler", AWAITER);
+    let handler = home.join("handler");
+    fs::write(handler.join("package.json"), r#"{"name": "handler"}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("program `pr-handling` is not a dependency of `handler`"), "{text}");
+
+    fs::write(handler.join("package.json"), r#"{"name": "handler", "peerDependencies": {"pr-handling": "*"}}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+
+    let draft = "@pr-handling/main.draft=false";
+    let out = rein(&home, &["step", "handler", "--input", "pr=u/1", "--answer", draft, "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((v["kind"].as_str(), v["key"].as_str()), (Some("request"), Some("main.handled")), "{v}");
+    assert_eq!(v["instruction"], "Handle u/1.\n\nThen answer `main.handled` with the result.");
+
+    let out = rein(&home, &["step", "handler", "--input", "pr=u/1", "--answer", draft, "--answer", "main.handled=yes", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((v["kind"].as_str(), v["instruction"].as_str()), (Some("done"), Some("Report u/1 as handled.")), "{v}");
+
+    let out = rein(&home, &["graph", "handler", "--format", "json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"call\"") && text.contains("\"kind\": \"program\""), "{text}");
+    fs::remove_dir_all(&home).unwrap();
+}
