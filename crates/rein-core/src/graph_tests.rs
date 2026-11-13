@@ -186,8 +186,12 @@ fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
         let StepResponse::Request { instruction, .. } = &response else { panic!("{response:?}") };
         let text = instruction.lines().next().unwrap_or_default().to_string();
         let g = walk(&p, "main", &response);
-        let current = g.current.expect("current").node;
-        (text, g.nodes.iter().find(|n| n.id == current).unwrap().label.clone())
+        let label = |id: &str| g.nodes.iter().find(|n| n.id == id).unwrap().label.clone();
+        let current = label(&g.current.as_ref().expect("current").node);
+        // The last outcome on the path is the text the callee ended with.
+        let ended = g.path.iter().map(|id| label(id)).filter(|l| l.starts_with("Leaf")).last().unwrap_or_default();
+        assert_eq!(current, "await @./leaf\nok: boolean", "the request is asked at the caller's await");
+        (text, ended)
     };
     // The walk is the call `main.a`. The answer of `main.b` sorts last, but the walk does not reach it.
     let (text, label) = walk_of(&[("main.a>fn.ok>leaf.ok", "yes"), ("main.b>fn.ok>leaf.ok", "no")]);

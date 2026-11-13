@@ -899,3 +899,37 @@ fn a_prefixed_key_for_a_call_the_walk_never_makes_is_unknown() {
     assert_eq!(key, "main.a>fn.ok");
     assert!(instruction.starts_with("Leaf ok."), "{instruction}");
 }
+
+#[test]
+fn the_first_call_of_a_prefixed_key_must_be_reached_from_the_entry() {
+    // The review's p1: `main` awaits `fn` as `a`; `fn` awaits `leaf` as `ok`.
+    let leaf = "/** Leaf. */\nexport default function leaf(\n  /** Leaf ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Leaf ok.`;\n  }\n\n  return `Leaf not ok.`;\n}\n";
+    let p1 = project(&[
+        ("main.rein", "/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: boolean = await @./fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "/** Fn. */\nexport default async function fn() {\n  /** Inner? */\n  const ok: boolean = await @./leaf;\n\n  return `Fn ends.`;\n}\n"),
+        ("leaf.rein", leaf),
+    ]);
+    let r = step(&p1, &req("main", &[("fn.ok>leaf.ok", "yes")]));
+    let StepResponse::Error { key, message, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key.as_deref(), Some("fn.ok>leaf.ok"));
+    assert!(message.contains("unknown key"), "{message}");
+
+    // The review's p2: `fn` hands off to `other`, which awaits `leaf`. `other` runs only inside the call `main.a`.
+    let p2 = project(&[
+        ("main.rein", "/** Main. */\nexport default async function main() {\n  /** A? */\n  const a: boolean = await @./fn;\n\n  /** B? */\n  const b: boolean = await @./fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "/** Fn. */\nexport default function fn() {\n  return @./other;\n}\n"),
+        ("other.rein", "/** Other. */\nexport default async function other() {\n  /** Other ok? */\n  const ok: boolean = await @./leaf;\n\n  return `Other ends.`;\n}\n"),
+        ("leaf.rein", leaf),
+    ]);
+    for bad in ["fn.ok>leaf.ok", "other.ok>leaf.ok"] {
+        let r = step(&p2, &req("main", &[(bad, "yes")]));
+        let StepResponse::Error { key, message, .. } = r else { panic!("{bad}: {r:?}") };
+        assert_eq!(key.as_deref(), Some(bad));
+        assert!(message.contains("unknown key"), "{message}");
+    }
+    // A hand-off chain inside the callee is a valid call path.
+    let r = step(&p2, &req("main", &[("main.a>other.ok>leaf.ok", "yes")]));
+    let StepResponse::Request { key, instruction, .. } = r else { panic!("{r:?}") };
+    assert_eq!(key, "main.a>other.ok");
+    assert!(instruction.starts_with("Leaf ok."), "{instruction}");
+}

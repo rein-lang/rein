@@ -189,7 +189,7 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
         );
         return failure(message, None, errors, answers, Vec::new());
     }
-    if let Err((key, message)) = check_answers(project, &req.answers) {
+    if let Err((key, message)) = check_answers(project, &req.entry, &req.answers) {
         return failure(message, Some(key), Vec::new(), answers, Vec::new());
     }
     let Some(entry) = project.get(&req.entry) else {
@@ -445,9 +445,9 @@ fn error_diagnostics(project: &Project, entry: &str) -> Vec<StepDiagnostic> {
 }
 
 /// The `(key, message)` of the first answer that names no parameter or answer, or has a bad value.
-fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, String)> {
+fn check_answers(project: &Project, entry: &str, answers: &Answers) -> Result<(), (String, String)> {
     for (key, raw) in answers {
-        let Some((function, input)) = declared(project, key) else {
+        let Some((function, input)) = declared(project, entry, key) else {
             return Err((key.clone(), format!("unknown key `{key}`")));
         };
         if input.ty == InputType::Text {
@@ -463,17 +463,18 @@ fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, St
 
 /// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key. A key
 /// inside a call, such as `main.b>fn.ok`, names `fn.ok`, and each part before a `>` must name a `const` answer.
-fn declared<'a>(project: &'a Project, key: &str) -> Option<(&'a Function, &'a Input)> {
+fn declared<'a>(project: &'a Project, entry: &str, key: &str) -> Option<(&'a Function, &'a Input)> {
     let (owner, name) = key.rsplit_once('.')?;
-    let f = &project.get(owner_function(project, owner)?)?.function;
+    let f = &project.get(owner_function(project, entry, owner)?)?.function;
     f.input(name).or_else(|| f.response(name)).map(|i| (f, i))
 }
 
-/// The function that `owner` names, such as `fn` for `main.a>fn`, when each call in it is one a walk can make:
-/// each part before a `>` is `<function>.<const>`, an `await` whose target reaches the next part's function
-/// through hand-offs. `None` for any other owner, so its keys are unknown.
-fn owner_function<'a>(project: &Project, owner: &'a str) -> Option<&'a str> {
-    let mut reach: Option<BTreeSet<String>> = None;
+/// The function that `owner` names, such as `fn` for `main.a>fn`, when each call in it is one a walk from `entry`
+/// can make: the first part is a function that `entry` reaches through hand-offs, outside any call, and each part
+/// before a `>` is `<function>.<const>`, an `await` whose target reaches the next part's function through
+/// hand-offs. `None` for any other owner, so its keys are unknown. An owner with no `>` is any function, as before.
+fn owner_function<'a>(project: &Project, entry: &str, owner: &'a str) -> Option<&'a str> {
+    let mut reach: Option<BTreeSet<String>> = owner.contains(CALL).then(|| handoff_reach(project, entry.to_string()));
     let mut parts = owner.split(CALL).peekable();
     while let Some(part) = parts.next() {
         let last = parts.peek().is_none();
@@ -501,7 +502,12 @@ fn call_reach(project: &Project, function: &str, name: &str) -> Option<BTreeSet<
             }
         }
     });
-    let mut queue = vec![follow(project, function, target?)?];
+    Some(handoff_reach(project, follow(project, function, target?)?))
+}
+
+/// `start`, and each function it reaches through hand-offs (returns, not awaits).
+fn handoff_reach(project: &Project, start: String) -> BTreeSet<String> {
+    let mut queue = vec![start];
     let mut seen = BTreeSet::new();
     while let Some(g) = queue.pop() {
         if !seen.insert(g.clone()) {
@@ -516,7 +522,7 @@ fn call_reach(project: &Project, function: &str, name: &str) -> Option<BTreeSet<
             }
         });
     }
-    Some(seen)
+    seen
 }
 
 /// The reference key a returned or awaited value names, such as `./x` or `program/fn`. `None` for text.

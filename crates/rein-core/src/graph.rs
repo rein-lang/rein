@@ -126,10 +126,12 @@ pub fn flow(project: &Project, entry: &str) -> Graph {
 /// The step engine walks the flow; each function on its trace is walked again here, against the same
 /// answers and with the same evaluator, to find the nodes. An error response gets the plain flow.
 pub fn walk<'a>(project: &'a Project, entry: &str, response: &'a StepResponse) -> Graph {
-    let (answers, trace, kind, key) = match response {
-        StepResponse::Question { answers, trace, key, .. } => (answers, trace, "question", Some(key.clone())),
-        StepResponse::Request { answers, trace, key, .. } => (answers, trace, "request", Some(key.clone())),
-        StepResponse::Done { answers, trace, .. } => (answers, trace, "done", None),
+    let (answers, trace, kind, key, asker) = match response {
+        StepResponse::Question { answers, trace, key, .. } => (answers, trace, "question", Some(key.clone()), None),
+        StepResponse::Request { answers, trace, key, function, .. } => {
+            (answers, trace, "request", Some(key.clone()), Some(function))
+        }
+        StepResponse::Done { answers, trace, .. } => (answers, trace, "done", None, None),
         StepResponse::Error { .. } => return flow(project, entry),
     };
     let mut b = Builder::new(project, entry, "flow");
@@ -146,13 +148,16 @@ pub fn walk<'a>(project: &'a Project, entry: &str, response: &'a StepResponse) -
     }
     b.walk = Some((answers, first));
     b.flow();
+    // A request is asked at the last node its function's walk reaches. After an `await` callee ends, that is the
+    // caller's `await` node, not the callee's outcome.
+    let asked = asker.and_then(|f| b.paths.get(f.as_str())).and_then(|p| p.last().cloned());
     let mut path: Vec<String> = Vec::new();
     for id in trace.iter().filter_map(|f| b.paths.remove(f)).flatten() {
         if !path.contains(&id) {
             path.push(id);
         }
     }
-    b.graph.current = path.last().map(|node| Current { node: node.clone(), kind, key });
+    b.graph.current = asked.or_else(|| path.last().cloned()).map(|node| Current { node, kind, key });
     b.graph.path = path;
     b.graph
 }
