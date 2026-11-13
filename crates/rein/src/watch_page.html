@@ -5,145 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rein watch</title>
 <link rel="icon" href="data:,">
-<style>
-:root { --bg: #f6f7f9; --fg: #1d2330; --muted: #5b6474; --card: #ffffff; --line: #d9dee7; --accent: #2f6fde; --ok: #1d7a3a; --wait: #9a6700; --stop: #7a5a5a; --err: #b42318; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --bg: #15171c; --fg: #e6e9ef; --muted: #9aa3b2; --card: #1e2229; --line: #353c48; --accent: #7aa7ff; --ok: #6cc98a; --wait: #e0b050; --stop: #b49a9a; --err: #ff8a80; }
-}
-body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
-main { max-width: 960px; margin: 0 auto; padding: 16px; }
-header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
-h1 { font-size: 20px; margin: 0; }
-h2 { font-size: 16px; margin: 0 0 8px; }
-h4 { font-size: 14px; margin: 8px 0 4px; }
-p { margin: 6px 0; }
-.meta, #status { color: var(--muted); font-size: 13px; }
-.agent, .run { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0; }
-.agent.ended { opacity: 0.6; }
-.run { margin: 10px 0 0; }
-.row { display: flex; flex-wrap: wrap; gap: 0 8px; }
-.label { color: var(--muted); min-width: 5em; }
-.value { min-width: 0; overflow-wrap: anywhere; }
-.run-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.badge { font-size: 12px; border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
-.badge.waiting { color: var(--wait); }
-.badge.done { color: var(--ok); }
-.badge.stopped { color: var(--stop); }
-.badge.error, .error { color: var(--err); }
-.step { font-weight: 600; overflow-wrap: anywhere; }
-.run-title { font-size: 15px; margin: 0; }
-.earlier { margin-top: 10px; }
-.earlier > summary { color: var(--muted); cursor: pointer; font-size: 13px; }
-.fn { border-left: 3px solid var(--line); padding-left: 8px; margin-top: 8px; }
-.fn.reached { border-color: var(--accent); }
-</style>
+<style>__CSS__</style>
 </head>
 <body>
 <main>
-<header>
+<header class="top">
   <h1>rein watch</h1>
-  <label><input type="checkbox" id="ended"> Show ended agents</label>
-  <span id="status">loading</span>
+  <div id="summary" class="chips" aria-label="Summary"></div>
+  <label class="toggle"><input type="checkbox" id="ended"> Show ended agents</label>
 </header>
+<p class="meta key" aria-label="Graph key"><span class="swatch taken"></span> taken <span class="swatch now"></span> now</p>
+<p id="status" class="meta" role="status">loading</p>
 <div id="agents"></div>
 </main>
-<script>
-const agentsBox = document.getElementById("agents");
-const endedBox = document.getElementById("ended");
-const statusLine = document.getElementById("status");
-let last = [];
-const openEarlier = new Map();
-
-// Every value from the log is set with textContent. The log holds strings that agents wrote.
-function el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined && text !== null) e.textContent = text;
-  return e;
-}
-const shown = (v) => (typeof v === "string" ? v : JSON.stringify(v));
-
-function row(label, value) {
-  const r = el("div", "row");
-  r.append(el("span", "label", label), el("span", "value", value === null || value === undefined ? "-" : shown(value)));
-  return r;
-}
-
-function stepView(step) {
-  if (!step) return el("p", "step", "No step yet.");
-  if (step.kind === "question") {
-    const options = step.options ? " (" + step.options.join(" | ") + ")" : "";
-    return el("p", "step", "Waits for " + step.key + " [" + step.type + "]" + options + ". " + step.description);
-  }
-  if (step.kind === "request") return el("p", "step", "Waits for " + step.key + ". " + step.instruction);
-  return el("p", "step", "Done. " + (step.instruction || ""));
-}
-
-function functionView(run, f) {
-  const box = el("div", f.visited ? "fn reached" : "fn");
-  box.append(el("h4", null, f.name + (f.visited ? "" : " (not reached)")));
-  if (f.name === run.entry) {
-    for (const [name, value] of Object.entries(run.inputs || {})) box.append(row("input " + name, value));
-  }
-  for (const [name, value] of Object.entries(f.answers)) box.append(row(name, value));
-  return box;
-}
-
-function runView(run) {
-  const box = el("section", "run");
-  const head = el("div", "run-head");
-  head.append(el("h3", "run-title", run.program || "(no program)"), el("span", "badge " + run.status, run.status));
-  box.append(head, el("p", "meta", "run " + run.run + " · entry " + (run.entry || "-")), stepView(run.step));
-  if (run.error) box.append(el("p", "error", "Error: " + run.error));
-  if (run.trace.length) box.append(el("p", "meta", "Path: " + run.trace.join(" → ")));
-  for (const f of run.functions) box.append(functionView(run, f));
-  return box;
-}
-
-function agentView(a) {
-  const card = el("article", a.alive ? "agent" : "agent ended");
-  const title = a.transport + (a.pid ? " · pid " + a.pid : "");
-  card.append(el("h2", null, title), row("cwd", a.cwd), row("session", a.session), row("state", a.alive ? "alive" : "ended"));
-  for (const e of a.errors || []) {
-    card.append(el("p", "error", "Start failed" + (e.program ? " (" + e.program + ")" : "") + ": " + e.message));
-  }
-  if (!a.runs.length) card.append(el("p", "meta", "No runs."));
-  const [newest, ...earlier] = a.runs;
-  if (newest) card.append(runView(newest));
-  if (earlier.length) {
-    // Keeps its open state across refreshes, keyed by agent id.
-    const details = el("details", "earlier");
-    details.append(el("summary", null, earlier.length + (earlier.length === 1 ? " earlier run" : " earlier runs")));
-    details.open = openEarlier.get(a.id) === true;
-    details.addEventListener("toggle", () => openEarlier.set(a.id, details.open));
-    for (const r of earlier) details.append(runView(r));
-    card.append(details);
-  }
-  return card;
-}
-
-function render(list) {
-  const shownAgents = list.filter((a) => endedBox.checked || a.alive);
-  const cards = shownAgents.map(agentView);
-  if (!cards.length) cards.push(el("p", "meta", "No agents use rein right now."));
-  agentsBox.replaceChildren(...cards);
-}
-
-async function poll() {
-  try {
-    const res = await fetch("/api/agents", { cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    last = await res.json();
-    render(last);
-    statusLine.textContent = "updated " + new Date().toLocaleTimeString();
-  } catch (e) {
-    statusLine.textContent = "cannot read agents: " + e.message;
-  }
-}
-
-endedBox.addEventListener("change", () => render(last));
-poll();
-setInterval(poll, 2000);
-</script>
+<script type="module">__SCRIPT__</script>
 </body>
 </html>

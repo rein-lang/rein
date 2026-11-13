@@ -2,26 +2,23 @@
 //! its functions with their answers, and the step each run waits on. It reads the run logs the agents write, and
 //! writes nothing.
 
-use std::collections::HashMap;
 use std::fs;
 use std::net::TcpListener;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Args;
 use serde_json::{json, Map, Value};
 
-use crate::{cli, graph as graph_cmd, http, run_log};
+use crate::watch_program::{self as program_of, Programs};
+use crate::{graph as graph_cmd, http, run_log};
 
 /// A step-file agent with no event for this long has ended.
 const STEP_IDLE_MS: u64 = 10 * 60 * 1000;
 
 /// How many errors of an agent the page keeps.
 const MAX_ERRORS: usize = 5;
-
-/// The functions of each program already loaded in one poll. None when the program does not load.
-type Programs = HashMap<String, Option<Vec<String>>>;
 
 /// Flags of `rein watch`.
 #[derive(Args)]
@@ -67,10 +64,17 @@ fn serve(a: &WatchArgs) -> Result<(), String> {
 /// The page, and the agents as JSON. Any other route is not found.
 fn respond(dir: &Path, method: &str, path: &str) -> http::Reply {
     match (method, path) {
-        ("GET", "/") => ("200 OK", "text/html", include_str!("watch_page.html").to_string()),
+        ("GET", "/") => ("200 OK", "text/html", page()),
         ("GET", "/api/agents") => ("200 OK", "application/json", agents(dir, now_ms()).to_string()),
         _ => ("404 Not Found", "text/plain", "not found\n".to_string()),
     }
+}
+
+/// The page: its style, its script and the Mermaid build the script loads, inlined into one document.
+fn page() -> String {
+    include_str!("watch_page.html")
+        .replace("__CSS__", include_str!("watch_page.css"))
+        .replace("__SCRIPT__", &include_str!("watch_page.js").replace("__MERMAID__", graph_cmd::MERMAID))
 }
 
 fn now_ms() -> u64 {
@@ -121,16 +125,22 @@ fn agent(path: &Path, now: u64, programs: &mut Programs) -> Option<Value> {
     let mut runs = if step { step_runs(&lines) } else { event_runs(&lines) };
     runs.sort_by_key(|r| std::cmp::Reverse(r.last_ts));
     let cwd = header["cwd"].as_str().unwrap_or_default();
-    let runs: Vec<Value> = runs.iter().map(|r| r.to_json(programs, cwd)).collect();
+    // Only the newest run is open on the page, so only its graph is built.
+    let runs: Vec<Value> = runs.iter().enumerate().map(|(i, r)| r.to_json(programs, cwd, i == 0)).collect();
     // A start with no run id made no run. Its error is kept here, the last few.
     let errors: Vec<Value> = lines
         .iter()
         .filter(|v| v["event"] == "start" && v["run"].is_null() && v["step"]["kind"] == "error")
-        .map(|v| json!({"ts": ts_of(v), "program": v["program"], "message": v["step"]["message"]}))
+        .filter_map(|v| {
+            // The log is written by other processes: a message that is not text is left out.
+            let message = v["step"]["message"].as_str()?;
+            Some(json!({"ts": ts_of(v), "program": string_or_null(&v["program"]), "message": message}))
+        })
         .collect();
     let errors = errors[errors.len().saturating_sub(MAX_ERRORS)..].to_vec();
     Some(json!({
-        "id": id, "transport": transport, "pid": pid, "cwd": header["cwd"], "session": header["session"],
+        "id": id, "transport": transport, "pid": pid, "cwd": string_or_null(&header["cwd"]),
+        "session": string_or_null(&header["session"]),
         "alive": alive, "last_ts": last_ts, "runs": runs, "errors": errors,
     }))
 }
@@ -144,6 +154,11 @@ fn process_alive(pid: u64) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// The value when it is a string, else null. The log is written by other processes, so a field may hold anything.
+fn string_or_null(v: &Value) -> Value {
+    v.as_str().map_or(Value::Null, |s| json!(s))
 }
 
 fn ts_of(v: &Value) -> u64 {
@@ -208,35 +223,40 @@ impl Run {
         }
     }
 
-    fn to_json(&self, programs: &mut Programs, cwd: &str) -> Value {
+    /// The run as JSON. Only the newest run of an agent (`newest`) loads its program: it gets the graph and the
+    /// changed-program check. Older runs list their functions from the trace and the answers.
+    fn to_json(&self, programs: &mut Programs, cwd: &str, newest: bool) -> Value {
         let trace = self.step["trace"].as_array().cloned().unwrap_or_default();
-        let folder = self.program.as_str().and_then(|p| resolve_folder(p, cwd));
+        let folder = self.program.as_str().and_then(|p| program_of::resolve_folder(p, cwd));
         let program = folder
             .as_ref()
             .and_then(|f| f.file_name())
-            .map_or_else(|| self.program.clone(), |n| json!(n.to_string_lossy()));
+            .map_or_else(|| string_or_null(&self.program), |n| json!(n.to_string_lossy()));
+        let name = self.program.as_str().unwrap_or_default();
+        let loaded = if newest { program_of::program(programs, folder.as_deref(), name) } else { None };
+        let names: Vec<String> = trace.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        // A program changed since the run gives no graph, rather than a wrong one.
+        let changed = loaded.as_deref().is_some_and(|l| !program_of::matches_run(l, &names, &self.answers));
+        let (mermaid, mermaid_full) = match (&loaded, newest) {
+            (Some(l), true) if !changed => {
+                let (path, full) = program_of::walk_mermaid(l, &self.step, self.entry.as_str().unwrap_or_default(), &names);
+                (Some(path), Some(full))
+            }
+            _ => (None, None),
+        };
+        let functions = self.functions(loaded.as_deref().map(program_of::function_names), &trace);
         json!({
             "run": self.id, "program": program, "entry": self.entry, "status": self.status(),
             "started_ts": self.started_ts, "last_ts": self.last_ts, "step": self.step, "error": self.error,
-            "trace": trace, "inputs": self.inputs,
-            "functions": self.functions(programs, &trace, folder.as_deref()),
+            "trace": trace, "inputs": self.inputs, "functions": functions, "mermaid": mermaid, "mermaid_full": mermaid_full, "program_changed": changed,
             "events": self.events,
         })
     }
 
     /// The functions of the program, with `visited` from the trace and the answers that start with each name. A
     /// program that does not load lists the functions seen in the trace and the answers.
-    fn functions(&self, programs: &mut Programs, trace: &[Value], folder: Option<&Path>) -> Value {
+    fn functions(&self, loaded: Option<Vec<String>>, trace: &[Value]) -> Value {
         let trace: Vec<&str> = trace.iter().filter_map(Value::as_str).collect();
-        let key = folder
-            .map(|f| f.display().to_string())
-            .or_else(|| self.program.as_str().map(str::to_string));
-        let loaded = key.and_then(|key| {
-            programs
-                .entry(key.clone())
-                .or_insert_with(|| load_functions(folder, &key))
-                .clone()
-        });
         let names: Vec<String> = loaded.unwrap_or_else(|| {
             let mut names: Vec<String> = Vec::new();
             let seen = trace.iter().map(|t| t.to_string());
@@ -344,43 +364,6 @@ fn step_runs(lines: &[Value]) -> Vec<Run> {
         previous = Some((program, entry, answers));
     }
     runs
-}
-
-/// The functions of a program, sorted, without templates. None when the program does not load.
-/// The folder a relative program path names (`.`, `..`, `./x`, `../x`), resolved against the agent's cwd. None for
-/// a flow name.
-fn resolve_folder(program: &str, cwd: &str) -> Option<PathBuf> {
-    let relative = program == "." || program == ".." || program.starts_with("./") || program.starts_with("../");
-    if !relative || cwd.is_empty() {
-        return None;
-    }
-    let mut out = PathBuf::new();
-    for part in Path::new(cwd).join(program).components() {
-        match part {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    Some(out)
-}
-
-/// The functions of a program: the folder it is, or the flow name. None when the program does not load.
-fn load_functions(folder: Option<&Path>, name: &str) -> Option<Vec<String>> {
-    let loaded = match folder {
-        Some(dir) => cli::load_flow(Some(dir.to_path_buf()), None),
-        None => cli::load_flow(None, Some(name.to_string())),
-    };
-    let (project, _) = loaded.ok()?;
-    let mut names: Vec<String> = project
-        .functions()
-        .filter(|(_, sf)| !sf.function.is_template())
-        .map(|(n, _)| n.clone())
-        .collect();
-    names.sort();
-    Some(names)
 }
 
 #[cfg(test)]
