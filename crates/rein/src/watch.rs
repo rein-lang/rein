@@ -224,8 +224,10 @@ impl Run {
         let name = self.program.as_str().unwrap_or_default();
         let loaded = program_of::program(programs, folder.as_deref(), name);
         let names: Vec<String> = trace.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        // A program changed since the run gives no graph, rather than a wrong one.
+        let changed = loaded.as_deref().is_some_and(|l| !program_of::matches_run(l, &names, &self.answers));
         let (mermaid, mermaid_full) = match (&loaded, graph) {
-            (Some(l), true) => {
+            (Some(l), true) if !changed => {
                 let (path, full) = program_of::walk_mermaid(l, &self.step, self.entry.as_str().unwrap_or_default(), &names);
                 (Some(path), Some(full))
             }
@@ -235,7 +237,7 @@ impl Run {
         json!({
             "run": self.id, "program": program, "entry": self.entry, "status": self.status(),
             "started_ts": self.started_ts, "last_ts": self.last_ts, "step": self.step, "error": self.error,
-            "trace": trace, "inputs": self.inputs, "functions": functions, "mermaid": mermaid, "mermaid_full": mermaid_full,
+            "trace": trace, "inputs": self.inputs, "functions": functions, "mermaid": mermaid, "mermaid_full": mermaid_full, "program_changed": changed,
             "events": self.events,
         })
     }

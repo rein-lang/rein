@@ -175,6 +175,7 @@ function runView(agent, run, newest) {
     box.append(head, now, pills(run));
   }
   if (newest && run.mermaid) box.append(graphFor(key, run));
+  else if (newest && run.program_changed) box.append(el("div", "graph graph-note", "Program changed since this run"));
   if (run.step && run.step.kind === "question") {
     const d = details(key + "|question", "Question text", "text");
     d.append(el("p", null, run.step.description || "(no text)"));

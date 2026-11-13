@@ -328,3 +328,26 @@ fn the_default_graph_names_only_the_functions_on_the_path() {
     assert!(!path.contains("Does the PR change only documentation files?"), "{path}");
     assert!(full.contains("Does the PR change only documentation files?"), "{full}");
 }
+
+#[test]
+fn a_program_changed_since_the_run_gives_no_graph() {
+    let dir = folder("changed");
+    let example = format!("{}/../../examples/rein/merge-pr", env!("CARGO_MANIFEST_DIR"));
+    // The trace names a function the program does not have.
+    let step = |trace: &[&str]| question("main.task", trace);
+    let header = json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null, "cwd": example, "session": "c1"});
+    let call = |ts: u64, trace: &[&str]| {
+        json!({"ts": ts, "event": "step", "program": ".", "request": {"entry": "main", "answers": {}}, "step": step(trace)})
+    };
+    write(&dir, "step-c1.jsonl", &[header.clone(), call(1001, &["main", "gone"])]);
+    let a = agent_named(&agents(&dir, 1001), "step-c1");
+    assert!(a["runs"][0]["mermaid"].is_null() && a["runs"][0]["mermaid_full"].is_null(), "{a}");
+    assert_eq!(a["runs"][0]["program_changed"], true, "{a}");
+    // The answer keys name a question the program does not ask.
+    let stale = json!({"ts": 1002, "event": "step", "program": ".",
+        "request": {"entry": "main", "answers": {"main.gone": "x"}}, "step": step(&["main"])});
+    write(&dir, "step-c1.jsonl", &[header, stale]);
+    let a = agent_named(&agents(&dir, 1002), "step-c1");
+    assert!(a["runs"][0]["mermaid"].is_null(), "{a}");
+    assert_eq!(a["runs"][0]["program_changed"], true, "{a}");
+}

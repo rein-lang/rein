@@ -3,6 +3,7 @@
   --accent: #2f6fde; --on-accent: #ffffff; --ok: #1d7a3a; --wait: #8a5a00; --stop: #5a5f69; --err: #b42318;
   --graph-bg: #fbfcfd; --cluster-bg: #eef2f8; --cluster-line: #9aa6bb; --node-fill: #ffffff; --node-line: #5b6474;
   --node-text: #1d2330; --dim-fill: #eceef2; --dim-line: #7c8596; --dim-text: #3b4454; --edge: #5b6474;
+  --taken-fill: #dcfce7; --taken-line: #16a34a; --now-fill: #fde68a; --now-line: #d97706;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -10,6 +11,7 @@
     --accent: #8fb4ff; --on-accent: #0f1420; --ok: #6cc98a; --wait: #e8b75a; --stop: #b4b8c2; --err: #ff8a80;
     --graph-bg: #161a21; --cluster-bg: #1f242d; --cluster-line: #4b5566; --node-fill: #2a303b; --node-line: #7d8799;
     --node-text: #e6e9ef; --dim-fill: #242932; --dim-line: #6b7383; --dim-text: #c9cfda; --edge: #9aa3b2;
+    --taken-fill: #bbf7d0; --taken-line: #4ade80; --now-fill: #fde68a; --now-line: #f59e0b;
   }
 }
 :root[data-theme="dark"] {
@@ -17,6 +19,7 @@
   --accent: #8fb4ff; --on-accent: #0f1420; --ok: #6cc98a; --wait: #e8b75a; --stop: #b4b8c2; --err: #ff8a80;
   --graph-bg: #161a21; --cluster-bg: #1f242d; --cluster-line: #4b5566; --node-fill: #2a303b; --node-line: #7d8799;
   --node-text: #e6e9ef; --dim-fill: #242932; --dim-line: #6b7383; --dim-text: #c9cfda; --edge: #9aa3b2;
+  --taken-fill: #bbf7d0; --taken-line: #4ade80; --now-fill: #fde68a; --now-line: #f59e0b;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
@@ -63,8 +66,15 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); bor
 .mode[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
 .graph { background: var(--graph-bg); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-width: 100%; max-height: 70vh; padding: 8px; margin: 0; }
 .graph svg { display: block; width: 100%; height: auto; }
-/* Taken and current nodes keep light fills from Mermaid, so their text stays dark in both themes. */
+/* Taken and current nodes use the taken and now tokens, in both themes, with dark text. The key swatches use them too. */
 .graph .taken *, .graph .current * { color: #111 !important; }
+.graph .taken .label-container, .graph .taken path, .graph .taken polygon, .graph .taken rect { fill: var(--taken-fill) !important; stroke: var(--taken-line) !important; }
+.graph .current .label-container, .graph .current path, .graph .current polygon, .graph .current rect { fill: var(--now-fill) !important; stroke: var(--now-line) !important; }
+.key { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0; }
+.swatch { display: inline-block; width: 14px; height: 14px; border: 2px solid; border-radius: 3px; }
+.swatch.taken { background: var(--taken-fill); border-color: var(--taken-line); }
+.swatch.now { background: var(--now-fill); border-color: var(--now-line); }
+.graph-note { color: var(--muted); font-size: 14px; display: flex; align-items: center; justify-content: center; min-height: 60px; }
 /* Nodes off the path: the shape fades to 60%, the text stays at full strength. */
 .graph .dimmed { opacity: 1 !important; }
 .graph .dimmed .label-container, .graph .dimmed path, .graph .dimmed polygon, .graph .dimmed rect { fill: var(--dim-fill) !important; stroke: var(--dim-line) !important; opacity: 0.6 !important; }

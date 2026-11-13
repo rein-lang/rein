@@ -8,7 +8,7 @@ use std::rc::Rc;
 use rein_core::graph::{self, Graph, NodeKind};
 use rein_core::project::{Project, ENTRY};
 use rein_core::step::StepResponse;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::cli;
 
@@ -65,6 +65,19 @@ pub fn program(programs: &mut Programs, folder: Option<&Path>, name: &str) -> Op
             loaded.ok().map(|(project, entry)| Rc::new(Loaded { project, entry }))
         })
         .clone()
+}
+
+/// Whether the loaded program still has what a run used: each function on its trace, and an input or response for
+/// each answer the run logged. A program changed since the run fails this, and its graph would show the wrong place.
+pub fn matches_run(loaded: &Loaded, trace: &[String], answers: &Map<String, Value>) -> bool {
+    let project = &loaded.project;
+    trace.iter().all(|f| project.get(f).is_some())
+        && answers.keys().all(|key| {
+            let Some((function, name)) = key.rsplit_once('.') else { return false };
+            project
+                .get(function)
+                .is_some_and(|sf| sf.function.input(name).or_else(|| sf.function.response(name)).is_some())
+        })
 }
 
 /// The functions of a program, sorted, without templates.

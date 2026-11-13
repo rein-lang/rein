@@ -476,7 +476,9 @@ pub fn mermaid(g: &Graph) -> String {
             .replace('"', "#quot;")
             .replace('<', "#lt;")
             .replace('>', "#gt;")
-            .replace('`', "#96;")
+            // ponytail: Mermaid reads a backtick as a markdown code span, which fails inside a label with a line break.
+            // The grave accent looks like it and renders as text. Upgrade if Mermaid fixes its markdown.
+            .replace('`', "\u{2cb}")
             .replace('\n', "<br/>")
     };
     let shape = |n: &Node| {

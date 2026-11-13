@@ -78,9 +78,22 @@ fn mermaid_escapes_quotes_hashes_and_backticks() {
     let p = one("  return \"say \\\"hi\\\" #1 `x`\";", "");
     let text = mermaid(&flow(&p, "main"));
     assert!(
-        text.contains("say #quot;hi#quot; #35;1 #96;x#96;"),
+        text.contains("say #quot;hi#quot; #35;1 \u{2cb}x\u{2cb}"),
         "{text}"
     );
+}
+
+#[test]
+fn a_backtick_in_a_question_with_a_line_break_has_no_markdown_code_span() {
+    // Mermaid turns a backtick pair into a code span, which fails in a label with <br/>. The label must not hold one.
+    let p = one(
+        "  if (account == \"work\") {\n    return `a`;\n  }\n  return `b`;",
+        "  /** Run `gh api user --jq .login` first? */\n  account: \"private\" | \"work\",\n",
+    );
+    let text = mermaid(&flow(&p, "main"));
+    let label = text.lines().find(|l| l.contains("<br/>")).unwrap_or_default();
+    assert!(label.contains("gh api user"), "{text}");
+    assert!(!label.contains('`') && !label.contains("#96;"), "{text}");
 }
 
 #[test]
