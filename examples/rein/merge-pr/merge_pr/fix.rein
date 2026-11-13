@@ -9,6 +9,7 @@ export default function fixCi(
     return `Wait for CI to finish. Then start this program again with the task
     merge.`;
   }
+
   return `Read the CI log. Fix the failing test or code. Push the fix. Then run
   merge_pr/fix again.`;
 }

@@ -679,9 +679,9 @@ fn at(uri: &str, line: u64, character: u64) -> Value {
 fn escalate_calls() -> Vec<Spot> {
     vec![
         spot("faq.rein", 8, 11, 8, 22),
-        spot("faq.rein", 21, 9, 21, 20),
+        spot("faq.rein", 24, 9, 24, 20),
         spot("main.rein", 12, 11, 12, 22),
-        spot("main.rein", 18, 13, 18, 24),
+        spot("main.rein", 19, 13, 19, 24),
         spot("refund.rein", 8, 11, 8, 22),
     ]
 }
@@ -722,17 +722,17 @@ fn references_of_a_parameter_include_named_arguments() {
     let refund = open_file(&mut server, &root, "refund.rein");
 
     // From `opening=` in the call: the argument, the struct field, each destructuring, and each `${opening}` use.
-    let mut params = at(&refund, 11, 6);
+    let mut params = at(&refund, 12, 6);
     params["context"] = json!({"includeDeclaration": true});
     let refs = server.request(2, "textDocument/references", params);
     assert_eq!(
         spots(&root, &refs["result"]),
         vec![
-            spot("faq.rein", 17, 6, 17, 13),
+            spot("faq.rein", 19, 6, 19, 13),
             spot("faq/close_ticket.rein", 3, 38, 3, 45),
             spot("faq/close_ticket.rein", 4, 31, 4, 38),
             spot("message.struct.rein", 5, 2, 5, 9),
-            spot("refund.rein", 11, 4, 11, 11),
+            spot("refund.rein", 12, 4, 12, 11),
             spot("refund/tell_customer.rein", 3, 39, 3, 46),
             spot("refund/tell_customer.rein", 4, 12, 4, 19),
         ],
@@ -776,10 +776,10 @@ fn definition_goes_to_functions_parameters_and_std() {
     let refund = open_file(&mut server, &root, "refund.rein");
 
     // A reference goes to the name of the function it names.
-    let def = server.request(2, "textDocument/definition", at(&refund, 10, 20));
+    let def = server.request(2, "textDocument/definition", at(&refund, 11, 20));
     assert_eq!(spot_of(&root, &def["result"]), spot("refund/tell_customer.rein", 3, 24, 3, 36), "{def}");
     // `opening=` in a call goes to that field of the struct.
-    let def = server.request(3, "textDocument/definition", at(&refund, 11, 6));
+    let def = server.request(3, "textDocument/definition", at(&refund, 12, 6));
     assert_eq!(spot_of(&root, &def["result"]), spot("message.struct.rein", 5, 2, 5, 9), "{def}");
     // A parameter used in the body goes to its declaration.
     let def = server.request(4, "textDocument/definition", at(&refund, 7, 8));
@@ -817,7 +817,7 @@ fn hover_shows_function_docs_and_callee_parameters() {
     assert_eq!(hover["result"]["range"], json!({"start": {"line": 3, "character": 24}, "end": {"line": 3, "character": 32}}));
 
     // On `opening=` in a call: the callee's parameter type and question.
-    let hover = server.request(3, "textDocument/hover", at(&refund, 11, 6));
+    let hover = server.request(3, "textDocument/hover", at(&refund, 12, 6));
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
     assert!(text.contains("opening: string"), "{text}");
     assert!(text.contains("The first part of the sentence, such as the action taken."), "{text}");
@@ -858,8 +858,8 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     assert_eq!(
         calls_of(&root, &incoming["result"], "from"),
         vec![
-            ("faq".to_string(), vec![spot("faq.rein", 8, 11, 8, 22), spot("faq.rein", 21, 9, 21, 20)]),
-            ("main".to_string(), vec![spot("main.rein", 12, 11, 12, 22), spot("main.rein", 18, 13, 18, 24)]),
+            ("faq".to_string(), vec![spot("faq.rein", 8, 11, 8, 22), spot("faq.rein", 24, 9, 24, 20)]),
+            ("main".to_string(), vec![spot("main.rein", 12, 11, 12, 22), spot("main.rein", 19, 13, 19, 24)]),
             ("refund".to_string(), vec![spot("refund.rein", 8, 11, 8, 22)]),
         ],
         "{incoming}"
@@ -872,7 +872,7 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     // Outgoing ranges are in the caller's file.
     let ranges = &outgoing["result"][0]["fromRanges"];
     assert_eq!(ranges[0], json!({"start": {"line": 12, "character": 11}, "end": {"line": 12, "character": 22}}));
-    assert_eq!(ranges[1], json!({"start": {"line": 18, "character": 13}, "end": {"line": 18, "character": 24}}));
+    assert_eq!(ranges[1], json!({"start": {"line": 19, "character": 13}, "end": {"line": 19, "character": 24}}));
 
     server.shutdown();
 }
@@ -902,7 +902,7 @@ fn document_symbols_outline_the_function_and_its_names() {
         children,
         vec![
             ("article_found".to_string(), "boolean".to_string(), spot("faq.rein", 5, 2, 5, 15)),
-            ("solved".to_string(), "boolean".to_string(), spot("faq.rein", 11, 8, 11, 14)),
+            ("solved".to_string(), "boolean".to_string(), spot("faq.rein", 12, 8, 12, 14)),
         ]
     );
 
@@ -932,7 +932,7 @@ fn workspace_symbols_search_every_program() {
     // An empty query lists every function of the four example programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
-    assert_eq!(all_symbols.len(), 22, "{all}");
+    assert_eq!(all_symbols.len(), 23, "{all}");
     assert!(
         all_symbols.iter().any(|s| s["name"] == "message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"
@@ -979,11 +979,11 @@ fn rename_a_parameter_updates_named_arguments() {
     let mut server = start_with_file_renames();
     let refund = open_file(&mut server, &root, "refund.rein");
 
-    let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 11, 6));
+    let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 12, 6));
     assert_eq!(prepared["result"]["placeholder"], "opening");
-    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 11, "character": 4}, "end": {"line": 11, "character": 11}}));
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 12, "character": 4}, "end": {"line": 12, "character": 11}}));
 
-    let mut params = at(&refund, 11, 6);
+    let mut params = at(&refund, 12, 6);
     params["newName"] = json!("lead");
     let edit = server.request(3, "textDocument/rename", params);
     let lead = |s: Spot| (s, "lead".to_string());
@@ -991,11 +991,11 @@ fn rename_a_parameter_updates_named_arguments() {
         edits_of(&root, &edit["result"]),
         (
             vec![
-                lead(spot("faq.rein", 17, 6, 17, 13)),
+                lead(spot("faq.rein", 19, 6, 19, 13)),
                 lead(spot("faq/close_ticket.rein", 3, 38, 3, 45)),
                 lead(spot("faq/close_ticket.rein", 4, 31, 4, 38)),
                 lead(spot("message.struct.rein", 5, 2, 5, 9)),
-                lead(spot("refund.rein", 11, 4, 11, 11)),
+                lead(spot("refund.rein", 12, 4, 12, 11)),
                 lead(spot("refund/tell_customer.rein", 3, 39, 3, 46)),
                 lead(spot("refund/tell_customer.rein", 4, 12, 4, 19)),
             ],
@@ -1005,7 +1005,7 @@ fn rename_a_parameter_updates_named_arguments() {
     );
 
     // A name that is not an identifier fails the request.
-    let mut params = at(&refund, 11, 6);
+    let mut params = at(&refund, 12, 6);
     params["newName"] = json!("2x");
     let failed = server.request(4, "textDocument/rename", params);
     assert_eq!(failed["error"]["code"], -32803, "{failed}");
@@ -1034,9 +1034,9 @@ fn rename_a_function_renames_its_file_and_references() {
             vec![
                 handoff(spot("escalate.rein", 3, 24, 3, 32)),
                 handoff(spot("faq.rein", 8, 14, 8, 22)),
-                handoff(spot("faq.rein", 21, 12, 21, 20)),
+                handoff(spot("faq.rein", 24, 12, 24, 20)),
                 handoff(spot("main.rein", 12, 14, 12, 22)),
-                handoff(spot("main.rein", 18, 16, 18, 24)),
+                handoff(spot("main.rein", 19, 16, 19, 24)),
                 handoff(spot("refund.rein", 8, 14, 8, 22)),
             ],
             vec![("escalate.rein".to_string(), "handoff.rein".to_string())]
@@ -1531,9 +1531,9 @@ fn completion_offers_argument_names_and_union_members() {
 
     // After `case "`: the members of the switch subject. Each replaces the whole literal.
     let main = open_file(&mut server, &root, "main.rein");
-    let items = server.request(3, "textDocument/completion", at(&main, 15, 10));
+    let items = server.request(3, "textDocument/completion", at(&main, 16, 10));
     assert_eq!(labels(&items), ["\"billing\"", "\"account\"", "\"how_to\""], "{items}");
-    let range = json!({"start": {"line": 15, "character": 9}, "end": {"line": 15, "character": 18}});
+    let range = json!({"start": {"line": 16, "character": 9}, "end": {"line": 16, "character": 18}});
     assert_eq!(items["result"][0]["textEdit"]["range"], range);
 
     // After `c === "`: the members of `c`.

@@ -1184,3 +1184,90 @@ fn all_string_body_that_is_a_hand_off_is_a_normal_function() {
         "unused parameter `b`",
     );
 }
+
+/// The blank-line warnings of one function source: each message, with the text it points at.
+fn if_blank_warnings(src: &str) -> Vec<(String, String)> {
+    let (f, parse_errors) = crate::parser::parse(src);
+    assert!(parse_errors.is_empty(), "{src}: {parse_errors:?}");
+    check_if_blank_lines(&f, src)
+        .into_iter()
+        .inspect(|d| assert_eq!(d.severity, Severity::Warning, "{src}"))
+        .map(|d| (d.message.clone(), src[d.span.start..d.span.end].to_string()))
+        .collect()
+}
+
+#[test]
+fn an_if_with_blank_lines_around_it_has_no_warning() {
+    let src = "/** F. */\nexport default function f(/** A? */ a: boolean) {\n  if (a) {\n    return `yes`;\n  }\n\n  if (!a) {\n    return `no`;\n  }\n\n  return `maybe`;\n}\n";
+    assert!(if_blank_warnings(src).is_empty());
+}
+
+#[test]
+fn an_if_after_a_statement_needs_an_empty_line_before_it() {
+    let src = "/** F. */\nexport default function f(/** A? */ a: boolean, /** B? */ b: boolean) {\n  if (b) {\n    return `no`;\n  }\n\n  // Check the flag.\n  if (a) {\n    return `yes`;\n  }\n\n  return `maybe`;\n}\n";
+    assert_eq!(
+        if_blank_warnings(src),
+        [("add an empty line before `if`".to_string(), "if".to_string())]
+    );
+}
+
+#[test]
+fn the_closing_brace_of_an_if_block_needs_an_empty_line_after_it() {
+    let src = "/** F. */\nexport default function f(/** A? */ a: boolean) {\n  if (a) {\n    return `yes`;\n  }\n  // Fallback.\n  return `maybe`;\n}\n";
+    assert_eq!(
+        if_blank_warnings(src),
+        [("add an empty line after the `if` block".to_string(), "}".to_string())]
+    );
+}
+
+#[test]
+fn the_first_statement_of_a_block_needs_no_empty_line_before_it() {
+    // The function body, an `if` block and a `case` body each start with an `if`: no warning for it.
+    let src = "/** F. */\nexport default function f(/** A? */ a: boolean, /** C? */ c: \"x\" | \"y\") {\n  if (a) {\n    if (a) {\n      return `inner`;\n    }\n\n    return `outer`;\n  }\n\n  switch (c) {\n    case \"x\":\n      if (a) {\n        return `x`;\n      }\n\n      return `x-other`;\n    case \"y\": return `y`;\n  }\n}\n";
+    assert!(if_blank_warnings(src).is_empty(), "{:?}", if_blank_warnings(src));
+}
+
+#[test]
+fn a_closing_brace_followed_by_a_closing_brace_needs_no_empty_line() {
+    let src = "/** F. */\nexport default function f(/** A? */ a: boolean) {\n  if (a) {\n    if (a) {\n      return `x`;\n    }\n  }\n\n  return `y`;\n}\n";
+    assert!(if_blank_warnings(src).is_empty(), "{:?}", if_blank_warnings(src));
+}
+
+#[test]
+fn else_is_a_parse_error_so_no_else_if_chain_reaches_the_check() {
+    // Rein has no `else`, so an `else if` chain never gets a blank-line warning. It is a syntax error.
+    let src = "/** F. */\nexport default function f(/** A? */ a: boolean) {\n  if (a) {\n    return `yes`;\n  } else if (!a) {\n    return `no`;\n  }\n\n  return `maybe`;\n}\n";
+    let (_, parse_errors) = crate::parser::parse(src);
+    assert!(parse_errors.iter().any(|d| d.message.contains("Rein has no `else`")), "{parse_errors:?}");
+}
+
+#[test]
+fn an_if_block_that_ends_the_file_needs_no_empty_line_after_it() {
+    // The function's `}` shares the last line with the `if` block's `}`, so no line follows the block.
+    let src = "/** F. */\nexport default function f(/** A? */ a: boolean) {\n  if (a) {\n    return `yes`;\n  } }";
+    let (_, parse_errors) = crate::parser::parse(src);
+    assert!(parse_errors.is_empty(), "{parse_errors:?}");
+    assert!(if_blank_warnings(src).is_empty(), "{:?}", if_blank_warnings(src));
+}
+
+#[test]
+fn crlf_line_endings_give_the_same_blank_line_warnings_as_lf() {
+    let lf = "/** F. */\nexport default function f(/** A? */ a: boolean) {\n  if (a) {\n    return `yes`;\n  }\n  // Check the flag.\n  if (!a) {\n    return `no`;\n  }\n  return `maybe`;\n}\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let expected = [
+        ("add an empty line after the `if` block".to_string(), "}".to_string()),
+        ("add an empty line before `if`".to_string(), "if".to_string()),
+        ("add an empty line after the `if` block".to_string(), "}".to_string()),
+    ];
+    assert_eq!(if_blank_warnings(lf), expected);
+    assert_eq!(if_blank_warnings(&crlf), expected);
+}
+
+#[test]
+fn an_await_request_line_above_an_if_needs_an_empty_line_before_it() {
+    let src = "/** F. */\nexport default async function f(/** A? */ a: boolean) {\n  /** Ok? */\n  const ok: boolean = await request(\"do it\");\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n";
+    assert_eq!(
+        if_blank_warnings(src),
+        [("add an empty line before `if`".to_string(), "if".to_string())]
+    );
+}

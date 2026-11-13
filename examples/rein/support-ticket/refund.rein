@@ -8,6 +8,7 @@ export default function refund(
   if (refund_over_limit) {
     return @./escalate;
   }
+
   return @./refund/tell_customer(
     opening=`Refund the amount the customer asked for and confirm it in the
     ticket.`,

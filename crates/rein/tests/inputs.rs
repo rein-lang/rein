@@ -394,7 +394,7 @@ fn argument_that_is_not_a_string_input_is_a_check_error() {
 #[test]
 fn string_input_is_a_template_argument_and_the_check_is_clean() {
     let flow = Flow::new(&[
-        ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return @./tpl(a=pr, b=`b`);\n  }\n  return `n`;\n}\n"),
+        ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return @./tpl(a=pr, b=`b`);\n  }\n\n  return `n`;\n}\n"),
         ("tpl.rein", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** Template. */\nexport default function tpl({ a, b }: Input) {\n  return `${a} then ${b}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);

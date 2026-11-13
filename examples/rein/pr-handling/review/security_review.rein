@@ -1,0 +1,22 @@
+/**
+ * Review a pull request for security problems.
+ * Request changes when one is found, else approve.
+ */
+export default async function securityReview(
+  /** The link of the pull request to review. */
+  pr: string,
+) {
+  /** Did the security review find a problem that must be fixed? */
+  const security_problem: boolean = await request(
+    delegate(model=`use opus model`, task=`review the pull request ${pr}
+    with a security focus and list each problem with file and line`),
+  );
+
+  if (security_problem) {
+    return @./post_review(kind=`request changes`,
+      body=`each security problem, with its file and line`, pr=pr);
+  }
+
+  return @./post_review(kind=`approve`,
+    body=`the security checks you made`, pr=pr);
+}

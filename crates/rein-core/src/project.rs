@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{is_struct, walk_stmts, Binding, Callee, Function, Input, ReturnValue, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
-use crate::check::{check_function, check_length, check_line_length, Kind};
+use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
 use crate::parser::parse;
@@ -462,6 +462,7 @@ impl Project {
                     diags.extend(check_length(&sf.function, name, &sf.text, self.max_function_lines));
                 }
                 diags.extend(check_line_length(&sf.text, self.max_line_length));
+                diags.extend(check_if_blank_lines(&sf.function, &sf.text));
                 let bindings = self.bindings(name);
                 diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &adj));
                 if !is_struct(name) && reachable.as_ref().is_some_and(|r| !r.contains(name)) {

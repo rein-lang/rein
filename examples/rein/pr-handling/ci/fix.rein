@@ -24,10 +24,12 @@ export default async function fixCi({ pr, cause }: Input) {
         `Read the CI log of ${pr}. Find the first failing step. Fix the test
         or the code. Push one commit.`,
       );
+
       if (fix_pushed) {
         return `Wait for CI to finish on ${pr}. Then start this program again
         with the task merge.`;
       }
+
       return askUser(
         question=`I cannot fix the failing CI job of ${pr}. What do you want
         me to try?`,

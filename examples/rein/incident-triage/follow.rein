@@ -7,8 +7,10 @@ export default async function followRunbook() {
     `Run the runbook steps for this alert. Then check the alert status and
     report whether it cleared.`,
   );
+
   if (fixed) {
     return `Close the alert. Write a one-line note with the steps you ran.`;
   }
+
   return @./page_human;
 }
