@@ -1,13 +1,16 @@
 //! The writer and the reader together: `rein step` writes the run log, and `rein watch` reads it back over HTTP. A
 //! contract mismatch between them fails here.
 
+mod common;
+
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 
-use serde_json::Value;
+use common::Client;
+use serde_json::{json, Value};
 
 /// A running `rein watch`. It is killed when the test ends, even when an assertion fails.
 struct Watch {
@@ -116,6 +119,118 @@ fn rein_step_runs_are_read_back_by_rein_watch() {
         serde_json::json!({"draft": "no", "task": "merge"}),
         "{run}"
     );
+    fs::remove_dir_all(&runs).unwrap();
+}
+
+/// A running `rein serve --mcp`. It is killed when the test ends, even when an assertion fails.
+struct Mcp {
+    child: Child,
+    client: Client,
+}
+
+impl Drop for Mcp {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A `rein serve --mcp` that writes its run log to `runs`, after the MCP handshake.
+fn serve_mcp(runs: &Path) -> Mcp {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .canonicalize()
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .args(["serve", "--mcp"])
+        .current_dir(&examples)
+        .env("REIN_RUNS_DIR", runs)
+        .env("REIN_HOME", examples.join("no-user-programs"))
+        .env("REIN_SYSTEM_DIRS", "")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut client = Client {
+        stdin: child.stdin.take().unwrap(),
+        stdout: BufReader::new(child.stdout.take().unwrap()),
+        id: 0,
+    };
+    let init = client.request(
+        "initialize",
+        json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}),
+    );
+    assert_eq!(init["result"]["serverInfo"]["name"], "rein", "{init}");
+    client.notify("notifications/initialized");
+    Mcp { child, client }
+}
+
+fn merge_pr() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/rein/merge-pr/main.rein")
+        .canonicalize()
+        .unwrap()
+}
+
+/// The agents that `rein watch` on `port` lists.
+fn api_agents(port: u16) -> Vec<Value> {
+    let body: Value = serde_json::from_str(&get(port, "/api/agents")).unwrap();
+    body.as_array().unwrap().clone()
+}
+
+// The MCP server writes each event before it answers the call, so the log is complete when the reply arrives.
+// No polling is needed, and `rein watch` reads the log on each request.
+#[test]
+fn rein_serve_mcp_runs_are_read_back_by_rein_watch() {
+    let runs = folder("mcp-writer");
+    let mut mcp = serve_mcp(&runs);
+    let first = mcp
+        .client
+        .call("rein_start", json!({"name": merge_pr().to_str().unwrap()}));
+    assert_eq!(first["kind"], "question", "{first}");
+    assert_eq!(first["run"], "run-1");
+    assert_eq!(first["key"], "main.task", "{first}");
+    let answered = mcp
+        .client
+        .call("rein_answer", json!({"run_id": "run-1", "value": "merge"}));
+    assert_eq!(answered["key"], "merge_pr.docs_only", "{answered}");
+
+    let (_watch, port) = watch(&runs);
+    let agents = api_agents(port);
+    assert_eq!(agents.len(), 1, "{agents:?}");
+    let agent = &agents[0];
+    assert_eq!(agent["transport"], "mcp", "{agent}");
+    assert_eq!(agent["alive"], true, "{agent}");
+    assert_eq!(agent["pid"], mcp.child.id(), "{agent}");
+    let runs_seen = agent["runs"].as_array().unwrap();
+    assert_eq!(runs_seen.len(), 1, "{agent}");
+    let run = &runs_seen[0];
+    assert_eq!(run["run"], "run-1", "{run}");
+    assert_eq!(run["status"], "waiting", "{run}");
+    assert_eq!(run["step"]["key"], "merge_pr.docs_only", "{run}");
+    assert_eq!(run["trace"], json!(["main", "merge_pr"]), "{run}");
+    assert!(run["mermaid"].is_string(), "{run}");
+    let main = run["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "main")
+        .unwrap();
+    assert_eq!(main["answers"], json!({"task": "merge"}), "{run}");
+    fs::remove_dir_all(&runs).unwrap();
+}
+
+#[test]
+fn rein_serve_mcp_is_listed_before_any_run() {
+    let runs = folder("mcp-idle");
+    let mcp = serve_mcp(&runs);
+    let (_watch, port) = watch(&runs);
+    let agents = api_agents(port);
+    assert_eq!(agents.len(), 1, "{agents:?}");
+    assert_eq!(agents[0]["transport"], "mcp", "{}", agents[0]);
+    assert_eq!(agents[0]["pid"], mcp.child.id(), "{}", agents[0]);
+    assert_eq!(agents[0]["runs"], json!([]), "{}", agents[0]);
     fs::remove_dir_all(&runs).unwrap();
 }
 
