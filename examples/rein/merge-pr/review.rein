@@ -3,9 +3,9 @@
  */
 export default function securityReview(
   /** Does the PR add or change a secret, token, or key? */
-  secretsAdded: boolean,
+  secrets_added: boolean,
 ) {
-  if (secretsAdded) {
+  if (secrets_added) {
     return `Stop. Remove the secret from the diff. Rotate the secret. Then run
     merge_pr again.`;
   }

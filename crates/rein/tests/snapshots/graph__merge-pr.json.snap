@@ -32,8 +32,8 @@ expression: text
       "id": "f1_0",
       "kind": "question",
       "function": "merge_pr",
-      "label": "Does the PR change only documentation files?\ndocsOnly: boolean",
-      "name": "docsOnly",
+      "label": "Does the PR change only documentation files?\ndocs_only: boolean",
+      "name": "docs_only",
       "type": "boolean"
     },
     {
@@ -66,8 +66,8 @@ expression: text
       "id": "f2_0",
       "kind": "question",
       "function": "merge_pr/fix",
-      "label": "Did you push a fix for the failing job?\nfixPushed: boolean",
-      "name": "fixPushed",
+      "label": "Did you push a fix for the failing job?\nfix_pushed: boolean",
+      "name": "fix_pushed",
       "type": "boolean"
     },
     {
@@ -92,8 +92,8 @@ expression: text
       "id": "f3_0",
       "kind": "question",
       "function": "merge_pr/review_code",
-      "label": "Does the PR change authentication, payments, or permissions code?\nsecuritySensitive: boolean",
-      "name": "securitySensitive",
+      "label": "Does the PR change authentication, payments, or permissions code?\nsecurity_sensitive: boolean",
+      "name": "security_sensitive",
       "type": "boolean"
     },
     {
@@ -118,8 +118,8 @@ expression: text
       "id": "f4_0",
       "kind": "question",
       "function": "review",
-      "label": "Does the PR add or change a secret, token, or key?\nsecretsAdded: boolean",
-      "name": "secretsAdded",
+      "label": "Does the PR add or change a secret, token, or key?\nsecrets_added: boolean",
+      "name": "secrets_added",
       "type": "boolean"
     },
     {

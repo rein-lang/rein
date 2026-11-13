@@ -73,7 +73,7 @@ fn schema_lists_inputs_and_keys_with_types() {
     assert_eq!(find("main.task")["options"], json!(["review", "address comments", "fix ci", "merge"]));
     assert_eq!(find("merge.ci")["options"], json!(["green", "red", "pending"]));
     assert_eq!(find("review.verdict")["type"], "union");
-    assert_eq!(find("review.securityProblem")["type"], "boolean");
+    assert_eq!(find("review.security_problem")["type"], "boolean");
     assert!(list.iter().all(|a| a["key"] != "main.pr"), "a string parameter is an input, not an answer");
 }
 

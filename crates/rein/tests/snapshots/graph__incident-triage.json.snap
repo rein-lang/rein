@@ -44,8 +44,8 @@ expression: text
       "id": "f1_0",
       "kind": "question",
       "function": "main",
-      "label": "Are customers seeing errors or downtime right now?\ncustomerImpact: boolean",
-      "name": "customerImpact",
+      "label": "Are customers seeing errors or downtime right now?\ncustomer_impact: boolean",
+      "name": "customer_impact",
       "type": "boolean"
     },
     {
@@ -60,8 +60,8 @@ expression: text
       "id": "f1_2",
       "kind": "question",
       "function": "main",
-      "label": "Does a runbook exist for this alert?\nknownRunbook: boolean",
-      "name": "knownRunbook",
+      "label": "Does a runbook exist for this alert?\nknown_runbook: boolean",
+      "name": "known_runbook",
       "type": "boolean"
     },
     {
@@ -74,8 +74,8 @@ expression: text
       "id": "f2_0",
       "kind": "question",
       "function": "open",
-      "label": "Is there already an open ticket for this alert?\nticketExists: boolean",
-      "name": "ticketExists",
+      "label": "Is there already an open ticket for this alert?\nticket_exists: boolean",
+      "name": "ticket_exists",
       "type": "boolean"
     },
     {

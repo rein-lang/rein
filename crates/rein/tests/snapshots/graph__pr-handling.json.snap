@@ -43,8 +43,8 @@ expression: text
       "id": "f0_4",
       "kind": "question",
       "function": "ci/fix",
-      "label": "Did you push a fix for the failing job?\nfixPushed: boolean",
-      "name": "fixPushed",
+      "label": "Did you push a fix for the failing job?\nfix_pushed: boolean",
+      "name": "fix_pushed",
       "type": "boolean"
     },
     {
@@ -69,8 +69,8 @@ expression: text
       "id": "f1_0",
       "kind": "question",
       "function": "comments/address",
-      "label": "Does the pull request have a review comment with no answer?\nopenComments: boolean",
-      "name": "openComments",
+      "label": "Does the pull request have a review comment with no answer?\nopen_comments: boolean",
+      "name": "open_comments",
       "type": "boolean"
     },
     {
@@ -89,8 +89,8 @@ expression: text
       "id": "f1_3",
       "kind": "question",
       "function": "comments/address",
-      "label": "Did you answer every open comment with a fix or a reply?\nallAnswered: boolean",
-      "name": "allAnswered",
+      "label": "Did you answer every open comment with a fix or a reply?\nall_answered: boolean",
+      "name": "all_answered",
       "type": "boolean"
     },
     {
@@ -192,8 +192,8 @@ expression: text
       "id": "f4_0",
       "kind": "question",
       "function": "review",
-      "label": "Did you write this pull request yourself?\nownPr: boolean",
-      "name": "ownPr",
+      "label": "Did you write this pull request yourself?\nown_pr: boolean",
+      "name": "own_pr",
       "type": "boolean"
     },
     {
@@ -206,8 +206,8 @@ expression: text
       "id": "f4_2",
       "kind": "question",
       "function": "review",
-      "label": "Does the PR change authentication, payments, or permissions code?\nsecuritySensitive: boolean",
-      "name": "securitySensitive",
+      "label": "Does the PR change authentication, payments, or permissions code?\nsecurity_sensitive: boolean",
+      "name": "security_sensitive",
       "type": "boolean"
     },
     {
@@ -220,8 +220,8 @@ expression: text
       "id": "f4_4",
       "kind": "question",
       "function": "review",
-      "label": "Did the security review find a problem that must be fixed?\nsecurityProblem: boolean",
-      "name": "securityProblem",
+      "label": "Did the security review find a problem that must be fixed?\nsecurity_problem: boolean",
+      "name": "security_problem",
       "type": "boolean"
     },
     {

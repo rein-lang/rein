@@ -19,11 +19,11 @@ fn utf16_column_resets_per_line() {
 
 #[test]
 fn token_at_finds_import_and_parameter_names() {
-    let text = "return mergePr;\n  if (docsOnly) {\n";
+    let text = "return mergePr;\n  if (docs_only) {\n";
     let at_import = text.find("Pr").unwrap() + 1;
     assert_eq!(token_at(text, at_import).unwrap(), "mergePr");
-    let at_param = text.find("docsOnly").unwrap() + 2;
-    assert_eq!(token_at(text, at_param).unwrap(), "docsOnly");
+    let at_param = text.find("docs_only").unwrap() + 2;
+    assert_eq!(token_at(text, at_param).unwrap(), "docs_only");
 }
 
 #[test]

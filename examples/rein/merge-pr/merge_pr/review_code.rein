@@ -3,9 +3,9 @@
  */
 export default function reviewCode(
   /** Does the PR change authentication, payments, or permissions code? */
-  securitySensitive: boolean,
+  security_sensitive: boolean,
 ) {
-  if (securitySensitive) {
+  if (security_sensitive) {
     return delegate(
       model=`use opus model`,
       task=`code review the pr with a security focus`,

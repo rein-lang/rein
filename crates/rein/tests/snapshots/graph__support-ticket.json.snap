@@ -29,8 +29,8 @@ expression: text
       "id": "f1_0",
       "kind": "question",
       "function": "faq",
-      "label": "Did you find a help article that answers the question?\narticleFound: boolean",
-      "name": "articleFound",
+      "label": "Did you find a help article that answers the question?\narticle_found: boolean",
+      "name": "article_found",
       "type": "boolean"
     },
     {
@@ -51,19 +51,19 @@ expression: text
       "id": "f1_3",
       "kind": "done",
       "function": "faq",
-      "label": "@./faq/close_ticket(opening=`Glad the help article solved the problem.`, nextStep=`Reply to this ticket if it comes back.`)"
+      "label": "@./faq/close_ticket(opening=`Glad the help article solved the problem.`, next_step=`Reply to this ticket if it comes back.`)"
     },
     {
       "id": "f2",
       "kind": "function",
       "function": "faq/close_ticket",
-      "label": "faq/close_ticket(opening, nextStep)"
+      "label": "faq/close_ticket(opening, next_step)"
     },
     {
       "id": "f2_0",
       "kind": "done",
       "function": "faq/close_ticket",
-      "label": "Tell the customer: ${opening} ${nextStep} Then close the ticket as\nsolved."
+      "label": "Tell the customer: ${opening} ${next_step} Then close the ticket as\nsolved."
     },
     {
       "id": "f3",
@@ -98,27 +98,27 @@ expression: text
       "id": "f4_0",
       "kind": "question",
       "function": "refund",
-      "label": "Is the requested refund above the agent's limit?\nrefundOverLimit: boolean",
-      "name": "refundOverLimit",
+      "label": "Is the requested refund above the agent's limit?\nrefund_over_limit: boolean",
+      "name": "refund_over_limit",
       "type": "boolean"
     },
     {
       "id": "f4_1",
       "kind": "done",
       "function": "refund",
-      "label": "@./refund/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\nticket.`, nextStep=`Then tell the customer the refund takes 5 business days.`)"
+      "label": "@./refund/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\nticket.`, next_step=`Then tell the customer the refund takes 5 business days.`)"
     },
     {
       "id": "f5",
       "kind": "function",
       "function": "refund/tell_customer",
-      "label": "refund/tell_customer(opening, nextStep)"
+      "label": "refund/tell_customer(opening, next_step)"
     },
     {
       "id": "f5_0",
       "kind": "done",
       "function": "refund/tell_customer",
-      "label": "${opening} ${nextStep}"
+      "label": "${opening} ${next_step}"
     }
   ],
   "edges": [

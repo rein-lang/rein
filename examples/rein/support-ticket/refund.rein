@@ -3,14 +3,14 @@
  */
 export default function refund(
   /** Is the requested refund above the agent's limit? */
-  refundOverLimit: boolean,
+  refund_over_limit: boolean,
 ) {
-  if (refundOverLimit) {
+  if (refund_over_limit) {
     return @./escalate;
   }
   return @./refund/tell_customer(
     opening=`Refund the amount the customer asked for and confirm it in the
     ticket.`,
-    nextStep=`Then tell the customer the refund takes 5 business days.`,
+    next_step=`Then tell the customer the refund takes 5 business days.`,
   );
 }
