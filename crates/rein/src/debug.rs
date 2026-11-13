@@ -2,7 +2,6 @@
 //! watch the path the flow takes. The page asks this server; the server walks the flow with the step engine, as
 //! `rein step` and `rein graph --answer` do.
 
-use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
@@ -13,10 +12,7 @@ use rein_core::project::{Project, ENTRY};
 use rein_core::step::{invalid_request, step, type_of, StepRequest};
 use serde_json::{json, Value};
 
-use crate::{cli, graph as graph_cmd};
-
-/// The largest request body read. A walk request is a few hundred bytes.
-const MAX_BODY: usize = 1 << 20;
+use crate::{cli, graph as graph_cmd, http};
 
 /// Flags and operands of `rein debug`.
 #[derive(Args)]
@@ -102,48 +98,11 @@ struct Server {
 impl Server {
     /// Reads one request, writes one response, closes. One at a time: the page sends one walk per change.
     fn answer(&self, stream: TcpStream) -> std::io::Result<()> {
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let mut words = line.split_whitespace();
-        let method = words.next().unwrap_or_default().to_string();
-        let path = words.next().unwrap_or_default().to_string();
-        let (mut length, mut host) = (0usize, String::new());
-        loop {
-            let mut header = String::new();
-            if reader.read_line(&mut header)? == 0 || header.trim().is_empty() {
-                break;
-            }
-            let Some((name, value)) = header.split_once(':') else { continue };
-            if name.eq_ignore_ascii_case("content-length") {
-                length = value.trim().parse().unwrap_or(0);
-            }
-            if name.eq_ignore_ascii_case("host") {
-                host = value.trim().to_string();
-            }
-        }
-        let mut body = vec![0; length.min(MAX_BODY)];
-        reader.read_exact(&mut body)?;
-        let (status, kind, text) = if self.local_host(&host) {
-            self.respond(&method, &path, &String::from_utf8_lossy(&body))
-        } else {
-            ("403 Forbidden", "text/plain", "only 127.0.0.1 and localhost may ask this server\n".to_string())
-        };
-        let mut stream = stream;
-        write!(
-            stream,
-            "HTTP/1.1 {status}\r\nContent-Type: {kind}; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{text}",
-            text.len()
-        )
-    }
-
-    /// The Host header names this server, so a page of another site cannot read it through DNS rebinding.
-    fn local_host(&self, host: &str) -> bool {
-        host == format!("127.0.0.1:{}", self.port) || host == format!("localhost:{}", self.port)
+        http::answer(stream, self.port, |method, path, body| self.respond(method, path, body))
     }
 
     /// The response to one request: status, content type, body.
-    fn respond(&self, method: &str, path: &str, body: &str) -> (&'static str, &'static str, String) {
+    fn respond(&self, method: &str, path: &str, body: &str) -> http::Reply {
         // The page address carries the state in its query string, which the routes do not read.
         let path = path.split_once('?').map_or(path, |(route, _)| route);
         match (method, path) {

@@ -139,8 +139,8 @@ fn routes_and_the_host_check() {
     assert_eq!(server.respond("GET", "/schema", "").1, "application/json");
     assert_eq!(server.respond("GET", "/", "").1, "text/html");
     assert_eq!(server.respond("GET", "/?entry=main&a.main.draft=no", "").1, "text/html");
-    assert!(server.local_host("127.0.0.1:4000") && server.local_host("localhost:4000"));
-    assert!(!server.local_host("evil.example:4000"));
+    assert!(http::local_host("127.0.0.1:4000", 4000) && http::local_host("localhost:4000", 4000));
+    assert!(!http::local_host("evil.example:4000", 4000));
 }
 
 #[test]
