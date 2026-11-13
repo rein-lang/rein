@@ -57,15 +57,15 @@ fn vip_project() -> Project {
 fn merge_project() -> Project {
     project(&[
         ("main.rein", "/** Entry. */\nexport default function main(\n  /** Which path? */\n  path: \"merge\" | \"review\",\n) {\n  switch (path) {\n    case \"merge\":\n      return @./merge_pr;\n    case \"review\":\n      return `Review the code.`;\n  }\n}\n"),
-        ("merge_pr.rein", "interface Input {\n  /** Does the PR change only docs? */\n  docsOnly: boolean;\n  /** What is the CI status? */\n  ci: \"green\" | \"red\";\n}\n/** Merge a PR. */\nexport default function mergePr({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return `approved`;\n  }\n  switch (ci) {\n    case \"green\":\n      return `merge it`;\n    case \"red\":\n      return `wait for CI`;\n  }\n}\n"),
+        ("merge_pr.rein", "interface Input {\n  /** Does the PR change only docs? */\n  docs_only: boolean;\n  /** What is the CI status? */\n  ci: \"green\" | \"red\";\n}\n/** Merge a PR. */\nexport default function mergePr({ docs_only, ci }: Input) {\n  if (docs_only) {\n    return `approved`;\n  }\n  switch (ci) {\n    case \"green\":\n      return `merge it`;\n    case \"red\":\n      return `wait for CI`;\n  }\n}\n"),
     ])
 }
 
-/// `main` asks `articleFound` through `answer/faq`, which asks a request, then escalates.
+/// `main` asks `article_found` through `answer/faq`, which asks a request, then escalates.
 fn faq_project() -> Project {
     project(&[
         ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./answer/faq;\n}\n"),
-        ("answer/faq.rein", "/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  articleFound: boolean,\n) {\n  if (!articleFound) {\n    return @../escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\n    `Send the article and ask if it solved the problem.`,\n  );\n  if (solved) {\n    return `Close the ticket as solved.`;\n  }\n  return @../escalate;\n}\n"),
+        ("answer/faq.rein", "/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  article_found: boolean,\n) {\n  if (!article_found) {\n    return @../escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\n    `Send the article and ask if it solved the problem.`,\n  );\n  if (solved) {\n    return `Close the ticket as solved.`;\n  }\n  return @../escalate;\n}\n"),
         ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return `Assign the ticket to tier 2.`;\n}\n"),
     ])
 }
@@ -96,9 +96,9 @@ fn answers_for_main_auto_follow_into_merge_pr() {
         res,
         StepResponse::Question {
             version: 1,
-            key: "merge_pr.docsOnly".into(),
+            key: "merge_pr.docs_only".into(),
             function: "merge_pr".into(),
-            name: "docsOnly".into(),
+            name: "docs_only".into(),
             r#type: "boolean".into(),
             options: None,
             description: "Does the PR change only docs?".into(),
@@ -114,7 +114,7 @@ fn union_question_lists_its_options() {
         &merge_project(),
         &req(
             "main",
-            &[("main.path", "merge"), ("merge_pr.docsOnly", "no")],
+            &[("main.path", "merge"), ("merge_pr.docs_only", "no")],
         ),
     );
     let StepResponse::Question {
@@ -139,7 +139,7 @@ fn full_path_is_done_with_the_trace() {
             "main",
             &[
                 ("main.path", "merge"),
-                ("merge_pr.docsOnly", "no"),
+                ("merge_pr.docs_only", "no"),
                 ("merge_pr.ci", "green"),
             ],
         ),
@@ -151,7 +151,7 @@ fn full_path_is_done_with_the_trace() {
             instruction: "merge it".into(),
             answers: answers(&[
                 ("main.path", "merge"),
-                ("merge_pr.docsOnly", "no"),
+                ("merge_pr.docs_only", "no"),
                 ("merge_pr.ci", "green")
             ]),
             trace: trace(&["main", "merge_pr"]),
@@ -164,7 +164,7 @@ fn async_request_stops_then_the_answer_continues() {
     let project = faq_project();
     let res = step(
         &project,
-        &req("main", &[("answer/faq.articleFound", "yes")]),
+        &req("main", &[("answer/faq.article_found", "yes")]),
     );
     assert_eq!(
         res,
@@ -180,7 +180,7 @@ fn async_request_stops_then_the_answer_continues() {
                 description: "Did the article solve it?".into(),
                 fields: None,
             },
-            answers: answers(&[("answer/faq.articleFound", "yes")]),
+            answers: answers(&[("answer/faq.article_found", "yes")]),
             trace: trace(&["main", "answer/faq"]),
         }
     );
@@ -190,7 +190,7 @@ fn async_request_stops_then_the_answer_continues() {
         &req(
             "main",
             &[
-                ("answer/faq.articleFound", "yes"),
+                ("answer/faq.article_found", "yes"),
                 ("answer/faq.solved", "yes"),
             ],
         ),
@@ -201,7 +201,7 @@ fn async_request_stops_then_the_answer_continues() {
             version: 1,
             instruction: "Close the ticket as solved.".into(),
             answers: answers(&[
-                ("answer/faq.articleFound", "yes"),
+                ("answer/faq.article_found", "yes"),
                 ("answer/faq.solved", "yes")
             ]),
             trace: trace(&["main", "answer/faq"]),
@@ -213,7 +213,7 @@ fn async_request_stops_then_the_answer_continues() {
         &req(
             "main",
             &[
-                ("answer/faq.articleFound", "yes"),
+                ("answer/faq.article_found", "yes"),
                 ("answer/faq.solved", "no"),
             ],
         ),
@@ -468,12 +468,12 @@ fn same_request_gives_byte_equal_responses() {
     let project = merge_project();
     let forward = req(
         "main",
-        &[("main.path", "merge"), ("merge_pr.docsOnly", "no")],
+        &[("main.path", "merge"), ("merge_pr.docs_only", "no")],
     );
     let mut backward = req("main", &[]);
     backward
         .answers
-        .insert("merge_pr.docsOnly".into(), "no".into());
+        .insert("merge_pr.docs_only".into(), "no".into());
     backward.answers.insert("main.path".into(), "merge".into());
     let a = serde_json::to_string(&step(&project, &forward)).unwrap();
     let b = serde_json::to_string(&step(&project, &forward)).unwrap();

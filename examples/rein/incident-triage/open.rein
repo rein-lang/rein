@@ -3,9 +3,9 @@
  */
 export default function openTicket(
   /** Is there already an open ticket for this alert? */
-  ticketExists: boolean,
+  ticket_exists: boolean,
 ) {
-  if (ticketExists) {
+  if (ticket_exists) {
     return `Add the alert details as a comment on the open ticket.`;
   }
   return `Create a ticket with the alert name, severity, and first graph link.

@@ -305,7 +305,7 @@ fn hover_on_parameter_shows_its_type_and_doc() {
     let start = uri_of(&root, "start.rein");
     server.open(
         &start,
-        "interface Input {\n  /** Does it change docs? */\n  docsOnly: boolean;\n  /** Which CI status? */\n  ci: \"green\" | \"red\";\n}\n\n/** Start. */\nexport default function start({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return `x`;\n  } else {\n    return `y`;\n  }\n}\n",
+        "interface Input {\n  /** Does it change docs? */\n  docs_only: boolean;\n  /** Which CI status? */\n  ci: \"green\" | \"red\";\n}\n\n/** Start. */\nexport default function start({ docs_only, ci }: Input) {\n  if (docs_only) {\n    return `x`;\n  } else {\n    return `y`;\n  }\n}\n",
     );
     let hover = server.request(
         2,
@@ -313,7 +313,7 @@ fn hover_on_parameter_shows_its_type_and_doc() {
         json!({"textDocument": {"uri": start}, "position": {"line": 2, "character": 4}}),
     );
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
-    assert!(text.contains("docsOnly: boolean"), "{text}");
+    assert!(text.contains("docs_only: boolean"), "{text}");
     assert!(text.contains("Does it change docs?"), "{text}");
 
     server.shutdown();
@@ -782,7 +782,7 @@ fn definition_goes_to_functions_parameters_and_std() {
     assert_eq!(spot_of(&root, &def["result"]), spot("message.struct.rein", 5, 2, 5, 9), "{def}");
     // A parameter used in the body goes to its declaration.
     let def = server.request(4, "textDocument/definition", at(&refund, 7, 8));
-    assert_eq!(spot_of(&root, &def["result"]), spot("refund.rein", 5, 2, 5, 17), "{def}");
+    assert_eq!(spot_of(&root, &def["result"]), spot("refund.rein", 5, 2, 5, 19), "{def}");
 
     // A std template goes to its source. `request` is built in and has none.
     let tmp = temp_project("stddef");
@@ -900,7 +900,7 @@ fn document_symbols_outline_the_function_and_its_names() {
     assert_eq!(
         children,
         vec![
-            ("articleFound".to_string(), "boolean".to_string(), spot("faq.rein", 5, 2, 5, 14)),
+            ("article_found".to_string(), "boolean".to_string(), spot("faq.rein", 5, 2, 5, 15)),
             ("solved".to_string(), "boolean".to_string(), spot("faq.rein", 11, 8, 11, 14)),
         ]
     );
@@ -1525,8 +1525,8 @@ fn completion_offers_argument_names_and_union_members() {
     let partial = uri_of(&root, "partial.rein");
     server.open(&partial, PARTIAL_CALL);
     let items = server.request(2, "textDocument/completion", at(&partial, 2, 46));
-    assert_eq!(labels(&items), ["nextStep="], "{items}");
-    assert_eq!(items["result"][0]["detail"], "nextStep: string");
+    assert_eq!(labels(&items), ["next_step="], "{items}");
+    assert_eq!(items["result"][0]["detail"], "next_step: string");
 
     // After `case "`: the members of the switch subject. Each replaces the whole literal.
     let main = open_file(&mut server, &root, "main.rein");
@@ -1595,9 +1595,9 @@ fn signature_help_shows_the_callee_parameters() {
 
     let help = server.request(2, "textDocument/signatureHelp", at(&partial, 2, 46));
     let signature = &help["result"]["signatures"][0];
-    assert_eq!(signature["label"], "@./refund/tell_customer(opening: string, nextStep: string)");
+    assert_eq!(signature["label"], "@./refund/tell_customer(opening: string, next_step: string)");
     assert_eq!(signature["parameters"][0]["label"], json!([24, 39]));
-    assert_eq!(signature["parameters"][1]["label"], json!([41, 57]));
+    assert_eq!(signature["parameters"][1]["label"], json!([41, 58]));
     assert_eq!(signature["parameters"][1]["documentation"], "The next step the customer can expect.");
     assert_eq!(help["result"]["activeParameter"], 1, "{help}");
 

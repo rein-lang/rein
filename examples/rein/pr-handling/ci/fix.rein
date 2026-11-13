@@ -20,11 +20,11 @@ export default async function fixCi({ pr, cause }: Input) {
       );
     case "test or code": {
       /** Did you push a fix for the failing job? */
-      const fixPushed: boolean = await request(
+      const fix_pushed: boolean = await request(
         `Read the CI log of ${pr}. Find the first failing step. Fix the test
         or the code. Push one commit.`,
       );
-      if (fixPushed) {
+      if (fix_pushed) {
         return `Wait for CI to finish on ${pr}. Then start this program again
         with the task merge.`;
       }

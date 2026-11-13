@@ -5,7 +5,7 @@ pub(crate) const SAMPLE: &str = r#"
 
 interface Input {
   /** Does the PR change only documentation files? */
-  docsOnly: boolean;
+  docs_only: boolean;
   /**
    * What is the CI status of the PR?
    */
@@ -15,8 +15,8 @@ interface Input {
 /**
  * Decide whether a pull request can be merged.
  */
-export default function mergePr({ docsOnly, ci }: Input) {
-  if (docsOnly) {
+export default function mergePr({ docs_only, ci }: Input) {
+  if (docs_only) {
     return `approved`;
   }
   switch (ci) {

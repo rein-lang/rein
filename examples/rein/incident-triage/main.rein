@@ -2,9 +2,9 @@ interface Alert {
   /** How severe is the alert? */
   severity: "sev1" | "sev2" | "sev3";
   /** Are customers seeing errors or downtime right now? */
-  customerImpact: boolean;
+  customer_impact: boolean;
   /** Does a runbook exist for this alert? */
-  knownRunbook: boolean;
+  known_runbook: boolean;
 }
 
 /**
@@ -12,10 +12,10 @@ interface Alert {
  */
 export default function main({
   severity,
-  customerImpact,
-  knownRunbook,
+  customer_impact,
+  known_runbook,
 }: Alert) {
-  if (customerImpact) {
+  if (customer_impact) {
     return @./page_human;
   }
   switch (severity) {
@@ -23,7 +23,7 @@ export default function main({
       return @./page_human;
     case "sev2":
     case "sev3":
-      if (knownRunbook) {
+      if (known_runbook) {
         return @./follow;
       }
       return @./open;

@@ -3,9 +3,9 @@
  */
 export default async function answerFaq(
   /** Did you find a help article that answers the question? */
-  articleFound: boolean,
+  article_found: boolean,
 ) {
-  if (!articleFound) {
+  if (!article_found) {
     return @./escalate;
   }
   /** Did the customer confirm the article solved the problem? */
@@ -16,7 +16,7 @@ export default async function answerFaq(
   if (solved) {
     return @./faq/close_ticket(
       opening=`Glad the help article solved the problem.`,
-      nextStep=`Reply to this ticket if it comes back.`,
+      next_step=`Reply to this ticket if it comes back.`,
     );
   }
   return @./escalate;

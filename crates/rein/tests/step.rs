@@ -67,7 +67,7 @@ fn answer_for(key: &str) -> &'static str {
     match key {
         "main.vip" => "no",
         "main.category" => "how_to",
-        "faq.articleFound" => "yes",
+        "faq.article_found" => "yes",
         "faq.solved" => "yes",
         other => panic!("the walk asked an unexpected key `{other}`"),
     }
@@ -138,7 +138,7 @@ fn exit_code_is_three_for_a_request() {
         "--answer",
         "main.category=how_to",
         "--answer",
-        "faq.articleFound=yes",
+        "faq.article_found=yes",
     ]);
     assert_eq!(code(&out), 3);
     let v = json(&out);
@@ -186,7 +186,7 @@ fn answer_flags_give_the_same_result_as_stdin() {
         "--answer",
         "main.category=how_to",
         "--answer",
-        "faq.articleFound=yes",
+        "faq.article_found=yes",
         "--answer",
         "faq.solved=yes",
     ]);
@@ -194,7 +194,7 @@ fn answer_flags_give_the_same_result_as_stdin() {
         "answers": {
             "main.vip": "no",
             "main.category": "how_to",
-            "faq.articleFound": "yes",
+            "faq.article_found": "yes",
             "faq.solved": "yes",
         }
     }));
@@ -251,7 +251,7 @@ fn eval_help_points_agents_at_step() {
 fn run_json_lines_walks_to_done_and_survives_a_bad_answer() {
     let root = example();
     let mut lines = vec![json!({"value": "maybe"}).to_string()];
-    for key in ["main.vip", "main.category", "faq.articleFound", "faq.solved"] {
+    for key in ["main.vip", "main.category", "faq.article_found", "faq.solved"] {
         lines.push(json!({"key": key, "value": answer_for(key)}).to_string());
     }
     let input = lines.join("\n") + "\n";

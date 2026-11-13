@@ -40,6 +40,7 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
         pending: Vec::new(),
         names: BTreeSet::new(),
     };
+    c.out.extend(crate::naming::camel_case_names(f));
     if let Some(stem) = name.strip_suffix(STRUCT_SUFFIX) {
         c.struct_file(stem);
         return c.out;

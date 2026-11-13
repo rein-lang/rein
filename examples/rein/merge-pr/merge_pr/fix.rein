@@ -3,9 +3,9 @@
  */
 export default function fixCi(
   /** Did you push a fix for the failing job? */
-  fixPushed: boolean,
+  fix_pushed: boolean,
 ) {
-  if (fixPushed) {
+  if (fix_pushed) {
     return `Wait for CI to finish. Then start this program again with the task
     merge.`;
   }

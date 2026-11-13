@@ -142,8 +142,8 @@ fn pr_handling_review_walk_passes_the_link_to_the_review_template() {
     let (last, codes) = walk_pr_handling(|key| match key {
         "main.draft" => "no",
         "main.task" => "review",
-        "review.ownPr" => "no",
-        "review.securitySensitive" => "no",
+        "review.own_pr" => "no",
+        "review.security_sensitive" => "no",
         "review.verdict" => "clean",
         other => panic!("the walk asked an unexpected key `{other}`"),
     });
