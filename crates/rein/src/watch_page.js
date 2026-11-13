@@ -61,11 +61,23 @@ function pills(run) {
 function graphFor(key, text) {
   let g = graphs.get(key);
   if (!g) {
-    g = { box: el("div", "graph"), drawn: null, want: null, token: 0, scrollLeft: 0, scrollTop: 0 };
+    g = { wrap: el("div", "graph-wrap"), box: el("div", "graph"), zoom: false, drawn: null, want: null, token: 0, scrollLeft: 0, scrollTop: 0, centered: false };
+    const zoom = el("button", "zoom", "Zoom");
+    zoom.type = "button";
+    zoom.setAttribute("aria-pressed", "false");
+    zoom.title = "Show the graph at natural size, scrolled inside its box";
+    zoom.addEventListener("click", () => {
+      g.zoom = !g.zoom;
+      zoom.setAttribute("aria-pressed", String(g.zoom));
+      g.centered = false;
+      sizeSvg(g);
+      centerCurrent(g);
+    });
     g.box.addEventListener("scroll", () => {
       g.scrollLeft = g.box.scrollLeft;
       g.scrollTop = g.box.scrollTop;
     });
+    g.wrap.append(zoom, g.box);
     graphs.set(key, g);
   }
   // `want` stops a poll from starting a second draw of text that is already on its way.
@@ -73,7 +85,32 @@ function graphFor(key, text) {
     g.want = text;
     drawGraph(g, text);
   }
-  return g.box;
+  return g.wrap;
+}
+
+// Fit to the box width (the whole graph), or natural size in zoom. The viewBox keeps the aspect ratio.
+function sizeSvg(g) {
+  const svg = g.box.querySelector("svg");
+  g.box.classList.toggle("natural", g.zoom);
+  if (!svg) return;
+  const vb = svg.viewBox.baseVal;
+  svg.removeAttribute("width");
+  svg.removeAttribute("height");
+  svg.style.maxWidth = "none";
+  svg.style.height = "auto";
+  svg.style.width = g.zoom && vb.width ? vb.width + "px" : "100%";
+}
+
+// Puts the current node in the middle of the box, so it shows without a scroll.
+function centerCurrent(g) {
+  const node = g.box.querySelector("g.node.current");
+  if (!node || g.centered) return;
+  g.centered = true;
+  const r = node.getBoundingClientRect(), b = g.box.getBoundingClientRect();
+  g.box.scrollLeft += r.left + r.width / 2 - (b.left + g.box.clientWidth / 2);
+  g.box.scrollTop += r.top + r.height / 2 - (b.top + g.box.clientHeight / 2);
+  g.scrollLeft = g.box.scrollLeft;
+  g.scrollTop = g.box.scrollTop;
 }
 
 function loadMermaid() {
@@ -94,24 +131,9 @@ async function drawGraph(g, text) {
     const { svg } = await mermaid.render("watch" + renders++, text);
     if (token !== g.token) return;
     g.box.innerHTML = svg;
-    const drawn = g.box.querySelector("svg");
-    const vb = drawn && drawn.viewBox.baseVal;
-    if (drawn && vb && vb.width) {
-      drawn.removeAttribute("style");
-      drawn.setAttribute("width", vb.width);
-      drawn.setAttribute("height", vb.height);
-    }
     g.drawn = text;
-    // The first drawing puts the current node in the middle of the box, as the debug page does.
-    const node = g.box.querySelector("g.node.current");
-    if (node && !g.centered) {
-      g.centered = true;
-      const r = node.getBoundingClientRect(), b = g.box.getBoundingClientRect();
-      g.box.scrollLeft += r.left + r.width / 2 - (b.left + g.box.clientWidth / 2);
-      g.box.scrollTop += r.top + r.height / 2 - (b.top + g.box.clientHeight / 2);
-      g.scrollLeft = g.box.scrollLeft;
-      g.scrollTop = g.box.scrollTop;
-    }
+    sizeSvg(g);
+    centerCurrent(g);
   } catch (e) {
     if (token === g.token) g.box.textContent = "The graph cannot be drawn here (the Mermaid script did not load, or the program changed).";
   }
@@ -122,9 +144,16 @@ function runView(agent, run, newest) {
   const box = el("section", "run");
   const head = el("div", "run-head");
   head.append(el("h3", null, run.program || "(no program)"), chip(run.status, run.status));
-  const now = el("p", "now");
-  now.append(el("span", "now-label", "now"), el("strong", null, nowLabel(run.step)));
-  box.append(head, now, pills(run));
+  // A done run shows its outcome, the label of its final node, in place of a now line.
+  if (run.status === "done") {
+    const text = String(run.step.instruction || "");
+    head.append(el("span", "outcome", text.length > 60 ? text.slice(0, 59) + "…" : text));
+    box.append(head, pills(run));
+  } else {
+    const now = el("p", "now");
+    now.append(el("span", "now-label", "now"), el("strong", null, nowLabel(run.step)));
+    box.append(head, now, pills(run));
+  }
   if (newest && run.mermaid) box.append(graphFor(key, run.mermaid));
   if (run.step && run.step.kind === "question") {
     const d = details(key + "|question", "Question text", "text");
