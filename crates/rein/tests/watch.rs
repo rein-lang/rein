@@ -101,7 +101,8 @@ fn rein_step_runs_are_read_back_by_rein_watch() {
     let runs_seen = agent["runs"].as_array().unwrap();
     assert_eq!(runs_seen.len(), 1, "the extending call continues the run: {agent}");
     let run = &runs_seen[0];
-    assert_eq!(run["program"], example().join("main.rein").to_str().unwrap());
+    // A `.rein` program path names its project folder, which the page shows.
+    assert_eq!(run["program"], "pr-handling");
     assert_eq!(run["status"], "waiting");
     assert_eq!(run["step"]["key"], "merge.ci");
     let main = run["functions"]

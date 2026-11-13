@@ -350,6 +350,72 @@ fn a_non_string_log_field_is_null_and_does_not_break_the_list() {
 }
 
 #[test]
+fn a_program_path_loads_only_a_folder_with_a_main_rein_from_the_agent_cwd() {
+    let dir = folder("program-path");
+    // `./x.rein` in a folder with no main.rein loads nothing.
+    let bare = dir.join("bare");
+    fs::create_dir_all(&bare).unwrap();
+    fs::write(bare.join("x.rein"), "export default function main() {\n  return `done`;\n}\n").unwrap();
+    folder_program_log(&dir, bare.to_str().unwrap(), &[("main", 1001)]);
+    let mut lines = vec![json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null,
+        "cwd": bare.to_str().unwrap(), "session": "g1"})];
+    lines.push(json!({"ts": 1001, "event": "step", "program": "./x.rein",
+        "request": {"entry": "main", "answers": {}}, "step": question("main.task", &["main"])}));
+    write(&dir, "step-g1.jsonl", &lines);
+    let a = agent_named(&agents(&dir, 1001), "step-g1");
+    assert_eq!(a["runs"][0]["program"], "./x.rein", "{a}");
+    assert!(a["runs"][0].get("mermaid").is_some_and(Value::is_null), "{a}");
+
+    // `./prog` with a main.rein resolves against the agent cwd, not the process cwd, which has no `prog`.
+    let project = dir.join("prog");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("main.rein"), "export default function main() {\n  return `done`;\n}\n").unwrap();
+    let lines = vec![
+        json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null, "cwd": dir.to_str().unwrap(), "session": "g2"}),
+        json!({"ts": 1001, "event": "step", "program": "./prog",
+            "request": {"entry": "main", "answers": {}}, "step": question("main.task", &["main"])}),
+    ];
+    write(&dir, "step-g2.jsonl", &lines);
+    let a = agent_named(&agents(&dir, 1001), "step-g2");
+    assert_eq!(a["runs"][0]["program"], "prog", "{a}");
+    assert!(a["runs"][0]["mermaid"].is_string(), "{a}");
+}
+
+#[test]
+fn an_error_entry_with_a_non_text_message_or_program_is_left_out_or_null() {
+    let dir = folder("error-entries");
+    write(
+        &dir,
+        "step-e1.jsonl",
+        &[
+            json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null, "cwd": "/w", "session": "e1"}),
+            json!({"ts": 1001, "event": "start", "run": null, "program": 9,
+                "step": {"kind": "error", "message": "missing input"}}),
+            json!({"ts": 1002, "event": "start", "run": null, "program": "x",
+                "step": {"kind": "error", "message": 42}}),
+        ],
+    );
+    let a = agent_named(&agents(&dir, 1002), "step-e1");
+    assert_eq!(a["errors"], json!([{"ts": 1001, "program": null, "message": "missing input"}]), "{a}");
+}
+
+#[test]
+fn an_empty_trace_draws_only_the_entry_function() {
+    let dir = folder("empty-trace");
+    let example = format!("{}/../../examples/rein/merge-pr", env!("CARGO_MANIFEST_DIR"));
+    let lines = vec![
+        json!({"ts": 1000, "event": "agent", "transport": "step", "pid": null, "cwd": example, "session": "t1"}),
+        json!({"ts": 1001, "event": "step", "program": ".",
+            "request": {"entry": "main", "answers": {}}, "step": question("main.task", &[])}),
+    ];
+    write(&dir, "step-t1.jsonl", &lines);
+    let a = agent_named(&agents(&dir, 1001), "step-t1");
+    let path = a["runs"][0]["mermaid"].as_str().unwrap_or_default();
+    assert!(path.contains("Which task does the agent do?"), "{path}");
+    assert!(!path.contains("Does the PR change only documentation files?"), "{path}");
+}
+
+#[test]
 fn the_default_graph_names_only_the_functions_on_the_path() {
     let dir = folder("path-graph");
     let example = format!("{}/../../examples/rein/merge-pr", env!("CARGO_MANIFEST_DIR"));

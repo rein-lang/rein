@@ -22,21 +22,28 @@ pub struct Loaded {
 /// per poll, however many runs use it.
 pub type Programs = HashMap<String, Option<Rc<Loaded>>>;
 
-/// The folder a program path names: an absolute path, or a path relative to the agent's cwd (`.`, `./x`, `x/y` with a
-/// main.rein in it). None for a flow name.
+/// Whether a program value from the log is a path, not a name: absolute, dotted, with a `/`, or a `.rein` file.
+pub fn is_path(program: &str) -> bool {
+    Path::new(program).is_absolute() || program.contains('/') || program.starts_with('.') || program.ends_with(".rein")
+}
+
+/// The project folder a program path names. A path is resolved against the agent's cwd. For a `.rein` file, the
+/// project is its folder. The folder must hold a main.rein, or nothing is loaded. None for a name.
 pub fn resolve_folder(program: &str, cwd: &str) -> Option<PathBuf> {
+    if !is_path(program) {
+        return None;
+    }
     let absolute = Path::new(program).is_absolute();
     if !absolute && cwd.is_empty() {
         return None;
     }
     let joined = if absolute { PathBuf::from(program) } else { Path::new(cwd).join(program) };
-    // A folder needs a main.rein in it, so a path to a tree with no program is never walked.
-    let pathlike = absolute || program.contains('/') || program.starts_with('.');
-    if !pathlike || !joined.join("main.rein").is_file() {
+    let folder = if program.ends_with(".rein") { joined.parent()?.to_path_buf() } else { joined };
+    if !folder.join("main.rein").is_file() {
         return None;
     }
     let mut out = PathBuf::new();
-    for part in joined.components() {
+    for part in folder.components() {
         match part {
             Component::ParentDir => {
                 out.pop();
@@ -52,9 +59,8 @@ pub fn resolve_folder(program: &str, cwd: &str) -> Option<PathBuf> {
 /// load.
 pub fn program(programs: &mut Programs, folder: Option<&Path>, name: &str) -> Option<Rc<Loaded>> {
     let key = folder.map_or_else(|| name.to_string(), |f| f.display().to_string());
-    // A path that names no folder with a program, and no .rein file, is not a flow name: it is never loaded as one.
-    let unloadable_path = folder.is_none() && (name.starts_with('.') || name.starts_with('/')) && !Path::new(name).is_file();
-    if key.is_empty() || unloadable_path {
+    // A path that resolves to no project is never loaded as a flow name.
+    if key.is_empty() || (folder.is_none() && is_path(name)) {
         return None;
     }
     programs

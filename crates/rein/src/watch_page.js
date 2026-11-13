@@ -163,6 +163,11 @@ function runView(agent, run, newest) {
     const text = String(run.step.instruction || "");
     head.append(el("span", "outcome", text.length > 60 ? text.slice(0, 59) + "…" : text));
     box.append(head, pills(run));
+  } else if (run.status === "error") {
+    // An error run has no good step yet: its first error line stays next to the chip.
+    const line = String(run.error || "").split("\n")[0];
+    head.append(el("span", "outcome error", line.length > 100 ? line.slice(0, 99) + "…" : line));
+    box.append(head, pills(run));
   } else {
     const now = el("p", "now");
     now.append(el("span", "now-label", "now"), el("strong", null, nowLabel(run.step)));

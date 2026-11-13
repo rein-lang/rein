@@ -131,7 +131,11 @@ fn agent(path: &Path, now: u64, programs: &mut Programs) -> Option<Value> {
     let errors: Vec<Value> = lines
         .iter()
         .filter(|v| v["event"] == "start" && v["run"].is_null() && v["step"]["kind"] == "error")
-        .map(|v| json!({"ts": ts_of(v), "program": v["program"], "message": v["step"]["message"]}))
+        .filter_map(|v| {
+            // The log is written by other processes: a message that is not text is left out.
+            let message = v["step"]["message"].as_str()?;
+            Some(json!({"ts": ts_of(v), "program": string_or_null(&v["program"]), "message": message}))
+        })
         .collect();
     let errors = errors[errors.len().saturating_sub(MAX_ERRORS)..].to_vec();
     Some(json!({
