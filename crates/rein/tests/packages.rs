@@ -44,6 +44,7 @@ impl Sandbox {
     /// A `rein` command run from `cwd`. HOME, REIN_HOME and TMPDIR point into the sandbox.
     fn rein(&self, cwd: &Path, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_rein"));
+        cmd.env("REIN_RUNS_DIR", "");
         cmd.args(args)
             .current_dir(cwd)
             .env("HOME", self.base.join("home"))

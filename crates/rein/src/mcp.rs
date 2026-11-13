@@ -15,12 +15,14 @@ use serde_json::{json, Value};
 use crate::cli::load_flow;
 use crate::live_run::Run;
 use crate::programs;
+use crate::run_log::Log;
 
 // ponytail: runs live until rein_stop or until the server exits; add disk snapshots to resume after a crash.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct Host {
     runs: Arc<Mutex<BTreeMap<String, Run>>>,
     next: Arc<AtomicUsize>,
+    log: Arc<Mutex<Log>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -57,8 +59,20 @@ fn unknown(run_id: &str) -> String {
 }
 
 impl Host {
+    fn new() -> Host {
+        Host {
+            runs: Arc::default(),
+            next: Arc::default(),
+            log: Arc::new(Mutex::new(Log::process("mcp"))),
+        }
+    }
+
     fn runs(&self) -> MutexGuard<'_, BTreeMap<String, Run>> {
         self.runs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn log(&self) -> MutexGuard<'_, Log> {
+        self.log.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -76,13 +90,16 @@ impl Host {
 
     #[tool(description = "Start a Rein program as a live run. Returns `run` (the run id) and the first step. Answer each question or request with rein_answer until kind is done, then do the done instruction.")]
     fn rein_start(&self, Parameters(Name { name }): Parameters<Name>) -> Result<String, String> {
-        let (project, entry) = load_flow(None, Some(name))?;
-        let run = Run::start(project, entry);
+        let (project, entry) = load_flow(None, Some(name.clone()))?;
+        let run = Run::start(project, entry.clone());
         if matches!(run.last(), StepResponse::Error { .. }) {
+            // A failed start has no run id, so its log line has `run` null.
+            self.log().start(None, Some(&name), &entry, run.last());
             return Err(step_value(None, run.last()).to_string());
         }
         let id = format!("run-{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
         let out = step_value(Some(&id), run.last()).to_string();
+        self.log().start(Some(&id), Some(&name), &entry, run.last());
         self.runs().insert(id, run);
         Ok(out)
     }
@@ -91,7 +108,9 @@ impl Host {
     fn rein_answer(&self, Parameters(Answer { run_id, value }): Parameters<Answer>) -> Result<String, String> {
         let mut runs = self.runs();
         let run = runs.get_mut(&run_id).ok_or_else(|| unknown(&run_id))?;
-        let next = run.answer(None, value);
+        let key = run.asked().unwrap_or_default().to_string();
+        let next = run.answer(None, value.clone());
+        self.log().answer(&run_id, &key, &value, &next);
         Ok(step_value(Some(&run_id), &next).to_string())
     }
 
@@ -105,6 +124,7 @@ impl Host {
     #[tool(description = "Stop a run and forget it.")]
     fn rein_stop(&self, Parameters(RunId { run_id }): Parameters<RunId>) -> Result<String, String> {
         self.runs().remove(&run_id).ok_or_else(|| unknown(&run_id))?;
+        self.log().stop(&run_id);
         Ok(json!({"run": run_id, "stopped": true}).to_string())
     }
 
@@ -132,7 +152,7 @@ pub fn serve() -> u8 {
         }
     };
     let result: Result<(), Box<dyn std::error::Error>> = runtime.block_on(async {
-        Host::default().serve(rmcp::transport::stdio()).await?.waiting().await?;
+        Host::new().serve(rmcp::transport::stdio()).await?.waiting().await?;
         Ok(())
     });
     match result {
