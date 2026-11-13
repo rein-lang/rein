@@ -3,7 +3,7 @@ use std::path::Path;
 
 /// A fresh folder for one test. It is not the process environment, so tests can run in parallel.
 fn folder(test: &str) -> PathBuf {
-    let dir = env::temp_dir().join(format!("rein-watch-{test}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("rein-watch-{test}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -184,6 +184,18 @@ fn host_check_gives_403_and_the_routes_answer() {
     assert_eq!((status, kind), ("200 OK", "text/html"));
     assert!(page.contains("rein watch"));
     assert_eq!(respond(&dir, "GET", "/nope").0, "404 Not Found");
+}
+
+#[test]
+fn a_header_with_no_run_is_an_agent_with_no_runs() {
+    let dir = folder("header_only");
+    write(
+        &dir,
+        "mcp-7-1000.jsonl",
+        &[json!({"ts": 1000, "event": "agent", "transport": "mcp", "pid": pid_self(), "cwd": "/w", "session": null})],
+    );
+    let a = agent_named(&agents(&dir, 2000), "mcp-7-1000");
+    assert_eq!((a["alive"].clone(), a["runs"].clone()), (json!(true), json!([])));
 }
 
 #[test]

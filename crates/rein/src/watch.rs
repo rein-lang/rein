@@ -3,7 +3,6 @@
 //! writes nothing.
 
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -13,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Args;
 use serde_json::{json, Map, Value};
 
-use crate::{cli, graph as graph_cmd, http};
+use crate::{cli, graph as graph_cmd, http, run_log};
 
 /// A step-file agent with no event for this long has ended.
 const STEP_IDLE_MS: u64 = 10 * 60 * 1000;
@@ -46,7 +45,9 @@ pub fn run(a: &WatchArgs) -> u8 {
 }
 
 fn serve(a: &WatchArgs) -> Result<(), String> {
-    let dir = runs_dir();
+    let Some(dir) = run_log::dir() else {
+        return Err("the run log is off: REIN_RUNS_DIR is empty".to_string());
+    };
     let listener =
         TcpListener::bind(("127.0.0.1", a.port)).map_err(|e| format!("cannot listen on 127.0.0.1:{}: {e}", a.port))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -70,14 +71,6 @@ fn respond(dir: &Path, method: &str, path: &str) -> http::Reply {
         ("GET", "/api/agents") => ("200 OK", "application/json", agents(dir, now_ms()).to_string()),
         _ => ("404 Not Found", "text/plain", "not found\n".to_string()),
     }
-}
-
-/// The folder where agents write run logs. TODO(integrate): use run_log::dir()
-fn runs_dir() -> PathBuf {
-    let set = |name: &str| env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-    set("REIN_RUNS_DIR")
-        .or_else(|| set("XDG_STATE_HOME").map(|state| state.join("rein/runs")))
-        .unwrap_or_else(|| set("HOME").unwrap_or_default().join(".local/state/rein/runs"))
 }
 
 fn now_ms() -> u64 {
