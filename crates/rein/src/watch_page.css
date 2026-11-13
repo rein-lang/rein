@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light dark;
   --bg: #f6f7f9; --fg: #1d2330; --muted: #505a6b; --card: #ffffff; --line: #d3d9e3;
   --accent: #2f6fde; --on-accent: #ffffff; --ok: #1d7a3a; --wait: #8a5a00; --stop: #5a5f69; --err: #b42318;
   --graph-bg: #fbfcfd; --cluster-bg: #eef2f8; --cluster-line: #9aa6bb; --node-fill: #ffffff; --node-line: #5b6474;
