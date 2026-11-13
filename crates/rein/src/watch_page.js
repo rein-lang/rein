@@ -58,47 +58,67 @@ function pills(run) {
   return box;
 }
 
-function graphFor(key, text) {
+// The graph of a run: "Path" (the functions on its trace) or "Whole program". One box per run, kept across polls.
+function graphFor(key, run) {
   let g = graphs.get(key);
   if (!g) {
-    g = { wrap: el("div", "graph-wrap"), box: el("div", "graph"), zoom: false, drawn: null, want: null, token: 0, scrollLeft: 0, scrollTop: 0, centered: false };
-    const zoom = el("button", "zoom", "Zoom");
-    zoom.type = "button";
-    zoom.setAttribute("aria-pressed", "false");
-    zoom.title = "Show the graph at natural size, scrolled inside its box";
-    zoom.addEventListener("click", () => {
-      g.zoom = !g.zoom;
-      zoom.setAttribute("aria-pressed", String(g.zoom));
-      g.centered = false;
-      sizeSvg(g);
-      centerCurrent(g);
-    });
+    g = { wrap: el("div", "graph-wrap"), box: el("div", "graph"), mode: "path", drawn: null, want: null, token: 0, scrollLeft: 0, scrollTop: 0, centered: false, texts: {} };
+    const modes = el("div", "modes");
+    modes.setAttribute("role", "group");
+    modes.setAttribute("aria-label", "Graph");
+    const buttons = { path: el("button", "mode", "Path"), full: el("button", "mode", "Whole program") };
+    for (const [mode, button] of Object.entries(buttons)) {
+      button.type = "button";
+      button.setAttribute("aria-pressed", String(mode === g.mode));
+      button.addEventListener("click", () => {
+        g.mode = mode;
+        for (const [m, b] of Object.entries(buttons)) b.setAttribute("aria-pressed", String(m === mode));
+        g.centered = false;
+        if (!ensure(g)) {
+          sizeSvg(g);
+          centerCurrent(g);
+        }
+      });
+    }
+    modes.append(buttons.path, buttons.full);
     g.box.addEventListener("scroll", () => {
       g.scrollLeft = g.box.scrollLeft;
       g.scrollTop = g.box.scrollTop;
     });
-    g.wrap.append(zoom, g.box);
+    g.wrap.append(modes, g.box);
     graphs.set(key, g);
   }
-  // `want` stops a poll from starting a second draw of text that is already on its way.
-  if (g.drawn !== text && g.want !== text) {
-    g.want = text;
-    drawGraph(g, text);
-  }
+  g.texts = { path: run.mermaid, full: run.mermaid_full };
+  ensure(g);
   return g.wrap;
 }
 
-// Fit to the box width (the whole graph), or natural size in zoom. The viewBox keeps the aspect ratio.
+// Draws the text of the chosen mode unless the box already holds it. Returns true when a draw starts.
+function ensure(g) {
+  const text = g.texts[g.mode];
+  if (!text || g.drawn === text || g.want === text) return false;
+  g.want = text;
+  drawGraph(g, text);
+  return true;
+}
+
+// Fit to the box width, so the whole graph shows. When the fit would make labels smaller than MIN_LABEL_PX, the
+// graph keeps natural size and the box scrolls. The viewBox keeps the aspect ratio.
+const LABEL_PX = 16;
+const MIN_LABEL_PX = 11;
 function sizeSvg(g) {
   const svg = g.box.querySelector("svg");
-  g.box.classList.toggle("natural", g.zoom);
   if (!svg) return;
   const vb = svg.viewBox.baseVal;
+  const room = g.box.clientWidth - 18; // padding and border of the box
+  const fit = vb.width ? Math.min(1, room / vb.width) : 1;
+  const natural = fit * LABEL_PX < MIN_LABEL_PX || fit >= 1;
+  g.box.classList.toggle("natural", natural);
   svg.removeAttribute("width");
   svg.removeAttribute("height");
   svg.style.maxWidth = "none";
   svg.style.height = "auto";
-  svg.style.width = g.zoom && vb.width ? vb.width + "px" : "100%";
+  svg.style.width = natural && vb.width ? vb.width + "px" : "100%";
 }
 
 // Puts the current node in the middle of the box, so it shows without a scroll.
@@ -154,7 +174,7 @@ function runView(agent, run, newest) {
     now.append(el("span", "now-label", "now"), el("strong", null, nowLabel(run.step)));
     box.append(head, now, pills(run));
   }
-  if (newest && run.mermaid) box.append(graphFor(key, run.mermaid));
+  if (newest && run.mermaid) box.append(graphFor(key, run));
   if (run.step && run.step.kind === "question") {
     const d = details(key + "|question", "Question text", "text");
     d.append(el("p", null, run.step.description || "(no text)"));
@@ -218,9 +238,9 @@ function agentView(a) {
   return card;
 }
 
-// The counters: agents alive in the whole list, and runs by status in the agents shown.
+// The counters: agents alive in the whole list, and the newest run of each agent shown. Older runs are folded.
 function summary(list, shown) {
-  const runs = shown.flatMap((a) => a.runs);
+  const runs = shown.map((a) => a.runs[0]).filter(Boolean);
   const count = (status) => runs.filter((r) => r.status === status).length;
   const alive = list.filter((a) => a.alive).length;
   return [chip("alive", alive + " alive"), chip("waiting", count("waiting") + " waiting"), chip("done", count("done") + " done"), chip("error", count("error") + " error")];

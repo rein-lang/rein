@@ -314,3 +314,17 @@ fn a_program_that_does_not_load_has_no_mermaid() {
     let a = agent_named(&agents(&dir, 1001), "step-g1");
     assert!(a["runs"][0]["mermaid"].is_null(), "{a}");
 }
+
+#[test]
+fn the_default_graph_names_only_the_functions_on_the_path() {
+    let dir = folder("path-graph");
+    let example = format!("{}/../../examples/rein/merge-pr", env!("CARGO_MANIFEST_DIR"));
+    // The walk stops in `main`, so `merge_pr` is not on the path. Its question is in the whole program only.
+    folder_program_log(&dir, &example, &[("main", 1001)]);
+    let a = agent_named(&agents(&dir, 1001), "step-g1");
+    let path = a["runs"][0]["mermaid"].as_str().unwrap_or_default();
+    let full = a["runs"][0]["mermaid_full"].as_str().unwrap_or_default();
+    assert!(path.contains("Which task does the agent do?"), "{path}");
+    assert!(!path.contains("Does the PR change only documentation files?"), "{path}");
+    assert!(full.contains("Does the PR change only documentation files?"), "{full}");
+}

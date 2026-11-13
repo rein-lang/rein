@@ -1,11 +1,11 @@
 //! The programs `rein watch` shows: the folder a run's program is, its functions, and the walk of a run drawn as
 //! Mermaid, the same drawing `rein debug` shows.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use rein_core::graph;
+use rein_core::graph::{self, Graph, NodeKind};
 use rein_core::project::{Project, ENTRY};
 use rein_core::step::StepResponse;
 use serde_json::Value;
@@ -79,15 +79,54 @@ pub fn function_names(loaded: &Loaded) -> Vec<String> {
     names
 }
 
-/// The graph of a program as Mermaid, with the walk of a run marked: the nodes taken and the current one. The walk
-/// is the run's last good step. With no step, the plain graph. `entry` is the one the run started from; the default
-/// entry is the program's.
-pub fn walk_mermaid(loaded: &Loaded, step: &Value, entry: &str) -> String {
+/// The graph of a run as Mermaid, with the walk marked: the nodes taken and the current one. The walk is the run's
+/// last good step. Returns the path (the functions on `trace`, see `keep_path`) and the whole program. `entry` is the
+/// one the run started from; the default entry is the program's.
+pub fn walk_mermaid(loaded: &Loaded, step: &Value, entry: &str, trace: &[String]) -> (String, String) {
     let entry = if entry.is_empty() || entry == ENTRY { loaded.entry.as_str() } else { entry };
     let response = serde_json::from_value::<StepResponse>(step.clone()).ok();
-    let g = match &response {
+    let mut g = match &response {
         Some(r) => graph::walk(&loaded.project, entry, r),
         None => graph::flow(&loaded.project, entry),
     };
-    graph::mermaid(&g)
+    let full = graph::mermaid(&g);
+    if trace.is_empty() {
+        return (full.clone(), full);
+    }
+    let mut on_path = trace.to_vec();
+    if let Some(current) = &g.current {
+        if let Some(n) = g.nodes.iter().find(|n| n.id == current.node) {
+            if !on_path.contains(&n.function) {
+                on_path.push(n.function.clone());
+            }
+        }
+    }
+    keep_path(&mut g, &on_path);
+    (graph::mermaid(&g), full)
+}
+
+/// Keeps the nodes of the functions on the path, and drops the edges that lose an end. Each function the path leaves
+/// to keeps one node, its stub: it becomes a plain node labelled with the function name, so the reader sees the exit.
+fn keep_path(g: &mut Graph, on_path: &[String]) {
+    let kept: HashSet<String> =
+        g.nodes.iter().filter(|n| on_path.contains(&n.function)).map(|n| n.id.clone()).collect();
+    let mut stub_functions: HashSet<String> = HashSet::new();
+    let mut stubs: HashSet<String> = HashSet::new();
+    for e in g.edges.iter().filter(|e| kept.contains(&e.from) && !kept.contains(&e.to)) {
+        if let Some(node) = g.nodes.iter().find(|n| n.id == e.to) {
+            if stub_functions.insert(node.function.clone()) {
+                stubs.insert(e.to.clone());
+            }
+        }
+    }
+    for node in g.nodes.iter_mut().filter(|n| stubs.contains(&n.id)) {
+        node.kind = NodeKind::Function;
+        node.label = node.function.clone();
+        node.entry = false;
+        node.name = None;
+        node.ty = None;
+    }
+    let keep = |id: &String| kept.contains(id) || stubs.contains(id);
+    g.nodes.retain(|n| keep(&n.id));
+    g.edges.retain(|e| keep(&e.from) && keep(&e.to));
 }

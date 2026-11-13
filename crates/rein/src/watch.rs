@@ -223,15 +223,19 @@ impl Run {
             .map_or_else(|| self.program.clone(), |n| json!(n.to_string_lossy()));
         let name = self.program.as_str().unwrap_or_default();
         let loaded = program_of::program(programs, folder.as_deref(), name);
-        let mermaid = match (&loaded, graph) {
-            (Some(l), true) => Some(program_of::walk_mermaid(l, &self.step, self.entry.as_str().unwrap_or_default())),
-            _ => None,
+        let names: Vec<String> = trace.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        let (mermaid, mermaid_full) = match (&loaded, graph) {
+            (Some(l), true) => {
+                let (path, full) = program_of::walk_mermaid(l, &self.step, self.entry.as_str().unwrap_or_default(), &names);
+                (Some(path), Some(full))
+            }
+            _ => (None, None),
         };
         let functions = self.functions(loaded.as_deref().map(program_of::function_names), &trace);
         json!({
             "run": self.id, "program": program, "entry": self.entry, "status": self.status(),
             "started_ts": self.started_ts, "last_ts": self.last_ts, "step": self.step, "error": self.error,
-            "trace": trace, "inputs": self.inputs, "functions": functions, "mermaid": mermaid,
+            "trace": trace, "inputs": self.inputs, "functions": functions, "mermaid": mermaid, "mermaid_full": mermaid_full,
             "events": self.events,
         })
     }
