@@ -12,6 +12,7 @@ mod lsp;
 mod mcp;
 mod packages;
 mod programs;
+mod run_log;
 mod scopes;
 mod watch;
 

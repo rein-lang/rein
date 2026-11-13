@@ -10,6 +10,7 @@ use rein_core::step::{invalid_request, step, Answers, StepRequest, StepResponse,
 use serde_json::Value;
 
 use crate::cli::{exit_code, field_lines, load_flow, print_step, shown_type};
+use crate::run_log::Log;
 
 /// One live run. It keeps its answers and the step it waits on.
 pub struct Run {
@@ -58,8 +59,12 @@ impl Run {
     }
 }
 
+/// The run id that `rein run` writes to its log. One process runs one run.
+const RUN_ID: &str = "run-1";
+
 /// `rein run`: writes one step per line and reads one answer per line, until the flow ends.
 pub fn run(flow: Option<String>, root: Option<PathBuf>, entry: Option<String>, json: bool) -> u8 {
+    let program = flow.clone();
     let (project, default_entry) = match load_flow(root, flow) {
         Ok(found) => found,
         Err(message) => {
@@ -68,7 +73,17 @@ pub fn run(flow: Option<String>, root: Option<PathBuf>, entry: Option<String>, j
             return exit_code(&response);
         }
     };
-    let mut run = Run::start(project, entry.unwrap_or(default_entry));
+    let entry = entry.unwrap_or(default_entry);
+    let mut run = Run::start(project, entry.clone());
+    let mut log = Log::process("run");
+    log.start(Some(RUN_ID), program.as_deref(), &entry, run.last());
+    let code = drive(&mut run, &mut log, json);
+    log.stop(RUN_ID);
+    code
+}
+
+/// Shows steps and reads answers until the run ends or stdin closes.
+fn drive(run: &mut Run, log: &mut Log, json: bool) -> u8 {
     let mut lines = io::stdin().lock().lines();
     loop {
         show(run.last(), json);
@@ -79,10 +94,16 @@ pub fn run(flow: Option<String>, root: Option<PathBuf>, entry: Option<String>, j
         let Some(Ok(line)) = lines.next() else {
             return exit_code(run.last());
         };
-        let next = match parse_answer(&line, json) {
-            Err(message) => invalid_request(message),
-            Ok((key, value)) => run.answer(key, value),
+        let asked = run.asked().unwrap_or_default().to_string();
+        let (key, value, next) = match parse_answer(&line, json) {
+            Err(message) => (asked, line, invalid_request(message)),
+            Ok((key, value)) => {
+                let logged_key = key.clone().unwrap_or(asked);
+                let next = run.answer(key, value.clone());
+                (logged_key, value, next)
+            }
         };
+        log.answer(RUN_ID, &key, &value, &next);
         // A bad answer does not end the run: show the error, then ask the same step again.
         if matches!(next, StepResponse::Error { .. }) {
             show(&next, json);

@@ -18,6 +18,7 @@ fn examples() -> PathBuf {
 
 fn command(args: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_rein"));
+    c.env("REIN_RUNS_DIR", "");
     c.args(args)
         .current_dir(examples())
         .env("REIN_HOME", examples().join("no-user-programs"))

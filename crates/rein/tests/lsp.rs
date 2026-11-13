@@ -27,6 +27,7 @@ impl Server {
     /// Starts the server with extra environment variables, such as a temp `REIN_HOME`.
     fn start_with(env: &[(&str, &Path)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+            .env("REIN_RUNS_DIR", "")
             .arg("lsp")
             .envs(env.iter().copied())
             .stdin(Stdio::piped())

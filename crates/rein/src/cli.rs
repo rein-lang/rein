@@ -10,6 +10,7 @@ use rein_core::diagnostic::{line_col, Severity};
 use rein_core::eval::{self, Outcome};
 use rein_core::project::{Project, ENTRY};
 
+use crate::run_log;
 use crate::scopes;
 use rein_core::step::{invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
@@ -104,24 +105,32 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
 /// `rein_core::step::step` decides everything. A flow name, from `--flow` or the stdin `flow` field, is
 /// resolved through the scoped `rein/` folders.
 pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool, json: bool) -> u8 {
-    let response = match build_request(entry, answers, inputs, from_stdin) {
-        Err(message) => invalid_request(message),
-        Ok(request) => {
-            let flow = flow.or_else(|| request.flow.clone());
-            match load_flow(root, flow) {
+    let built = build_request(entry, answers, inputs, from_stdin);
+    let flow = flow.or_else(|| built.as_ref().ok().and_then(|r| r.flow.clone()));
+    let program = flow.clone().or_else(|| root.as_ref().map(|r| r.display().to_string()));
+    let (request, response) = match built {
+        Err(message) => (empty_request(), invalid_request(message)),
+        Ok(mut request) => {
+            let response = match load_flow(root, flow) {
                 Ok((project, entry)) => {
-                    let mut request = request;
                     if request.entry == ENTRY {
                         request.entry = entry;
                     }
                     step_flow(&project, &request)
                 }
                 Err(message) => invalid_request(message),
-            }
+            };
+            (request, response)
         }
     };
+    run_log::step(&request, program.as_deref(), &response);
     print_step(&response, json || from_stdin);
     exit_code(&response)
+}
+
+/// The request that a failed `rein step` logs, when the request itself could not be read.
+fn empty_request() -> StepRequest {
+    StepRequest { version: PROTOCOL_VERSION, entry: ENTRY.to_string(), answers: Default::default(), flow: None, inputs: Default::default() }
 }
 
 /// The project and its entry function for `--root DIR`, a program name or `.rein` path, or the nearest root from

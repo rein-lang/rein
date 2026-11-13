@@ -37,6 +37,7 @@ impl Client {
 fn mcp_host_walks_support_ticket_to_done_and_keeps_the_run_on_a_bad_answer() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples").canonicalize().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(["serve", "--mcp"])
         .current_dir(&examples)
         .env("REIN_HOME", examples.join("no-user-programs"))
