@@ -1,7 +1,7 @@
 //! Diagnostics: re-checks the projects that hold a changed file, then publishes the checker's errors and warnings.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification};
 use lsp_types::{Diagnostic, DiagnosticSeverity, PublishDiagnosticsParams, Url};
@@ -10,7 +10,7 @@ use rein_core::project::Project;
 
 use super::definition::std_dir;
 use super::text::range;
-use super::workspace::{build_project, doc_path, uri_for, Docs};
+use super::workspace::{build_project, doc_path, skipped_folder_of, uri_for, Docs};
 use super::BoxResult;
 
 /// Re-checks the projects that hold `changed` and every file published so far. Then it publishes.
@@ -51,6 +51,14 @@ pub fn refresh(connection: &Connection, docs: &Docs, published: &mut BTreeSet<Ur
             lists.entry(open.unwrap_or_else(|| changed.clone())).or_default().extend(extra);
         }
     }
+    // A file in a folder the loader skips is in no project, so it has no diagnostics. An open one gets one hint
+    // saying why. Only open buffers are chosen, so a closed file, or one that moved, is left out and gets an empty list below.
+    for uri in docs.keys() {
+        let Some(path) = doc_path(uri) else { continue };
+        if let Some(folder) = skipped_folder_of(&Project::find_root(&path), &path) {
+            lists.entry(uri.clone()).or_default().push(skipped_hint(&folder));
+        }
+    }
     for stale in published.iter().filter(|u| !lists.contains_key(*u)) {
         send_diagnostics(connection, stale.clone(), Vec::new())?;
     }
@@ -66,6 +74,16 @@ fn send_diagnostics(connection: &Connection, uri: Url, diagnostics: Vec<Diagnost
     let note = Notification::new("textDocument/publishDiagnostics".to_string(), params);
     connection.sender.send(Message::Notification(note))?;
     Ok(())
+}
+
+/// The hint on a file the loader skips, at its top: the folder that the loader does not load.
+fn skipped_hint(folder: &Path) -> Diagnostic {
+    Diagnostic {
+        severity: Some(DiagnosticSeverity::HINT),
+        source: Some("rein".to_string()),
+        message: format!("`rein` does not load files in `{}/`; move this file to use it in the program", folder.display()),
+        ..Default::default()
+    }
 }
 
 fn to_lsp(text: &str, d: &ReinDiagnostic) -> Diagnostic {

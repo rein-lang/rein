@@ -96,6 +96,28 @@ impl Server {
         msg["params"]["diagnostics"].as_array().unwrap().clone()
     }
 
+    /// Sends a request, which the server answers after the notifications sent before it. Returns one list per
+    /// publish for `uri` that came first, so a publish with no diagnostics is seen too.
+    fn publishes_for(&mut self, uri: &str) -> Vec<Vec<Value>> {
+        const SYNC: i64 = 800;
+        self.send(json!({
+            "jsonrpc": "2.0", "id": SYNC, "method": "textDocument/documentSymbol",
+            "params": {"textDocument": {"uri": uri}}
+        }));
+        let deadline = Instant::now() + TIMEOUT;
+        let mut seen = Vec::new();
+        loop {
+            let left = deadline.checked_duration_since(Instant::now()).expect("timed out waiting for the server");
+            let msg = self.messages.recv_timeout(left).expect("timed out waiting for the server");
+            if msg["id"] == SYNC {
+                return seen;
+            }
+            if msg["method"] == "textDocument/publishDiagnostics" && msg["params"]["uri"] == uri {
+                seen.push(msg["params"]["diagnostics"].as_array().unwrap().clone());
+            }
+        }
+    }
+
     /// Shuts the server down and checks it exits with status 0.
     fn shutdown(&mut self) {
         let response = self.request(900, "shutdown", Value::Null);
@@ -391,6 +413,131 @@ fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
     );
     let rechecked = server.wait_diagnostics(&x, |d| !has_message(d, "leaves the project root"));
     assert!(!has_message(&rechecked, "leaves the project root"));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_file_in_a_skipped_folder_gets_a_hint_why() {
+    let root = temp_project("skipped-hint");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // The loader skips `target/`, so the file has no language features. The hint says why, at the top of the file.
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    let diags = server.wait_diagnostics(&y, |d| has_message(d, "does not load files in `target/`"));
+    let hint = diags.iter().find(|d| d["severity"] == 4).expect("hint diagnostic");
+    assert!(hint["message"].as_str().unwrap().contains("move this file"), "{hint}");
+    assert_eq!(hint["range"], json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// How many skipped-folder hints a publish holds.
+fn hint_count(diags: &[Value]) -> usize {
+    diags.iter().filter(|d| d["severity"] == 4 && d["message"].as_str().is_some_and(|m| m.contains("does not load"))).count()
+}
+
+/// Opens `file` under `root` with `text`, then checks that no publish for it carries the skipped-folder hint.
+fn assert_no_skipped_hint(server: &mut Server, root: &Path, file: &str, text: &str) {
+    let uri = uri_of(root, file);
+    server.open(&uri, text);
+    let published = server.publishes_for(&uri);
+    assert!(published.iter().all(|d| hint_count(d) == 0), "{published:?}");
+}
+
+#[test]
+fn a_skipped_hint_clears_when_its_file_closes() {
+    let root = temp_project("hint-close");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    server.wait_diagnostics(&y, |d| has_message(d, "does not load files in `target/`"));
+
+    // The buffer closes, so the file is no longer open. Its hint goes with it, as an empty publish.
+    server.notify("textDocument/didClose", json!({"textDocument": {"uri": y}}));
+    let cleared = server.wait_diagnostics(&y, |d| d.is_empty());
+    assert!(cleared.is_empty());
+
+    // Opening another file does not publish the closed file again.
+    let main = uri_of(&root, "main.rein");
+    server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
+    let later = server.publishes_for(&y);
+    assert!(later.is_empty(), "{later:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_skipped_hint_is_published_once_per_publish() {
+    let root = temp_project("hint-once");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    let first = server.wait_diagnostics(&y, |d| has_message(d, "does not load"));
+    assert_eq!(hint_count(&first), 1, "{first:?}");
+
+    let edited = text.replace("done", "gone");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": y, "version": 2}, "contentChanges": [{"text": edited}]}),
+    );
+    let again = server.wait_diagnostics(&y, |d| has_message(d, "does not load"));
+    assert_eq!(hint_count(&again), 1, "{again:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_program_installed_under_node_modules_gets_no_hint() {
+    let root = temp_project("installed");
+    let pkg = root.join("node_modules/foo");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("rein.json"), r#"{"entry":"start.rein"}"#).unwrap();
+    let text = "/** Start. */\nexport default function start() {\n  return `s`;\n}\n";
+    fs::write(pkg.join("start.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    assert_no_skipped_hint(&mut server, &root, "node_modules/foo/start.rein", text);
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_program_installed_by_pnpm_gets_no_hint() {
+    let root = temp_project("pnpm");
+    let pkg = root.join("node_modules/.pnpm/foo@1.0.0/node_modules/foo");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("rein.json"), r#"{"entry":"start.rein"}"#).unwrap();
+    let text = "/** Start. */\nexport default function start() {\n  return `s`;\n}\n";
+    fs::write(pkg.join("start.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    assert_no_skipped_hint(&mut server, &root, "node_modules/.pnpm/foo@1.0.0/node_modules/foo/start.rein", text);
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
@@ -1063,11 +1210,12 @@ fn rename_refuses_to_move_through_a_symlinked_folder() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
-fn rename_refuses_to_move_a_file_with_a_broken_reference() {
-    let root = folder_project("rename-broken-ref");
-    // `a/b` refers to `../nope`, which does not exist. Moved to `c/b`, the text would point at another function.
-    fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../nope;\n}\n").unwrap();
+fn rename_refuses_to_move_a_folder_holding_a_hidden_file_symlink() {
+    let root = folder_project("rename-hidden-file-symlink");
+    fs::write(root.join("shared.env"), "KEY=1\n").unwrap();
+    std::os::unix::fs::symlink("../shared.env", root.join("a/.env")).unwrap();
     let mut server = start_with_file_renames();
     let main = open_file(&mut server, &root, "main.rein");
 
@@ -1075,7 +1223,269 @@ fn rename_refuses_to_move_a_file_with_a_broken_reference() {
     params["newName"] = json!("c");
     let edit = server.request(2, "textDocument/rename", params);
     let message = edit["error"]["message"].as_str().unwrap_or_default();
-    assert!(message.contains("`@../nope` in `a/b` does not resolve"), "{edit}");
+    assert!(message.contains("`a/.env` is a symbolic link"), "{edit}");
+    // Nothing moved: the folder and its link are where they were.
+    assert!(root.join("a/b.rein").is_file(), "{edit}");
+    assert!(fs::symlink_metadata(root.join("a/.env")).unwrap().file_type().is_symlink(), "{edit}");
+    assert!(!root.join("c").exists(), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_keeps_a_broken_reference_that_keeps_its_meaning() {
+    let root = folder_project("rename-broken-same-meaning");
+    // `a` drafts `@./todo`, and `a/b` refers to `@../nope`. Neither exists, and neither names a function after the
+    // rename to `c`: `todo` and `nope` are at the root in both places.
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return @./todo;\n}\n").unwrap();
+    fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../nope;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_broken_reference_that_would_resolve_after_the_move() {
+    let root = folder_project("rename-broken-ref");
+    // `a/b` refers to `../c`, which does not exist yet. Renaming `a` to `c` creates `c.rein`, and from `c/b` the
+    // same text names it.
+    fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../c;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("`@../c` in `a/b` does not resolve, but after the move it would resolve to `c`"),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_broken_reference_in_a_file_that_stays_put_that_would_resolve_after_the_move() {
+    let root = folder_project("rename-broken-stays-put");
+    // `x` stays at the root and refers to `@./c`, which does not exist. Renaming `a` to `c` creates `c.rein`, and
+    // the same text in `x` names it, although `x` does not move.
+    fs::write(root.join("x.rein"), "/** X. */\nexport default function x() {\n  return @./c;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("`@./c` in `x` does not resolve, but after the move it would resolve to `c`"),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// `steps/fix_ci` is only called by `flow/merge`, so the quick fix moves it to `flow/merge/fix_ci.rein`, one folder
+/// deeper. It refers to `@../../nope`, which leaves the root from `steps` but names `nope` from `flow/merge`.
+fn escaping_reference_project(tag: &str, nope: bool) -> (PathBuf, Value) {
+    let root = fs::canonicalize(temp_project(tag)).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fixCi() {\n  return @../../nope;\n}\n");
+    if nope {
+        write("nope.rein", "/** Nope. */\nexport default function nope() {\n  return `n`;\n}\n");
+    }
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "`steps/fix_ci` is only called by `flow/merge`; move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    server.shutdown();
+    (root, actions)
+}
+
+#[test]
+fn quick_fix_moves_a_function_deeper_when_its_escaping_reference_still_names_nothing() {
+    // From `steps/fix_ci`, `@../../nope` leaves the root. From `flow/merge/fix_ci` it names `nope`, which is not a
+    // file, so the move changes nothing about the reference and is allowed.
+    let (root, actions) = escaping_reference_project("escape-allowed", false);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![(spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string())],
+            vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_refuses_a_move_that_makes_an_escaping_reference_name_a_file() {
+    // With `nope.rein` at the root, `@../../nope` from `flow/merge/fix_ci` names it after the move.
+    let (root, actions) = escaping_reference_project("escape-refused", true);
+    let offered = actions["result"].as_array().unwrap().iter().any(|a| a["title"] == "Move to flow/merge/fix_ci.rein");
+    assert!(!offered, "{actions}");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_a_function_to_a_name_that_differs_only_in_case() {
+    let root = fs::canonicalize(temp_project("rename-case")).unwrap();
+    // Only a case-insensitive file system (macOS, Windows, or a casefold folder) finds `TARGET.rein` in this folder.
+    if !root.join("TARGET.rein").exists() {
+        eprintln!("skipped: the temp dir is case-sensitive");
+        fs::remove_dir_all(&root).unwrap();
+        return;
+    }
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("Target");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("main.rein", 2, 12, 2, 18), "Target".to_string()),
+                (spot("target.rein", 1, 24, 1, 30), "Target".to_string()),
+            ],
+            vec![("target.rein".to_string(), "Target.rein".to_string())]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_case_only_rename_of_a_function_with_a_folder() {
+    // Decided from the names and the folder on disk, so this runs on any file system.
+    let root = folder_project("rename-case-folder");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("A");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edit["error"]["message"],
+        "a rename that only changes case cannot move the folder `a/`; rename it in two steps through another name",
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_hard_link_of_the_source() {
+    let root = fs::canonicalize(temp_project("rename-hard-link")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    fs::hard_link(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+    // Nothing moved: both names still exist.
+    assert!(root.join("a.rein").exists() && root.join("c.rein").exists());
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_symlink_to_the_source() {
+    let root = fs::canonicalize(temp_project("rename-symlink-dest")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    std::os::unix::fs::symlink(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_moves_the_editor_leftovers_of_the_folder_with_it() {
+    let root = folder_project("rename-leftovers");
+    fs::write(root.join("a/.DS_Store"), "").unwrap();
+    fs::write(root.join("a/Thumbs.db"), "").unwrap();
+    fs::write(root.join("a/b.rein~"), "").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("a.rein", 2, 9, 2, 15), "@./c/b".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+                ("a/.DS_Store".to_string(), "c/.DS_Store".to_string()),
+                ("a/Thumbs.db".to_string(), "c/Thumbs.db".to_string()),
+                ("a/b.rein~".to_string(), "c/b.rein~".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();

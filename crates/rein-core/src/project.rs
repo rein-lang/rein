@@ -117,10 +117,12 @@ impl Project {
     pub fn load_with(root: &Path, open: &[(PathBuf, String)]) -> io::Result<Self> {
         let mut sources = Vec::new();
         collect(root, &mut sources, &mut BTreeSet::new())?;
+        // The root is canonicalized once for all open buffers, not once per buffer.
+        let canonical = fs::canonicalize(root).ok();
         // A later pair for the same name replaces the disk copy, as `build` keeps the last one.
-        sources.extend(
-            open.iter().filter_map(|(path, text)| Some((Self::loaded_path(root, path)?, Ok(text.clone())))),
-        );
+        sources.extend(open.iter().filter_map(|(path, text)| {
+            Some((Self::loaded_under(root, canonical.as_deref(), path)?, Ok(text.clone())))
+        }));
         Ok(Self::build(root.to_path_buf(), sources))
     }
 
@@ -129,11 +131,16 @@ impl Project {
     /// matched against the canonical root and returned under `root` as the disk walk spells it. A file in a folder
     /// the loader skips, or in a nested flow, is not loaded.
     pub fn loaded_path(root: &Path, path: &Path) -> Option<PathBuf> {
+        let canonical = if path.starts_with(root) { None } else { fs::canonicalize(root).ok() };
+        Self::loaded_under(root, canonical.as_deref(), path)
+    }
+
+    /// [`Project::loaded_path`] with the canonical form of `root` given by the caller, when `path` needs it.
+    fn loaded_under(root: &Path, canonical: Option<&Path>, path: &Path) -> Option<PathBuf> {
         let spelled = if path.starts_with(root) {
             path.to_path_buf()
         } else {
-            let canonical = fs::canonicalize(root).ok()?;
-            root.join(path.strip_prefix(canonical).ok()?)
+            root.join(path.strip_prefix(canonical?).ok()?)
         };
         let rel = spelled.strip_prefix(root).ok()?;
         for dir in rel.ancestors().skip(1).take_while(|d| !d.as_os_str().is_empty()) {
@@ -639,7 +646,7 @@ fn callers_of(adj: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String, BTre
 
 /// The project path that `@<source>`, written in function `from`, points to. The path starts with `./` or
 /// `../`, has no extension, is relative to the folder of `from`, and stays inside the root.
-fn join(from: &str, source: &str) -> Result<String, String> {
+pub fn join(from: &str, source: &str) -> Result<String, String> {
     if !(source.starts_with("./") || source.starts_with("../")) {
         return Err(format!("references are relative: write `@./{source}`"));
     }
@@ -699,7 +706,7 @@ pub fn skipped_folder(name: &str) -> bool {
 
 /// Whether the loader skips the folder `dir` named `name`: [`skipped_folder`], or a folder with its own `main.rein`,
 /// which is another flow.
-fn skips_folder(dir: &Path, name: &str) -> bool {
+pub fn skips_folder(dir: &Path, name: &str) -> bool {
     skipped_folder(name) || dir.join(MAIN_FILE).is_file()
 }
 

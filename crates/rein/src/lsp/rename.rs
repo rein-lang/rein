@@ -11,9 +11,8 @@ use lsp_types::{
 };
 use rein_core::ast::{is_struct, StructRef, STRUCT_SUFFIX};
 use rein_core::diagnostic::Span;
-use rein_core::flows::MAIN_FILE;
 use rein_core::lexer::KEYWORDS;
-use rein_core::project::{skipped_folder, Project};
+use rein_core::project::{join, skips_folder, Project};
 
 use super::occurrences::{declaration, name_span, param_uses, refs, symbol_at, Symbol};
 use super::structs::{base as struct_base, field_sites, struct_decl, type_sites};
@@ -145,7 +144,7 @@ fn rename_struct(state: &State, project: &Project, file: &str, old: &str, new: &
     let sf = project.get(file).ok_or_else(|| format!("cannot find `{file}`"))?;
     let base = struct_base(file);
     let new_path = sf.path.with_file_name(format!("{new}.struct.rein"));
-    if new_path.exists() {
+    if taken(&new_path, &sf.path) {
         return Err(format!("{} already exists", new_path.display()));
     }
     for (f, span) in type_sites(project, file, old) {
@@ -171,8 +170,11 @@ fn rename_function(state: &State, project: &Project, target: &str, new: &str) ->
 /// Moves the file of `target` to the project path `new_target`, with the folder of the functions nested under
 /// it (`<target>/`), so they stay in their caller's folder. Every reference to a moved file is rewritten, and
 /// every relative reference inside a moved file whose path changes. A reference that only changes in its last
-/// segment, as in a rename in the same folder, changes only that segment. The name after
-/// `export default function` changes when it was the file name.
+/// segment, as in a rename in the same folder, changes only that segment. A reference that does not resolve keeps
+/// its target, in a moved file or in one that stays put, and the move is refused only when it would make the
+/// reference resolve to a file, or, when it leaves the project root, when it would then name one. The
+/// editor and OS leftovers in the folder move with it. The name after `export default function` changes when it
+/// was the file name.
 pub fn move_function(state: &State, project: &Project, target: &str, new_target: &str) -> Result<WorkspaceEdit, String> {
     if !state.renames_files {
         return Err("this editor cannot rename files, so a function cannot be renamed".to_string());
@@ -181,6 +183,16 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
     let (old, new) = (basename(target), basename(new_target));
     // Each moved file, by its old project path: the target, and every file in its folder.
     let nested = format!("{target}/");
+    // A case-only move (`target` to `Target`) on a case-insensitive file system renames each file of the folder into
+    // the same folder, and the folder keeps its old name, so the references would name a folder that is gone.
+    if target != new_target
+        && target.eq_ignore_ascii_case(new_target)
+        && fs::symlink_metadata(project.root.join(target)).is_ok_and(|m| m.is_dir())
+    {
+        return Err(format!(
+            "a rename that only changes case cannot move the folder `{nested}`; rename it in two steps through another name"
+        ));
+    }
     let moved = |name: &str| -> Option<String> {
         if name == target {
             return Some(new_target.to_string());
@@ -193,10 +205,9 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
             "the folder `{nested}` holds the entry `{entry}`; moving it would leave the program without its entry"
         ));
     }
-    check_folder(project, target)?;
-    for name in project.files.keys().filter(|name| moved(name).is_some()) {
-        check_references(project, name)?;
-    }
+    let leftovers = check_folder(project, target)?;
+    // The project names after the move: the ones a reference in a moved file may resolve to.
+    let after: BTreeSet<String> = project.files.keys().map(|name| moved(name).unwrap_or_else(|| name.clone())).collect();
     let mut renames = Vec::new();
     for (name, file) in &project.files {
         let Some(to) = moved(name) else { continue };
@@ -208,23 +219,65 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
             ));
         }
         let new_path = project.root.join(format!("{to}.rein"));
-        if new_path.exists() {
+        if taken(&new_path, &file.path) {
             return Err(format!("{} already exists", new_path.display()));
         }
         let old_uri = uri_for(&state.docs, &file.path).ok_or("the file has no URI")?;
         let new_uri = Url::from_file_path(&new_path).map_err(|()| "the new path has no URI".to_string())?;
         renames.push((old_uri, new_uri));
     }
+    let folder = project.root.join(target);
+    for path in leftovers {
+        let rest = path.strip_prefix(&folder).map_err(|_| format!("`{}` is not in the folder", path.display()))?;
+        let new_path = project.root.join(new_target).join(rest);
+        if taken(&new_path, &path) {
+            return Err(format!("{} already exists", new_path.display()));
+        }
+        let old_uri = Url::from_file_path(&path).map_err(|()| "the file has no URI".to_string())?;
+        let new_uri = Url::from_file_path(&new_path).map_err(|()| "the new path has no URI".to_string())?;
+        renames.push((old_uri, new_uri));
+    }
     let mut edits = Edits::default();
     for (from, file) in &project.files {
         let new_from = moved(from);
-        for (span, to, suffix) in outgoing(project, from) {
-            let new_to = moved(&to);
-            if new_from.is_none() && new_to.is_none() {
+        for (span, value, suffix) in references(project, from) {
+            let Ok(path_now) = join(from, &value) else {
+                // The reference leaves the project root, so it names nothing now. A moved file may now reach a file.
+                if let Some(new_from) = &new_from {
+                    if let Ok(path) = join(new_from, &value) {
+                        let now = format!("{path}{suffix}");
+                        if after.contains(&now) {
+                            return Err(format!(
+                                "`@{value}` in `{from}` leaves the project root, but after the move it would name \
+                                 `{}`, so the move would change its meaning; fix it first",
+                                shown_name(&now)
+                            ));
+                        }
+                    }
+                }
+                continue;
+            };
+            let now = format!("{path_now}{suffix}");
+            let resolved = project.files.contains_key(&now);
+            let new_to = moved(&now);
+            let to_after = new_to.clone().unwrap_or_else(|| now.clone());
+            // An unresolved reference keeps its text. In a file that stays put, the text names `now` after the move;
+            // in a moved file it is rewritten to name `to_after`. Either way the move is refused when that name
+            // would then be a file.
+            let named = if new_from.is_some() { &to_after } else { &now };
+            if !resolved && after.contains(named) {
+                return Err(format!(
+                    "`@{value}` in `{from}` does not resolve, but after the move it would resolve to `{}`, so the move \
+                     would change its meaning; fix it first",
+                    shown_name(named)
+                ));
+            }
+            // A reference in a file that stays put changes only when it resolves to a file that moves.
+            if new_from.is_none() && (!resolved || new_to.is_none()) {
                 continue;
             }
-            let (from_now, to_now) = (new_from.as_deref().unwrap_or(from), new_to.as_deref().unwrap_or(&to));
-            let path = relative_import(from_now, to_now.strip_suffix(suffix).unwrap_or(to_now));
+            let from_now = new_from.as_deref().unwrap_or(from);
+            let path = relative_import(from_now, to_after.strip_suffix(suffix).unwrap_or(&to_after));
             let written = &file.text[span.start..span.end];
             let written = written.strip_prefix('@').unwrap_or(written);
             if written == path {
@@ -244,44 +297,64 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
 }
 
 /// Refuses a move that would leave something of the folder `<root>/<target>` behind, or that would go through a
-/// symbolic link. Only the `.rein` files the project loads move with their folder. Anything else in it stays:
-/// a file that is not `.rein` (such as `notes.md`), a folder the loader skips, or a folder with its own
-/// `main.rein`. A link is refused too, since renaming through it moves files out of the folder it points to.
-fn check_folder(project: &Project, target: &str) -> Result<(), String> {
+/// symbolic link. The `.rein` files the project loads move with their folder, and so do the editor and OS
+/// leftovers (see [`is_leftover`]), which are returned sorted. Anything else in it blocks the move: a file that is
+/// not `.rein` (such as `notes.md`), a folder the loader skips, or a folder with its own `main.rein`. Any link in
+/// it refuses the move, a link to a file or to a folder alike, and this is checked before the leftover rule: a
+/// link to a file would otherwise move as a leftover and be left pointing at nothing.
+fn check_folder(project: &Project, target: &str) -> Result<Vec<PathBuf>, String> {
     let folder = project.root.join(target);
-    let Ok(meta) = fs::symlink_metadata(&folder) else { return Ok(()) };
+    let Ok(meta) = fs::symlink_metadata(&folder) else { return Ok(Vec::new()) };
     if meta.file_type().is_symlink() {
         return Err(symlink_error(&shown(project, &folder)));
     }
     if !meta.is_dir() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let loaded: BTreeSet<PathBuf> = project.files.values().filter_map(|f| fs::canonicalize(&f.path).ok()).collect();
-    left_behind(project, &folder, &loaded)
+    let mut leftovers = Vec::new();
+    left_behind(project, &folder, &loaded, &mut leftovers)?;
+    leftovers.sort();
+    Ok(leftovers)
 }
 
-/// The first thing under `dir` that a move of its functions would not carry: see [`check_folder`].
-fn left_behind(project: &Project, dir: &Path, loaded: &BTreeSet<PathBuf>) -> Result<(), String> {
+/// Editor and OS leftovers: a hidden file, `Thumbs.db`, `desktop.ini`, or a backup or swap file (`*~`, `*.swp`,
+/// `*.swo`). They do not block a move, and the move renames them with their folder. A hidden folder is not one.
+fn is_leftover(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(name, "Thumbs.db" | "desktop.ini")
+        || name.ends_with('~')
+        || name.ends_with(".swp")
+        || name.ends_with(".swo")
+}
+
+/// The first thing under `dir` that a move of its functions would not carry, or that the move would only carry as a
+/// leftover, added to `leftovers`: see [`check_folder`].
+fn left_behind(project: &Project, dir: &Path, loaded: &BTreeSet<PathBuf>, leftovers: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|e| format!("cannot read `{}`: {e}", shown(project, dir)))?;
     for entry in entries {
         let path = entry.map_err(|e| format!("cannot read `{}`: {e}", shown(project, dir)))?.path();
         let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        // `metadata` follows a link. A link to a folder is refused, as in `check_folder`.
-        let is_dir = fs::metadata(&path).is_ok_and(|m| m.is_dir());
+        // A link is refused whatever it points to, before any other rule: `symlink_metadata` does not follow it.
         let is_link = fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
-        if is_dir && is_link {
+        if is_link {
             return Err(symlink_error(&shown(project, &path)));
         }
+        let is_dir = path.is_dir();
         if is_dir {
-            if skipped_folder(&name) || path.join(MAIN_FILE).is_file() {
+            if skips_folder(&path, &name) {
                 return Err(format!(
                     "`{}` is a folder the project does not load (a hidden, `target` or `node_modules` folder, or one \
                      with its own `main.rein`), so the move would leave it behind; move or remove it first",
                     shown(project, &path)
                 ));
             }
-            left_behind(project, &path, loaded)?;
-        } else if !fs::canonicalize(&path).is_ok_and(|p| loaded.contains(&p)) {
+            left_behind(project, &path, loaded, leftovers)?;
+        } else if fs::canonicalize(&path).is_ok_and(|p| loaded.contains(&p)) {
+            // A `.rein` file of the project: the move carries it.
+        } else if is_leftover(&name) {
+            leftovers.push(path);
+        } else {
             return Err(format!(
                 "`{}` is not a `.rein` file of the project, so the move would leave it behind; move or remove it first",
                 shown(project, &path)
@@ -292,7 +365,40 @@ fn left_behind(project: &Project, dir: &Path, loaded: &BTreeSet<PathBuf>) -> Res
 }
 
 fn symlink_error(path: &str) -> String {
-    format!("`{path}` is a symbolic link; a move through it would take files out of the folder it points to")
+    format!(
+        "`{path}` is a symbolic link; a move would carry the link to a new place, where its target no longer \
+         resolves, or take files out of the folder it points to. Move or remove the link first"
+    )
+}
+
+/// Whether a move to `new` would overwrite a file other than `old`. The destination is the source itself only when
+/// its path equals the source path ignoring ASCII case (a case-only rename on a case-insensitive file system, where
+/// `a.rein` to `A.rein` finds its own source) and it is the same file. Any other file at `new`, including a hard link
+/// or a symbolic link to the source, is a clash. A link is checked as a link, so it is never taken for its target.
+fn taken(new: &Path, old: &Path) -> bool {
+    if fs::symlink_metadata(new).is_err() {
+        return false;
+    }
+    !(new.to_string_lossy().eq_ignore_ascii_case(&old.to_string_lossy()) && same_file(new, old))
+}
+
+/// Whether `a` and `b` are the same file: the same device and inode on Unix, with no link followed, so a hard link
+/// to the file is the same file and a symbolic link is not. Elsewhere, both must be files that are not links with the
+/// same canonical path.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let is_link = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+        !is_link(a) && !is_link(b) && matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+    }
 }
 
 /// The path of `path` under the project root, as the messages show it, such as `ci/fix/notes.md`.
@@ -300,47 +406,28 @@ fn shown(project: &Project, path: &Path) -> String {
     path.strip_prefix(&project.root).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-/// Refuses a move of function `name` when one of its relative references does not resolve today. Its text would
-/// stay the same in the new folder, where it could point at another function, so the author fixes it first.
-fn check_references(project: &Project, name: &str) -> Result<(), String> {
-    let Some(sf) = project.get(name) else { return Ok(()) };
-    let f = &sf.function;
-    let broken = |source: &str| {
-        format!("`@{source}` in `{name}` does not resolve, so the move would leave it pointing at another function; fix it first")
-    };
-    for (r, _) in refs(f) {
-        let relative = r.value.starts_with("./") || r.value.starts_with("../");
-        if relative && project.resolve(name, &r.value).is_err() {
-            return Err(broken(&r.value));
-        }
-    }
-    let types = f.struct_param().map(|p| p.ty.clone()).into_iter().chain(f.answer_struct_refs().into_iter().map(|(_, t)| t));
-    for ty in types {
-        if let StructRef::Ref(r) = ty {
-            if project.struct_for(name, &r.value).is_err() {
-                return Err(broken(&r.value));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Each relative reference written in function `name` that resolves: its span, the project path of the file it
-/// names, and the suffix that path has beyond the written reference. A struct type names `<name>.struct.rein`
-/// without `.struct`, as the reference is written.
-fn outgoing(project: &Project, name: &str) -> Vec<(Span, String, &'static str)> {
+/// Each reference written in function `name`: its span, the path as written (such as `./fix`), and the suffix that
+/// the project name of the file it names has beyond that path. A shared struct's file is `<path>.struct.rein`, so
+/// its suffix is `.struct`. Whether the reference resolves is left to the caller.
+fn references(project: &Project, name: &str) -> Vec<(Span, String, &'static str)> {
     let Some(sf) = project.get(name) else { return Vec::new() };
     let f = &sf.function;
-    let functions = refs(f).into_iter().filter_map(|(r, _)| Some((r.span, project.resolve(name, &r.value).ok()?, "")));
+    let functions = refs(f).into_iter().map(|(r, _)| (r.span, r.value.clone(), ""));
     let types = f.struct_param().map(|p| p.ty.clone()).into_iter().chain(f.answer_struct_refs().into_iter().map(|(_, t)| t));
     let structs = types.filter_map(|t| match t {
-        StructRef::Ref(r) => {
-            let (file, _) = project.struct_for(name, &r.value).ok()?;
-            Some((r.span, file, STRUCT_SUFFIX))
-        }
+        StructRef::Ref(r) => Some((r.span, r.value.clone(), STRUCT_SUFFIX)),
         StructRef::Local(_) => None,
     });
     functions.chain(structs).collect()
+}
+
+/// A project name as a reference names it: a shared struct's file, `<name>.struct.rein`, else the name itself.
+fn shown_name(name: &str) -> String {
+    if is_struct(name) {
+        format!("{name}.rein")
+    } else {
+        name.to_string()
+    }
 }
 
 /// Text edits per function file.
