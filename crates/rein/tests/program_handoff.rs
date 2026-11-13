@@ -170,3 +170,22 @@ fn first_step_names_a_program_missing_from_the_entry() {
     assert_first_step_names(&home, "unknown program `b`; run `rein list` to list programs, or `rein install -g b` to install it");
     fs::remove_dir_all(&home).unwrap();
 }
+
+#[test]
+fn a_package_reaches_only_the_programs_its_package_json_declares() {
+    let home = sandbox("deps", "@pr-handling/main(pr=pr)");
+    let handler = home.join("handler");
+    fs::write(handler.join("package.json"), r#"{"name": "handler"}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("program `pr-handling` is not a dependency of `handler`"), "{text}");
+
+    let out = rein(&home, &["step", "handler", "--input", "pr=u/1", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("is not a dependency of `handler`"), "{text}");
+
+    fs::write(handler.join("package.json"), r#"{"name": "handler", "dependencies": {"pr-handling": "1"}}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+}
