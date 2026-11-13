@@ -5,6 +5,7 @@ mod dap;
 mod debug;
 mod graph;
 mod hook;
+mod http;
 mod live_run;
 mod list;
 mod lsp;
@@ -12,6 +13,7 @@ mod mcp;
 mod packages;
 mod programs;
 mod scopes;
+mod watch;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -119,6 +121,11 @@ enum Command {
         #[command(flatten)]
         args: debug::DebugArgs,
     },
+    /// Show the agents that use rein now: their programs, answers and the step each run waits on, in a browser page.
+    Watch {
+        #[command(flatten)]
+        args: watch::WatchArgs,
+    },
     /// List the programs visible from here, as `ls` lists files: names, or `-l` for details. Operands are name globs.
     #[command(alias = "flows")]
     List {
@@ -191,6 +198,7 @@ fn main() -> ExitCode {
         Command::Describe { function, root } => cli::describe(&function, root),
         Command::Graph { args } => graph::run(&args),
         Command::Debug { args } => debug::run(&args),
+        Command::Watch { args } => watch::run(&args),
         Command::List { args } => list::run(&args),
         Command::Show { name } => programs::show(&name),
         Command::Serve { mcp: true } => mcp::serve(),
