@@ -264,6 +264,72 @@ fn cycle_warns_on_every_return_on_the_cycle() {
     );
 }
 
+fn cycle_warnings_of(files: &[(&str, &str)]) -> BTreeMap<String, Vec<Diagnostic>> {
+    let mut all = vec![("main", "/** m */\nexport default function main() { return @./a }\n")];
+    all.extend_from_slice(files);
+    project_of(&all).check()
+}
+
+fn has_cycle_warning(diags: &[Diagnostic]) -> bool {
+    diags.iter().any(|d| d.message.contains("reference cycle"))
+}
+
+#[test]
+fn self_await_is_not_a_cycle_warning() {
+    let diags = cycle_warnings_of(&[(
+        "a",
+        "/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n",
+    )]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+}
+
+#[test]
+fn mutual_await_is_not_a_cycle_warning() {
+    let diags = cycle_warnings_of(&[
+        (
+            "a",
+            "/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await @./b;\n  return `a`;\n}\n",
+        ),
+        (
+            "b",
+            "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./a;\n  return `b`;\n}\n",
+        ),
+    ]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(!has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn hand_off_self_cycle_still_warns() {
+    let diags = cycle_warnings_of(&[("a", "/** d */\nexport default function a() { return @./a }\n")]);
+    assert!(
+        has(&diags["a"], Severity::Warning, "reference cycle: a -> a; Rein has no loops yet"),
+        "{:?}",
+        diags["a"]
+    );
+}
+
+#[test]
+fn mixed_cycle_with_one_await_is_not_a_cycle_warning() {
+    let diags = cycle_warnings_of(&[
+        (
+            "a",
+            "/** d */\nexport default function a() { return @./b }\n",
+        ),
+        (
+            "b",
+            "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./c;\n  return `b`;\n}\n",
+        ),
+        (
+            "c",
+            "/** d */\nexport default function c() { return @./a }\n",
+        ),
+    ]);
+    for name in ["a", "b", "c"] {
+        assert!(!has_cycle_warning(&diags[name]), "{name}: {:?}", diags[name]);
+    }
+}
+
 #[test]
 fn missing_main_is_a_project_error() {
     let root = PathBuf::from("/proj");
