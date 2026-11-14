@@ -24,5 +24,11 @@ node website/docs/scripts/generate-examples.mjs --check
 sh website/docs/scripts/check-cli-drift.sh
 sh scripts/check-installed-programs.sh
 
-# The site includes files from docs/, so a link there can break the build.
-(cd website/docs && pnpm install --frozen-lockfile --silent && pnpm exec vitepress build >/dev/null)
+# The site includes pages from docs/, so a broken link between site pages
+# fails the build. Links to repo files become GitHub URLs and are not checked.
+# The dead-link report goes to stderr, so it stays visible.
+(cd website/docs && pnpm install --frozen-lockfile --prefer-offline --silent) || {
+  echo "pnpm install failed in website/docs; the docs build needs its packages." >&2
+  exit 1
+}
+(cd website/docs && pnpm exec vitepress build >/dev/null)
