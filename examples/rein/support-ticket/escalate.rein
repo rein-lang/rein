@@ -1,7 +1,0 @@
-/**
- * Hand the ticket to a human support engineer.
- */
-export default function escalate() {
-  return `Assign the ticket to the tier 2 queue. Tell the customer a person
-  will reply within one business day. Do not promise a refund or a fix.`;
-}

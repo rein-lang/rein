@@ -1,7 +1,0 @@
-/**
- * Send the customer a last message, then close the ticket.
- */
-export default function closeTicket({ opening, next_step }: @../message) {
-  return `Tell the customer: ${opening} ${next_step} Then close the ticket as
-  solved.`;
-}
