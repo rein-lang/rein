@@ -54,7 +54,8 @@ requirement tags. `rein_start`, the `first_step` of `rein_programs`, and the fir
 - `instruction` is one sentence for the agent. Agents act on text, and this is
   the Rein way: Rein gives instructions, it does not manage the harness.
 - The agent context from the hook adds one rule: when a step has `agent`, and
-  you do not match it, start the run in a subagent with that model and effort.
+  you do not match it, follow the `instruction`. On a known mismatch, Rein
+  runs [the fallback](fallback.md) itself.
 
 ## How the agent matches
 
@@ -69,7 +70,7 @@ says it:
   start. Rein runs [the fallback](fallback.md) instead.
 - Without the arguments, Rein cannot check. The run starts, and the step has
   the `agent` instruction.
-- A harness that is not in `harness.required` is a mismatch at start, with or
+- A harness that is not in `@requires harness` is a mismatch at start, with or
   without the arguments, because Rein knows the harness.
 
 To map a model name to a tier, Rein uses the same tier map, read backwards.

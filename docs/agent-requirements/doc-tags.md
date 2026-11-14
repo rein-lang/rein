@@ -32,7 +32,12 @@ export default function main() {
 - `<key>` is `harness`, `model` or `effort`.
 - A key with no tag means "any". A program with no tags runs as today.
 - Each key has at most one `@requires` and one `@recommends`.
-- When a key has only `@requires`, Rein sends that value.
+- When a key has only `@requires`, Rein sends that value. For `model`, Rein
+  always sends the model name that the tier resolves to, not the tier.
+- Values: a tier and an effort are bare words, such as `cheap` and `medium`.
+  A harness id is a string literal type in quotes, such as `"codex"`, as Rein
+  writes every tag value (lexical rules). `@requires harness` may join ids
+  with `|`.
 
 ## `harness`
 
@@ -44,7 +49,7 @@ export default function main() {
 - `@requires` takes a union of harness ids, as a TypeScript union of string
   literal types. The program starts only in one of them.
 - `@recommends` takes one harness id. It is a hint for a person who picks the
-  agent. Rein does not act on it.
+  agent. The checker checks it, but a run does not act on it.
 - Harness ids are the polyhook 0.2 caller names: `claude-code`, `codex`,
   `gemini-cli`, `cursor`, `windsurf`, `cline`, `amp`, `hermes` and `pi`.
 
@@ -86,7 +91,8 @@ export default function main() {
   `` `@recommends model cheap` is below `@requires model standard` ``.
 - `@recommends harness` that is not in `@requires harness` is an error.
 - An unknown harness id is a warning, not an error. New harnesses appear.
-- `@mismatch` takes a function reference. The reference rules apply.
+- `@mismatch` takes a function reference. The rules of
+  [References](../spec/references.md) apply.
 
 ## Today
 

@@ -16,6 +16,9 @@ and branch, like any other function, and the checker checks it.
  * @requires effort high
  * @mismatch @./mismatch
  */
+export default function main() {
+  return `Review the pull request.`;
+}
 ```
 
 - `@mismatch` takes a reference: `@./path` in the program, or
@@ -67,7 +70,10 @@ export default function mismatch(
 
 ## Std templates for the fallback
 
-Std adds three templates, so a fallback is often one line:
+This proposal adds three templates to std, next to `delegate` and `askUser`
+(see [Std and templates](../spec/std-and-templates.md)). A std name needs no
+reference, so the example above calls them by name. A fallback is often one
+line:
 
 | Template | Text it gives the agent |
 | --- | --- |

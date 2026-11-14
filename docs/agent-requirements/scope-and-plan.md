@@ -2,9 +2,11 @@
 
 Status: proposal. Not built. Index: [Agent requirements](../agent-requirements.md).
 
+## Not in scope
+
 - Rein does not start models, call model APIs, or count cost.
 - Rein ships no model ids. Only aliases that a harness keeps stable.
-- A model or effort per function. The program is the unit. `delegate(...)`
+- No model or effort per function. The program is the unit. `delegate(...)`
   stays the way to send one task to another model.
 
 ## Build order
