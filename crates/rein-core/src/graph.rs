@@ -278,12 +278,44 @@ impl<'a> Builder<'a> {
         let ty = input.map_or_else(String::new, |i| i.ty.ts_type());
         let text = input.map_or("", |i| i.description.value.as_str());
         let label = if text.is_empty() { format!("{name}: {ty}") } else { format!("{text}\n{name}: {ty}") };
-        let id = self.node(NodeKind::Question, label);
+        // A parameter that every caller passes is a test on a value, not a question the run asks.
+        let kind = if f.input(name).is_some() && self.passed(name) { NodeKind::Condition } else { NodeKind::Question };
+        let id = self.node(kind, label);
         if let Some(n) = self.graph.nodes.last_mut() {
             n.name = Some(name.to_string());
             n.ty = Some(ty);
         }
         id
+    }
+
+    /// True when the function being drawn is not the entry, has a caller, and every hand-off or `await` to it
+    /// in this project passes `param`.
+    // ponytail: scans every function per question; index the call sites if graphs get slow.
+    fn passed(&self, param: &str) -> bool {
+        let (function, project) = (self.function, self.project);
+        if function == self.graph.entry {
+            return false;
+        }
+        let (mut sites, mut all) = (0, true);
+        for (from, sf) in project.functions() {
+            crate::ast::walk_stmts(&sf.function.body, &mut |s| {
+                let target = match s {
+                    Stmt::Return(r) => &r.value,
+                    Stmt::Request { awaited: Awaited::Call(t), .. } => t,
+                    _ => return,
+                };
+                let (key, args) = match target {
+                    ReturnValue::Ref(r) => (r.value.as_str(), None),
+                    ReturnValue::Call(c) => (c.callee.key(), Some(&c.args)),
+                    ReturnValue::Text(_) | ReturnValue::Template(_) => return,
+                };
+                if matches!(project.binding_for(from, key), Ok(Binding::Function(path)) if path == function) {
+                    sites += 1;
+                    all &= args.is_some_and(|a| a.iter().any(|a| a.name.as_ref().is_some_and(|n| n.value == param)));
+                }
+            });
+        }
+        sites > 0 && all
     }
 
     fn edge(&mut self, from: From, to: &str, kind: EdgeKind, args: Vec<Arg>) {

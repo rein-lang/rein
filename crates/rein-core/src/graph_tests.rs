@@ -206,3 +206,16 @@ fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
     let (text, label) = walk_of(&review);
     assert_eq!((text.as_str(), label.as_str()), ("Leaf not ok.", "Leaf not ok."));
 }
+
+#[test]
+fn a_parameter_every_caller_passes_is_a_condition_not_a_question() {
+    let two = "/** Two. */\nexport default function two(\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
+    let kind_of_ok = |main: &str| {
+        let g = flow(&project(&[("main.rein", main), ("two.rein", two)]), "main");
+        g.nodes.iter().find(|n| n.name.as_deref() == Some("ok")).map(|n| n.kind.clone()).unwrap()
+    };
+    let passes = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  return @./two(ok=go);\n}\n";
+    assert_eq!(kind_of_ok(passes), NodeKind::Condition);
+    let bare = "/** M. */\nexport default function main() {\n  return @./two;\n}\n";
+    assert_eq!(kind_of_ok(bare), NodeKind::Question);
+}
