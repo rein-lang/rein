@@ -1,29 +1,21 @@
-interface Matrix {
-  /** The model tier you run on. */
-  model: "cheap" | "standard" | "frontier" | "unknown";
-  /** The effort you run with. */
-  effort: "low" | "medium" | "high" | "xhigh" | "max" | "unknown";
-}
-
 /**
  * Commit the staged changes and push them.
  */
 export default async function main() {
-  // Today's form of `await agentSetup(model="cheap", effort="medium+")`:
-  // ask the matrix, then compare here. The std function will compare.
   /** Your setup. */
-  const setup: Matrix = await request(
-    `Give your setup: model tier and effort.`,
+  const setup: Setup = await agentSetup(
+    harness=`any`,
+    model=`cheap`,
+    effort=`medium+`,
   );
 
-  if (setup.effort === "unknown") {
-    return askUser(question=`Is your effort medium or higher?`);
-  }
-
-  if (setup.effort === "low") {
-    return `Start a subagent on the cheapest model with effort medium.
+  switch (setup.effort) {
+    case "ok":
+      return `Commit the staged changes with a short message, then push.`;
+    case "mismatch":
+      return `Start a subagent on the cheapest model with effort medium.
 Give it this task: run the commit-push program.`;
+    case "unknown":
+      return askUser(question=`Is your effort medium or higher?`);
   }
-
-  return `Commit the staged changes with a short message, then push.`;
 }

@@ -32,7 +32,7 @@ struct Parser {
 const DOC_PLACES: &str =
     "the doc comment must go right before `export default function`, an `interface`, a parameter, a field, or a const answer";
 const NO_VARIABLES: &str = "Rein has no variables, except `/** question */ const x: type = await request(...)`";
-const ONLY_AWAIT: &str = "only `request` or a reference like `@program` can be awaited";
+const ONLY_AWAIT: &str = "only `request`, `agentSetup` or a reference like `@program` can be awaited";
 const AWAIT_NEEDS_CONST: &str =
     "`await` gives an answer; write `/** question */ const name: Type = await @program(...);`, then read `name`";
 const NO_ELSE: &str = "Rein has no `else`: end the `if` block with a return, and handle the other case after it";
@@ -196,7 +196,9 @@ impl Parser {
         }
         for (answer, r) in f.answer_struct_refs() {
             if let StructRef::Local(name) = r {
-                let found = f.structs.iter().find(|s| s.name.value == name.value).cloned().ok_or_else(|| {
+                // A struct of the file wins; else a std struct, such as `Setup`.
+                let local = f.structs.iter().find(|s| s.name.value == name.value).cloned();
+                let found = local.or_else(|| crate::stdlib::std_struct(&name.value)).ok_or_else(|| {
                     format!("cannot find struct `{0}`; declare `interface {0} {{ ... }}` in this file", name.value)
                 });
                 f.bind_answer_struct(&answer, found);
@@ -516,6 +518,13 @@ impl Parser {
             return Ok((Awaited::Call(ReturnValue::Ref(Spanned { value: path, span })), span));
         }
         let callee = self.ident("`request` or a reference like `@program`")?;
+        if callee.value == crate::stdlib::AGENT_SETUP {
+            // `await agentSetup(...)` is `await request(agentSetup(...))`.
+            let call = self.call_rest(Callee::Std(callee.clone()))?;
+            let close = call.span;
+            let request = Spanned { value: "request".to_string(), span: callee.span };
+            return Ok((Awaited::Request { callee: request, arg: Value::Call(call) }, close));
+        }
         if callee.value != "request" {
             return Err(Diagnostic::error(callee.span, ONLY_AWAIT));
         }
@@ -564,6 +573,11 @@ impl Parser {
             }
             _ => return Err(self.unexpected("a reference like `@./path`, or a std name")),
         };
+        self.call_rest(callee)
+    }
+
+    /// The `(args)` of a call whose callee is already read.
+    fn call_rest(&mut self, callee: Callee) -> Result<Call, Diagnostic> {
         self.expect(Tok::LParen, "`(`")?;
         let mut args = Vec::new();
         while *self.peek() != Tok::RParen {

@@ -624,7 +624,7 @@ fn hover_and_completion_know_the_std_library() {
         json!({"textDocument": {"uri": start}, "position": {"line": 5, "character": 4}}),
     );
     let labels: Vec<&str> = items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
-    for name in ["askUser", "delegate", "request"] {
+    for name in ["agentSetup", "askUser", "delegate", "request"] {
         assert!(labels.contains(&name), "{labels:?}");
     }
 
@@ -929,10 +929,10 @@ fn workspace_symbols_search_every_program() {
     let tell = found.iter().find(|s| s["name"] == "refund/tell_customer").expect("tell_customer symbol");
     assert_eq!(spot_of(&root, &tell["location"]), spot("refund/tell_customer.rein", 3, 24, 3, 36));
 
-    // An empty query lists every function of the five example programs.
+    // An empty query lists every function of the six example programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
-    assert_eq!(all_symbols.len(), 26, "{all}");
+    assert_eq!(all_symbols.len(), 27, "{all}");
     assert!(
         all_symbols.iter().any(|s| s["name"] == "message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"

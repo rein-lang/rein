@@ -1,11 +1,12 @@
 # Agent requirements (proposal)
 
-Status: proposal. Nothing on this page is built.
+Status: `agentSetup` and `Setup` are built. The handler templates are a
+proposal.
 
 A program states which harness, model tier and effort suit it, with one std
-function, `agentSetup`. Std tells the agent to give the matrix of its setup:
-harness, model tier and effort. Std compares the matrix with the program's
-targets and returns one result per row. The developer's code is only the
+function, `agentSetup`. Std tells the agent the program's targets and asks
+for the matrix of its setup: harness, model tier and effort, one result per
+row. The developer's code is only the
 handlers: what happens when a row does not match.
 
 Example: a program that only commits and pushes runs well on the cheapest
@@ -30,7 +31,11 @@ strongest model and high effort.
  */
 export default async function main() {
   /** Your setup. */
-  const setup: Setup = await agentSetup(model="cheap", effort="medium+");
+  const setup: Setup = await agentSetup(
+    harness=`any`,
+    model=`cheap`,
+    effort=`medium+`,
+  );
 
   switch (setup.effort) {
     case "ok":
@@ -47,8 +52,9 @@ export default async function main() {
 }
 ```
 
-- `agentSetup(...)` is std. It asks the agent for its harness, model tier and
-  effort in one request, compares each one, and returns a `Setup`.
+- `agentSetup(...)` is std. In one request it gives the agent the targets and
+  asks it to rate its harness, model tier and effort against them. The answer
+  is a `Setup`.
 - `setup.effort` is `"ok"`, `"mismatch"` or `"unknown"`. The `switch` is the
   developer's code. A `switch` has no `default`, so it lists every case. An
   `if` handles only the case it tests, and the code after it handles the rest.

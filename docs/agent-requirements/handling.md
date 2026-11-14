@@ -1,6 +1,6 @@
 # Handlers
 
-Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
+Status: the handler templates are a proposal. `agentSetup` is built. [Agent requirements](../agent-requirements.md).
 
 A handler is the developer's code for one row of the `Setup`. The program
 handles the row with `switch` or `if`, with no `else` and no `default`. Std does the
@@ -19,7 +19,11 @@ compare. The handler only says what the agent does next.
 
 ```ts
   /** Your setup. */
-  const setup: Setup = await agentSetup(model="frontier+");
+  const setup: Setup = await agentSetup(
+    harness=`any`,
+    model=`frontier+`,
+    effort=`any`,
+  );
 
   switch (setup.model) {
     case "ok":
@@ -40,7 +44,11 @@ compare. The handler only says what the agent does next.
 
 ```ts
   /** Your setup. */
-  const setup: Setup = await agentSetup(model="cheap");
+  const setup: Setup = await agentSetup(
+    harness=`any`,
+    model=`cheap`,
+    effort=`any`,
+  );
 
   if (setup.model === "mismatch") {
     return `Commit and push. A cheaper model can run this next time.`;
