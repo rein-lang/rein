@@ -835,7 +835,7 @@ fn program_hand_off_checks_argument_names_and_function() {
     let msgs = errors(&p);
     assert!(msgs.iter().any(|m| m.contains("`url` is not a parameter of `@pr-handling/main`; parameters are pr")), "{msgs:?}");
     let missing = crate::program_fixture::with_program("return @pr-handling/main;");
-    assert_eq!(errors(&missing), ["`@pr-handling/main` takes 1 argument, got 0"]);
+    assert_eq!(errors(&missing), ["`@pr-handling/main` takes 3 arguments, got 0; pass `pr`, `draft` and `task`"]);
     let nofn = crate::program_fixture::with_program("return @pr-handling/other(pr=pr);");
     assert_eq!(errors(&nofn), ["cannot find function `other` in program `pr-handling`"]);
 }
@@ -1209,4 +1209,23 @@ fn reachability_starts_at_the_entry_from_the_manifest() {
     assert!(diags["step"].is_empty(), "{:?}", diags["step"]);
     assert!(diags["flow"].is_empty(), "{:?}", diags["flow"]);
     assert!(has(&diags["main"], Severity::Warning, "`main` is not reachable from flow"), "{:?}", diags["main"]);
+}
+
+#[test]
+fn program_hand_off_passes_every_parameter() {
+    let warnings = |p: &Project| -> Vec<String> {
+        let all = &p.check()["main"];
+        all.iter().filter(|d| d.severity == Severity::Warning).map(|d| d.message.clone()).collect()
+    };
+    let partial = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    assert_eq!(
+        warnings(&partial),
+        [
+            "missing argument `draft` in call to `@pr-handling/main`; write `draft=value`",
+            "missing argument `task` in call to `@pr-handling/main`; write `task=value`",
+        ]
+    );
+    let main = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Draft? */\n  const draft: boolean = await request(`Read the PR.`);\n  /** Task? */\n  const task: \"review\" | \"merge\" = await request(`Pick a task.`);\n  return @pr-handling/main(pr=pr, draft=draft, task=task);\n}\n";
+    let full = crate::program_fixture::with_main(main.to_string());
+    assert!(full.check()["main"].is_empty(), "{:?}", full.check()["main"]);
 }

@@ -959,3 +959,16 @@ fn self_await_after_a_question_asks_at_each_level() {
     };
     assert_eq!(key, "a.more");
 }
+
+#[test]
+fn a_passed_boolean_binds_and_the_callee_does_not_ask() {
+    let project = project(&[
+        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Keep order? */\n  keep: boolean,\n) {\n  return @./two(ok=keep);\n}\n"),
+        ("two.rein", "/** Two. */\nexport default function two(\n  /** Keep order? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `kept`;\n  }\n  return `swapped`;\n}\n"),
+    ]);
+    let res = step(&project, &req("main", &[("main.keep", "yes")]));
+    let StepResponse::Done { instruction, trace, .. } = res else {
+        panic!("{res:?}")
+    };
+    assert_eq!((instruction.as_str(), trace), ("kept", vec!["main".to_string(), "two".to_string()]));
+}

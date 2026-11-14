@@ -40,7 +40,8 @@ fn a_quoted_string_as_text_is_an_error() {
 }
 
 /// Test resolver: `./tpl` is a template with parameters `a` and `b`, paths with `missing` do not resolve,
-/// `./merge` is a function with one `string` parameter `pr`, and every other path is a function with none.
+/// `./merge` is a function with one `string` parameter `pr`, `./review` takes `pr: string`, `big: boolean` and
+/// `ci: "green" | "red"`, `./typed` takes `ok: boolean`, and every other path is a function with none.
 fn resolves(path: &str) -> Result<Kind, String> {
     if path == "./tpl" {
         return Ok(Kind::Template {
@@ -51,13 +52,55 @@ fn resolves(path: &str) -> Result<Kind, String> {
         return Err(format!("cannot find function `@{path}`"));
     }
     if path == "./merge" {
-        return Ok(Kind::Function {
-            strings: vec!["pr".into()],
-        });
+        return Ok(Kind::Function { params: vec![("pr".into(), InputType::Text)] });
     }
-    Ok(Kind::Function {
-        strings: Vec::new(),
-    })
+    if path == "./review" {
+        let ci = ["green", "red"].map(|m| Spanned { value: m.to_string(), span: Span::default() });
+        let params = vec![("pr".into(), InputType::Text), ("big".into(), InputType::Bool), ("ci".into(), InputType::Choice(ci.to_vec()))];
+        return Ok(Kind::Function { params });
+    }
+    if path == "./typed" {
+        return Ok(Kind::Function { params: vec![("ok".into(), InputType::Bool)] });
+    }
+    Ok(Kind::Function { params: Vec::new() })
+}
+
+/// A caller of `./review`, which takes `pr`, `big` and `ci`. `args` are the call's arguments.
+fn review_caller(args: &str) -> String {
+    format!(
+        "/** F. */\nexport default async function f(/** PR? */ pr: string) {{\n  /** Big? */\n  const big: boolean = await request(`Count the files.`);\n  /** CI? */\n  const ci: \"green\" | \"red\" = await request(`Read CI.`);\n  return @./review({args});\n}}\n"
+    )
+}
+
+#[test]
+fn a_call_must_pass_every_parameter_of_the_callee() {
+    clean(&review_caller("pr=pr, big=big, ci=ci"));
+    let missing = MISSING_TYPED_ARG;
+    expect_diag(&review_caller("pr=pr"), missing, "missing argument `big` in call to `@./review`; write `big=value`");
+    expect_diag(&review_caller("pr=pr"), missing, "missing argument `ci` in call to `@./review`; write `ci=value`");
+    expect_diag(&review_caller("pr=pr, ci=ci"), missing, "missing argument `big` in call to `@./review`");
+    expect_diag(&review_caller("big=big, ci=ci"), Severity::Error, "missing argument `pr` in call to `@./review`");
+}
+
+#[test]
+fn a_bare_reference_must_pass_every_parameter() {
+    let src = "/** F. */\nexport default function f() {\n  return @./review;\n}\n";
+    expect_diag(src, Severity::Error, "`@./review` takes 3 arguments, got 0; pass `pr`, `big` and `ci`");
+    let typed_only = "/** F. */\nexport default function f() {\n  return @./typed;\n}\n";
+    expect_diag(typed_only, MISSING_TYPED_ARG, "`@./typed` takes 1 argument, got 0; pass `ok`");
+    let awaited = "/** F. */\nexport default async function f() {\n  /** Ok? */\n  const ok: boolean = await @./review;\n  if (ok) {\n    return `a`;\n  }\n  return `b`;\n}\n";
+    expect_diag(awaited, Severity::Error, "`@./review` takes 3 arguments, got 0");
+}
+
+#[test]
+fn a_typed_argument_is_a_name_of_the_same_type() {
+    let msg = "`big` of `@./review` is `boolean`; pass a parameter or an answer";
+    expect_diag(&review_caller("pr=pr, big=`yes`, ci=ci"), Severity::Error, msg);
+    let msg = "`ci` is `\"green\" | \"red\"`, but `big` of `@./review` is `boolean`";
+    expect_diag(&review_caller("pr=pr, big=ci, ci=ci"), Severity::Error, msg);
+    expect_diag(&review_caller("pr=pr, big=big, ci=nope"), Severity::Error, "unknown parameter `nope`");
+    let wider = review_caller("pr=pr, big=big, ci=ci").replace("\"red\" =", "\"red\" | \"pending\" =");
+    expect_diag(&wider, Severity::Error, "but `ci` of `@./review` is `\"green\" | \"red\"`");
 }
 
 fn check_src(src: &str) -> Vec<Diagnostic> {

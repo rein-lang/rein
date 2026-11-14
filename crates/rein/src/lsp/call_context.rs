@@ -83,11 +83,11 @@ pub fn call_at(text: &str, off: usize) -> Option<CallContext> {
 }
 
 /// The parameters a call to `callee`, written in function `from`, binds by name: all of a template's, or a
-/// function's `string` parameters.
+/// function's parameters.
 pub fn callee_params<'a>(project: &'a Project, from: &str, callee: &str) -> Option<Vec<&'a Input>> {
     match project.binding_for(from, callee).ok()? {
         Binding::Template { function, .. } => Some(function.inputs.iter().collect()),
-        Binding::Function(path) => Some(project.get(&path)?.function.text_inputs().collect()),
+        Binding::Function(path) => Some(project.get(&path)?.function.inputs.iter().collect()),
         Binding::Request => None,
     }
 }
