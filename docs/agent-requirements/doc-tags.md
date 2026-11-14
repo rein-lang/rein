@@ -35,9 +35,8 @@ export default function main() {
 - When a key has only `@requires`, Rein sends that value. For `model`, Rein
   always sends the model name that the tier resolves to, not the tier.
 - Values: a tier and an effort are bare words, such as `cheap` and `medium`.
-  A harness id is a string literal type in quotes, such as `"codex"`, as Rein
-  writes every tag value (lexical rules). `@requires harness` may join ids
-  with `|`.
+  A harness id is a string literal type in quotes, such as `"codex"`, so
+  `@requires harness` reads as a TypeScript union joined with `|`.
 
 ## `harness`
 
