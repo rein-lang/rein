@@ -1,8 +1,8 @@
 # commit-push
 
 A program that commits the staged changes and pushes them. It shows the
-proposed agent requirement tags: see
-[Agent requirements](../../../docs/agent-requirements.md).
+proposed agent requirement tags: see `docs/agent-requirements.md` in the
+repository.
 
 ## Files
 
