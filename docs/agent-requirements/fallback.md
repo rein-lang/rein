@@ -33,7 +33,7 @@ A fallback that asks the agent what it can do:
 ```ts
 interface Input {
   /** Can you start a subagent with a chosen model and effort? */
-  canSpawn: boolean;
+  can_spawn: boolean;
   /** The harness of the caller. */
   harness: string;
   /** The model to run on. */
@@ -47,12 +47,16 @@ interface Input {
 /**
  * Tell the agent how to run the program on the right model.
  */
-export default function mismatch({ canSpawn, harness, model, effort, start }: Input) {
-  if (canSpawn) {
+export default function mismatch(
+  { can_spawn, harness, model, effort, start }: Input,
+) {
+  if (can_spawn) {
     return subagent(model=model, effort=effort, task=start);
   }
 
-  return remoteSession(harness=harness, model=model, effort=effort, task=start);
+  return remoteSession(
+    harness=harness, model=model, effort=effort, task=start,
+  );
 }
 ```
 
