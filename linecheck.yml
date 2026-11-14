@@ -27,13 +27,14 @@ rules:
   - pattern: "**/*.rein"
     warn: 200
     error: 400
+  - pattern: "**/*.md"
+    error: 200
 
 exclude:
   - "**/Cargo.lock"
   - "**/pnpm-lock.yaml"
   - "**/*.snap"
   - "**/*.json"
-  - "**/*.md"
   - "**/*.webp"
   - "**/node_modules/**"
   - "**/target/**"
