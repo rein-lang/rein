@@ -1,65 +1,59 @@
-# Handle the answers
+# Handlers
 
 Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
 
-The answers are values. The program handles them with the normal Rein rules:
-`if` guards and `switch`, with no `else` and no `default`.
+A handler is the author's code for one `Check` result. The program handles the
+result with `switch` or `if`, with no `else` and no `default`. Std does the
+compare. The handler only says what the agent does next.
+
+## What a handler can do
+
+- Go on, maybe with a hint: ``return @./commit(hint=`...`);``.
+- Send the work to a subagent with the right setup: `subagent(...)`.
+- Open a new local or remote session: `localSession(...)`,
+  `remoteSession(...)`.
+- Ask the user: `askUser(...)`.
+- Stop: return a text that says why.
 
 ## Required
 
-A required setup is an `if` that returns another path when the answer is not
-good enough. Rein has no `<` on unions, so the program lists the members that
-are too low:
-
 ```ts
-  /** The tier of your model. */
-  const tier: ModelTier = await agentModel();
+  /** Do you run on the strongest model tier? */
+  const model: Check = await requireModel(min="frontier");
 
-  if (tier !== "frontier") {
-    return askUser(question=`This review needs the strongest model. Switch?`);
+  switch (model) {
+    case "ok":
+      return @./review;
+    case "mismatch":
+      return remoteSession(
+        harness=`claude-code`,
+        model=`the strongest model`,
+        effort=`high`,
+        task=`Run the review program.`,
+      );
+    case "unknown":
+      return askUser(question=`This review needs the strongest model. Go on?`);
   }
 ```
 
 ## Recommended
 
-A recommended setup is an `if` that adds a hint, then goes on. A commit
-program runs on any model, but a strong one costs more:
-
 ```ts
-  /** The tier of your model. */
-  const tier: ModelTier = await agentModel();
+  /** Do you run on the cheapest model tier? */
+  const model: Check = await recommendModel(tier="cheap");
 
-  if (tier === "frontier") {
+  if (model === "mismatch") {
     return @./commit(hint=`A cheaper model can run this program next time.`);
   }
 
   return @./commit(hint=`-`);
 ```
 
-Or no check at all: a program that does not ask has no requirement.
+The author decides that `"unknown"` goes on with no hint.
 
-## Per harness
+## Std templates for a handler
 
-A `switch` on `Harness` gives each harness its own path, such as the right
-way to start a subagent there:
-
-```ts
-  /** The harness you run in. */
-  const harness: Harness = await agentHarness();
-
-  switch (harness) {
-    case "claude-code":
-      return `Use the Agent tool with model haiku and effort medium.`;
-    case "codex":
-      return `Run codex exec -m <cheap model> -c model_reasoning_effort=medium.`;
-    // ... a case for every other member, as for any union.
-  }
-```
-
-## Std templates for a bad setup
-
-Std adds three templates, next to `delegate` and `askUser`. Each one gives the
-agent one instruction:
+Std adds three templates, next to `delegate` and `askUser`:
 
 | Template | Text it gives the agent |
 | --- | --- |
@@ -67,9 +61,8 @@ agent one instruction:
 | `localSession({ harness, model, effort, task })` | Open a new local `harness` session on `model` with effort `effort`, and run `task` in it. |
 | `remoteSession({ harness, model, effort, task })` | Open a remote `harness` session on `model` with effort `effort`, and run `task` in it. |
 
-- `task` usually starts the same program again, such as
-  `` `Run the commit-push program.` ``. The new agent answers the checks
-  again, and this time they pass.
+- `task` usually starts the same program again. The new agent answers the
+  checks again, and this time they pass.
 - How each harness acts on the text: in Claude Code the Agent tool takes
   `model` (`haiku`, `sonnet`, `opus`, `fable`) and `effort` (`low` to `max`).
   Codex takes `codex exec -m <model> -c model_reasoning_effort=<effort>`.
@@ -77,6 +70,5 @@ agent one instruction:
 ## Hand-offs
 
 A program can hand off to another program (`return @program/function`). The
-target asks its own checks, if it has any, when the run reaches them. The
-answers are per call, so the target's agent answers for itself. When the
-caller already sent a subagent, that subagent answers.
+target runs its own checks, if it has any, when the run reaches them. When a
+handler sent a subagent, that subagent answers the checks.

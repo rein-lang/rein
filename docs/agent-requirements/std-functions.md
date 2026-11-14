@@ -2,75 +2,81 @@
 
 Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
 
-Std adds three functions and three types. Like `request`, each function is
-built in and needs no import. Each one asks the agent one question about
-itself, and the answer is a typed `const`.
+Std adds six functions. Like `request`, each one is built in and needs no
+import. Each one asks the agent one question about itself, compares the
+answer, and gives the program a `Check`.
 
-| Function | Answer type | The agent answers |
+| Function | Argument | `"ok"` when the agent's value is |
 | --- | --- | --- |
-| `agentHarness()` | `Harness` | The harness it runs in. |
-| `agentModel()` | `ModelTier` | The tier of its model in that harness. |
-| `agentEffort()` | `Effort` | The effort it runs with. |
+| `requireHarness(any_of)` | harness ids, joined with `\|` | one of them |
+| `requireModel(min)` | a tier | that tier or a stronger one |
+| `requireEffort(min)` | an effort | that effort or a higher one |
+| `recommendHarness(id)` | one harness id | that harness |
+| `recommendModel(tier)` | a tier | exactly that tier |
+| `recommendEffort(level)` | an effort | exactly that effort |
 
-## The types
+- A `require` function is a floor: the program cannot run below it.
+- A `recommend` function is a target: the program runs anywhere, but this
+  setup fits it best. A stronger model than recommended is a mismatch too,
+  because it costs more.
 
-| Type | Members |
+## The values
+
+| Kind | Values, lowest first |
 | --- | --- |
-| `Harness` | `"claude-code"`, `"codex"`, `"gemini-cli"`, `"cursor"`, `"windsurf"`, `"cline"`, `"amp"`, `"hermes"`, `"pi"`, `"other"` |
-| `ModelTier` | `"cheap"`, `"standard"`, `"frontier"`, `"unknown"` |
-| `Effort` | `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"unknown"` |
+| Harness id | `claude-code`, `codex`, `gemini-cli`, `cursor`, `windsurf`, `cline`, `amp`, `hermes`, `pi`, `other` |
+| Model tier | `cheap`, `standard`, `frontier` |
+| Effort | `low`, `medium`, `high`, `xhigh`, `max` |
 
-- Each type is a union of string literal types. A `switch` on it needs a case
-  for every member, as for any union.
-- The `Harness` members are the polyhook 0.2 caller names, plus `"other"`.
-- `ModelTier` is a tier, not a model id. A model id ages, and each harness has
-  its own ids. `"cheap"` is the smallest and fastest model of the harness,
-  `"frontier"` the strongest, and `"standard"` the one between.
-- `"unknown"` is for an agent that cannot see its model or effort. The program
-  must handle it, so no setup is guessed.
-- The type names are std names. A file cannot declare a struct with the same
-  name.
+- The harness ids are the polyhook 0.2 caller names, plus `other`.
+- A tier, not a model id. A model id ages, and each harness has its own ids.
+  `cheap` is the smallest and fastest model of the harness, `frontier` the
+  strongest, `standard` the one between.
+- An argument is a tag in quotes, such as `min="medium"`. A value outside the
+  list is an error that lists the values.
+
+## The result
+
+`Check` is a std union: `"ok" | "mismatch" | "unknown"`.
+
+- `"ok"`: the setup matches.
+- `"mismatch"`: the agent gave a value, and it does not match.
+- `"unknown"`: the agent cannot see that value, such as its effort.
 
 ## How the agent answers
 
-A call is an async request with fixed text. The step is a `request`, as in
-[Stepping](../spec/stepping.md), so the protocol does not change:
+A call stops the run with a `request`, as in [Stepping](../spec/stepping.md).
+The agent answers its own value. Std compares it, and the `const` gets the
+`Check`.
 
 ```json
 {"kind": "request", "key": "main.effort", "function": "main",
  "instruction": "Say which effort you run with.",
  "response": {"name": "effort", "type": "union",
   "options": ["low", "medium", "high", "xhigh", "max", "unknown"],
-  "description": "The effort you run with."}}
+  "description": "Is your effort medium or higher?"}}
 ```
 
-- The instruction text comes from std. The `const` doc comment is the
-  `description`, as for every answer.
-- Evaluation is lazy ([Evaluation](../spec/evaluation.md)). A program that only reads `effort` asks only
-  for the effort.
+- The agent answers a value, such as `high`. The program sees `"ok"`.
+- The step protocol does not change. Only the evaluator learns the compare.
+- Evaluation is lazy ([Evaluation](../spec/evaluation.md)). A check runs only
+  when the path reaches it.
 - Rein does not check the answer against the real session. MCP does not send
   the model or the effort. The agent knows them from its own context.
 
 ## Checker rules
 
-- A call is `const NAME: TYPE = await agentEffort();`, with a doc comment, in
-  an `async` function. The rules of [Async requests](../spec/async-requests.md)
-  apply.
-- `TYPE` must be the function's own type. Another type is an error:
-  `` `agentEffort()` answers `Effort`; write `const x: Effort` ``.
-- The functions take no arguments: `` `agentEffort()` takes no arguments ``.
-- A call can be in any function, not only the entry. A program usually calls
-  them first, so a bad setup ends the run before any work.
+- A call is `const NAME: Check = await requireEffort(min="medium");`, with a
+  doc comment, in an `async` function. The rules of
+  [Async requests](../spec/async-requests.md) apply.
+- The type must be `Check`: `` `requireEffort` gives a `Check`; write
+  `const x: Check` ``.
+- Each function takes its one named argument.
+- `Check` is a std name. A file cannot declare a struct with that name.
 
 ## Today
 
 Rein today does not know these names. `rein check` gives an error:
-``only `request` or a reference like `@program` can be awaited``.
-So a program cannot use them before the feature ships. Until then, the same
-check is a plain `request` with an inline union, which works today:
-
-```ts
-/** The effort you run with. */
-const effort: "low" | "medium" | "high" | "xhigh" | "max" | "unknown" =
-  await request(`Say which effort you run with.`);
-```
+``only `request` or a reference like `@program` can be awaited``. Until the
+feature ships, a program asks with `request` and compares in its own code.
+`examples/rein/commit-push` does this.

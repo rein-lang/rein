@@ -6,8 +6,8 @@ first, and sends a subagent when the effort is too low.
 
 It shows the proposed agent requirement checks: see
 `docs/agent-requirements.md` in the repository. The std function
-`agentEffort()` is not built yet, so the program asks with `request` and an
-inline union, which works today.
+`requireEffort(min="medium")` is not built yet, so the program asks with
+`request` and compares in its own code, which works today.
 
 ## Files
 
