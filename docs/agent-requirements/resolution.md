@@ -25,6 +25,9 @@ Rein resolves the field when a run starts. It needs two facts.
 - Rein ships a default only for a harness with stable model aliases. Today
   that is `claude-code` (`haiku`, `sonnet`, `opus`). It ships no model ids,
   because ids age.
+- The Claude Code Agent tool takes the model aliases `haiku`, `sonnet`,
+  `opus` and `fable`, and the efforts `low` to `max`, the same five levels as
+  Rein. `fable` is in no default tier; a user map can add it.
 - A harness with no map entry gets the tier name as text. The agent picks the
   model.
 - The user map wins over the default.
