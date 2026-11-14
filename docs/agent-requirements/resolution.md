@@ -29,8 +29,8 @@ Rein resolves the field when a run starts. It needs two facts.
 
 ## The step tells the agent
 
-The first step of a run has an `agent` object when the program has an `agent`
-field. `rein_start`, the `first_step` of `rein_programs`, and the first
+The first step of a run has an `agent` object when the entry function has
+requirement tags. `rein_start`, the `first_step` of `rein_programs`, and the first
 `rein step` response carry it.
 
 ```json

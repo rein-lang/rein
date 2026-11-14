@@ -9,11 +9,16 @@ local session, open a remote session, or ask the user.
 The fallback is a Rein function, not a text field. So it can ask questions
 and branch, like any other function, and the checker checks it.
 
-```json
-{ "agent": { "effort": { "required": "high" }, "onMismatch": "@./mismatch" } }
+```ts
+/**
+ * Review the pull request.
+ *
+ * @requires effort high
+ * @mismatch @./mismatch
+ */
 ```
 
-- `onMismatch` is a reference: `@./path` in the program, or
+- `@mismatch` takes a reference: `@./path` in the program, or
   `@program/function` in another installed program.
 - The function's struct may have these `string` fields. Rein gives each one
   as an input, by name. Another `string` field is a checker error. A `boolean`
@@ -76,9 +81,9 @@ Std adds three templates, so a fallback is often one line:
 
 The first one found wins:
 
-1. The user: `onMismatch` in `agents.json`. The user knows the setup, such as
+1. The user: `mismatch` in `agents.json`. The user knows the setup, such as
    whether remote sessions exist. It is one reference for all programs.
-2. The program: `onMismatch` in its `rein.json`.
+2. The program: the `@mismatch` tag of its entry function.
 3. Rein: the default, `subagent(model=model, effort=effort, task=start)`.
 
 ## Delegation in each harness

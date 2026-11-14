@@ -2,7 +2,8 @@
 
 Status: proposal. Nothing on this page is built.
 
-A program author states which harness, model and effort a program needs.
+A program author states which harness, model and effort a program needs, as
+tags in the doc comment of the entry function in `main.rein`.
 Rein checks the statement, resolves it for the agent that runs the program,
 and tells the agent. Rein does not launch models. The agent acts on the step,
 as it acts on every other step.
@@ -22,8 +23,8 @@ strongest model and high effort.
 
 ## Topics
 
-- [The agent field](agent-requirements/agent-field.md): `harness`, `model`,
-  `effort` in `rein.json`, and the checker rules.
+- [The doc tags](agent-requirements/doc-tags.md): `@requires`, `@recommends`
+  and `@mismatch` in the doc comment of `main.rein`, and the checker rules.
 - [Resolution and the step](agent-requirements/resolution.md): the tier map,
   the `agent` object in the first step, and how the agent matches.
 - [The fallback](agent-requirements/fallback.md): what the agent gets on a
