@@ -12,18 +12,15 @@ The decision flow, from `rein graph commit-push`:
 flowchart TD
     subgraph s0 ["main.rein"]
         f0(["main"])
-        f0_0("Commit the staged changes with a short message, then push.")
-    end
-    subgraph s1 ["mismatch.rein"]
-        f1[["mismatch(model, effort, start)"]]
-        f1_0{"Can you start a subagent with a chosen model and effort?<br/>can_spawn: boolean"}
-        f1_1("Start a subagent on ${model} with effort ${effort}.<br/>Give it this task: ${start}")
-        f1_2("askUser(question=ˋOpen a new session on ${model} with effort ${effort}.<br/>Then run: ${start}ˋ)")
+        f0_0[/"request: ˋSay which effort you run with.ˋ"/]
+        f0_1{"effort === #quot;low#quot; || effort === #quot;unknown#quot;"}
+        f0_2("Start a subagent on the cheapest model with effort medium.<br/>Give it this task: run the commit-push program.")
+        f0_3("Commit the staged changes with a short message, then push.")
     end
     f0 --> f0_0
-    f1 --> f1_0
-    f1_0 -->|"yes"| f1_1
-    f1_0 -->|"no"| f1_2
+    f0_0 --> f0_1
+    f0_1 -->|"yes"| f0_2
+    f0_1 -->|"no"| f0_3
 ```
 
 ## Source
@@ -39,7 +36,3 @@ flowchart TD
 ### `main.rein`
 
 <<< ../../../examples/rein/commit-push/main.rein{rein}
-
-### `mismatch.rein`
-
-<<< ../../../examples/rein/commit-push/mismatch.rein{rein}

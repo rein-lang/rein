@@ -1,10 +1,15 @@
 /**
  * Commit the staged changes and push them.
- *
- * @recommends model cheap
- * @requires effort medium
- * @mismatch @./mismatch
  */
-export default function main() {
+export default async function main() {
+  /** The effort you run with. */
+  const effort: "low" | "medium" | "high" | "xhigh" | "max" | "unknown" =
+    await request(`Say which effort you run with.`);
+
+  if (effort === "low" || effort === "unknown") {
+    return `Start a subagent on the cheapest model with effort medium.
+Give it this task: run the commit-push program.`;
+  }
+
   return `Commit the staged changes with a short message, then push.`;
 }

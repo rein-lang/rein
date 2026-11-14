@@ -1,32 +1,30 @@
 # Scope, build order and open questions
 
-Status: proposal. Not built. Index: [Agent requirements](../agent-requirements.md).
+Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
 
 ## Not in scope
 
 - Rein does not start models, call model APIs, or count cost.
-- Rein ships no model ids. Only aliases that a harness keeps stable.
-- No model or effort per function. The program is the unit. `delegate(...)`
-  stays the way to send one task to another model.
+- Rein does not check the agent's answer against the real session.
+- No manifest field, doc tag or tier map. The program's code is the one home
+  for the rule.
 
 ## Build order
 
 Each step is one small pull request.
 
-1. `rein-core`: parse and check the `@requires`, `@recommends` and
-   `@mismatch` tags of the entry function.
-2. `rein show`, `rein list --json`, `rein_programs` and the agent context
-   print the requirements.
-3. The resolver: the harness from MCP `initialize` or `--harness`, the user
-   tier map, and the `claude-code` default.
-4. `rein_start`, `rein run` and `rein step`: the `model` and `effort`
-   arguments, the `agent` object, and the fallback run.
-5. The agent context: the delegation rule.
-6. Hand-offs: the `agent` object at a hand-off, and the floor that stays.
+1. `rein-core`: the std types `Harness`, `ModelTier` and `Effort`, and the
+   three functions as built-in awaits with fixed request text. Checker rules
+   and tests.
+2. The language server: hover and completion for the new std names.
+3. The std templates `subagent`, `localSession` and `remoteSession`.
+4. The `examples/rein/commit-push` program moves from `request` to
+   `agentEffort()`.
 
 ## Open questions
 
+- The names. `agentHarness`, `agentModel`, `agentEffort`, or shorter ones?
 - The tier names. `cheap`, `standard`, `frontier` avoid the word `medium`,
   which effort uses.
-- Is `@recommends harness` worth keeping, if Rein never acts on it?
-- Should a `delegate(...)` call take a tier, and let Rein resolve it?
+- Should Rein add `<` and `>=` for these ordered unions, so a floor is one
+  test instead of a list of members?

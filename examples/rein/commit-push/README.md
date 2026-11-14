@@ -1,15 +1,19 @@
 # commit-push
 
-A program that commits the staged changes and pushes them. It shows the
-proposed agent requirement tags: see `docs/agent-requirements.md` in the
-repository.
+A program that commits the staged changes and pushes them. It runs on any
+model, but it needs medium effort or more. It asks the agent for its effort
+first, and sends a subagent when the effort is too low.
+
+It shows the proposed agent requirement checks: see
+`docs/agent-requirements.md` in the repository. The std function
+`agentEffort()` is not built yet, so the program asks with `request` and an
+inline union, which works today.
 
 ## Files
 
 | File | Function | Job |
 | --- | --- | --- |
-| `main.rein` | `main` | Entry point. Asks for the cheapest model and medium effort or more. |
-| `mismatch.rein` | `mismatch` | The fallback. Sends a subagent, or asks the user to open a new session. |
+| `main.rein` | `main` | Asks for the effort. Too low or unknown: send a subagent. Else: commit and push. |
 
 ## Run it
 
@@ -17,7 +21,3 @@ repository.
 cargo run -p rein -- check examples/rein/commit-push
 cargo run -p rein -- run --root examples/rein/commit-push
 ```
-
-Rein does not read the tags yet. `rein check` warns about each one, and the
-run ignores them. `mismatch` is not reachable until the tags are built, so
-`rein check` also warns that it is unused.
