@@ -1358,3 +1358,11 @@ fn a_bare_hand_off_back_to_a_function_with_a_boolean_is_a_missing_typed_argument
         "{diags:?}"
     );
 }
+
+#[test]
+fn true_and_false_are_not_names() {
+    let param = "/** F. */\nexport default function f(/** Ok? */ true: boolean) {\n  return `b`;\n}\n";
+    expect_diag(param, Severity::Error, "`true` is a boolean literal; pick another name");
+    let answer = "/** F. */\nexport default async function f() {\n  /** Ok? */\n  const false: boolean = await request(`Ask.`);\n  return `b`;\n}\n";
+    expect_diag(answer, Severity::Error, "`false` is a boolean literal; pick another name");
+}

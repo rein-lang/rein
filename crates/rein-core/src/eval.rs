@@ -185,11 +185,11 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
     Ok(out)
 }
 
-/// The value of a parameter or an answer of this function, or a `true`/`false` literal, for a bare name argument. A `boolean` is passed as
-/// `true` or `false`, a union as its member.
+/// The value of a parameter or an answer of this function, or a `true`/`false` literal, for a bare name
+/// argument. A `boolean` is passed as `true` or `false`, a union as its member.
 fn arg_value(env: &Env, name: &str) -> Eval<String> {
     let input = match declared(env, name) {
-        // A `true` or `false` literal, which the checker allows only for a `boolean` parameter.
+        // A `true` or `false` literal. The checker allows it only for a `boolean` parameter, and no name is one.
         Err(_) if matches!(name, "true" | "false") => return Ok(name.to_string()),
         found => found?,
     };

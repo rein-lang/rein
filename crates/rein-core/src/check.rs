@@ -443,6 +443,7 @@ impl<'a> Checker<'a> {
             if inputs[..i].iter().any(|p| p.name.value == *name) {
                 self.error(input.name.span, format!("duplicate {noun} `{name}`"));
             }
+            self.literal_name(&input.name);
             if let Some(doc) = &input.doc {
                 self.tags(doc);
             }
@@ -644,6 +645,7 @@ impl<'a> Checker<'a> {
                 if self.f.input(name).is_some() || self.names.contains(name) {
                     self.error(response.name.span, format!("duplicate name `{name}`"));
                 }
+                self.literal_name(&response.name);
                 self.names.insert(name.to_string());
                 match awaited {
                     Awaited::Request { arg, .. } => self.value(arg),
@@ -742,6 +744,14 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `true` and `false` are the `boolean` literals of an argument, so no parameter, field or answer has them as
+    /// its name.
+    fn literal_name(&mut self, name: &Spanned<String>) {
+        if matches!(name.value.as_str(), "true" | "false") {
+            self.error(name.span, format!("`{}` is a boolean literal; pick another name", name.value));
+        }
+    }
+
     /// The argument for the `boolean` or union parameter `param` of `@target`: a bare name of a parameter or an
     /// answer of the caller, of the same type, or a literal: `true` or `false`, or a quoted member of the union.
     /// A union name fits when each of its members is a member of `ty`.
@@ -752,7 +762,9 @@ impl<'a> Checker<'a> {
             (Value::Str(s), InputType::Choice(m)) if members(m, &s.value) => return self.literals.push(s.span),
             (Value::Name(name), _) => name,
             _ => {
-                let msg = format!("`{param}` of `@{target}` is `{want}`; pass a parameter or an answer of that type, like `{param}={param}`");
+                let msg = format!(
+                    "`{param}` of `@{target}` is `{want}`; pass a parameter or an answer of that type, like `{param}={param}`, or a literal: `true`/`false` for a boolean, a quoted member for a union"
+                );
                 return self.error(v.span(), msg);
             }
         };
