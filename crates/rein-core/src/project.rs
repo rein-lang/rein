@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
+use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, InputType, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
 use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
@@ -445,8 +445,9 @@ impl Project {
     /// Diagnostics per function, sorted by span: parse, single-file checks, cycles, and reachability.
     /// A file with a syntax error reports only that error. Its tree is partial.
     pub fn check(&self) -> BTreeMap<String, Vec<Diagnostic>> {
-        let adj = self.adjacency(true);
-        let hand_off = self.adjacency(false);
+        let adj = self.adjacency(|_| true);
+        let hand_off = self.adjacency(|e| !e.awaited);
+        let unasked = self.adjacency(|e| !e.asked);
         let reachable = self.reachable_from_entry(&adj);
         let placements = self.placements(&adj, reachable.as_ref());
         self.files
@@ -465,7 +466,7 @@ impl Project {
                 diags.extend(check_line_length(&sf.text, self.max_line_length));
                 diags.extend(check_if_blank_lines(&sf.function, &sf.text));
                 let bindings = self.bindings(name);
-                diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &hand_off));
+                diags.extend(self.cycle_warnings(name, &sf.function, &bindings, &hand_off, &unasked));
                 if !is_struct(name) && reachable.as_ref().is_some_and(|r| !r.contains(name)) {
                     let span = sf.function.doc.as_ref().map_or_else(Span::default, |d| d.span);
                     let entry = &self.entry;
@@ -486,7 +487,7 @@ impl Project {
     /// None when `name` is a struct, the entry, not reachable from the entry, has no caller or more than one,
     /// is already in place, or cannot move there because the path is taken or another function belongs there too.
     pub fn nest_target(&self, name: &str) -> Option<String> {
-        let adj = self.adjacency(true);
+        let adj = self.adjacency(|_| true);
         let reachable = self.reachable_from_entry(&adj);
         match self.placements(&adj, reachable.as_ref()).remove(name)? {
             Placement { home, clash, .. } if clash.is_empty() => Some(home),
@@ -572,7 +573,7 @@ impl Project {
             .iter()
             .flat_map(|(name, sf)| {
                 let bindings = self.bindings(name);
-                ref_sites(&sf.function, &bindings).into_iter().map(move |(to, _, _)| (name.clone(), to))
+                ref_sites(&sf.function, &bindings).into_iter().map(move |e| (name.clone(), e.to))
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -596,41 +597,41 @@ impl Project {
         Some(seen)
     }
 
-    /// Edges between functions: each resolved import that is returned or awaited. With `awaits` false, only the
-    /// returns (hand-offs), so a cycle over them replays the same answers.
-    fn adjacency(&self, awaits: bool) -> BTreeMap<String, BTreeSet<String>> {
+    /// Edges between functions: each resolved import that is returned or awaited, if `keep` holds for it.
+    fn adjacency(&self, keep: impl Fn(&Edge) -> bool) -> BTreeMap<String, BTreeSet<String>> {
         self.files
             .iter()
             .map(|(name, sf)| {
                 let bindings = self.bindings(name);
-                let edges = ref_sites(&sf.function, &bindings)
-                    .into_iter()
-                    .filter(|(_, _, awaited)| awaits || !awaited)
-                    .map(|(t, _, _)| t)
-                    .collect();
+                let edges = ref_sites(&sf.function, &bindings).into_iter().filter(|e| keep(e)).map(|e| e.to).collect();
                 (name.clone(), edges)
             })
             .collect()
     }
 
-    /// One warning per return in `f` whose target can reach back to `name` through returns only. An `await` on
-    /// the cycle is a loop that asks new questions at each level, so it is not warned. `hand_off` has no awaits.
+    /// One warning per return or await in `f` that closes a cycle with no answer in it. A cycle is exempt only when
+    /// it has an `await` edge and a question before one of its edges, so each level of the recursion asks a new key.
+    /// `hand_off` holds the returns only. `unasked` holds the edges with no question before them.
     fn cycle_warnings(
         &self,
         name: &str,
         f: &Function,
         bindings: &BTreeMap<String, Binding<'_>>,
         hand_off: &BTreeMap<String, BTreeSet<String>>,
+        unasked: &BTreeMap<String, BTreeSet<String>>,
     ) -> Vec<Diagnostic> {
         ref_sites(f, bindings)
             .into_iter()
-            .filter(|(_, _, awaited)| !awaited)
-            .filter_map(|(t, span, _)| {
-                let back = path_between(hand_off, &t, name)?;
+            .filter_map(|e| {
+                // A cycle of returns only has no await, so it replays the same answers.
+                let hand_off_back = (!e.awaited).then(|| path_between(hand_off, &e.to, name)).flatten();
+                // A cycle where no edge has a question before it asks nothing new at any level.
+                let unasked_back = (!e.asked).then(|| path_between(unasked, &e.to, name)).flatten();
+                let back = hand_off_back.or(unasked_back)?;
                 let chain: Vec<&str> =
                     std::iter::once(name).chain(back.iter().map(String::as_str)).collect();
                 Some(Diagnostic::warning(
-                    span,
+                    e.span,
                     format!("reference cycle: {}; Rein has no loops yet", chain.join(" -> ")),
                 ))
             })
@@ -822,17 +823,40 @@ fn keys(f: &Function) -> BTreeSet<String> {
     out
 }
 
-/// Edges from `f` to project functions: each return of a reference, and each call of a reference.
-/// Returns (target project path, span of the statement, whether the statement is an `await` call). Std names are
-/// not edges.
-fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<(String, Span, bool)> {
+/// An edge from one function to a project function: a return or an `await` of a resolved reference.
+struct Edge {
+    /// The target project path.
+    to: String,
+    /// The span of the statement.
+    span: Span,
+    /// Whether the statement is an `await` call (`await @./x`), which asks a new key at each level.
+    awaited: bool,
+    /// Whether a question comes before the statement on its path: a non-text parameter, or a `request` or
+    /// `await` answer above it in the same block or an enclosing one.
+    asked: bool,
+}
+
+/// Edges from `f` to project functions: each return of a reference, and each call of a reference. Std names are
+/// not edges, and a program is another project, not an edge.
+fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<Edge> {
     let mut out = Vec::new();
-    walk_stmts(&f.body, &mut |s| {
+    let asked = f.inputs.iter().any(|i| i.ty != InputType::Text);
+    sites_in(&f.body, asked, bindings, &mut out);
+    out
+}
+
+/// The edges of one block. `asked` says a question came before the block. A question in a branch does not count
+/// after the branch, since the branch may not run.
+fn sites_in(stmts: &[Stmt], mut asked: bool, bindings: &BTreeMap<String, Binding<'_>>, out: &mut Vec<Edge>) {
+    for s in stmts {
         let awaited = matches!(s, Stmt::Request { awaited: Awaited::Call(_), .. });
         let mut push = |key: &str| match bindings.get(key) {
-            // A program is another project, not a node of this one.
-            Some(Binding::Function(path)) if !path.starts_with('@') => out.push((path.clone(), s.span(), awaited)),
-            Some(Binding::Template { path: Some(path), .. }) if !path.starts_with('@') => out.push((path.clone(), s.span(), awaited)),
+            Some(Binding::Function(path)) if !path.starts_with('@') => {
+                out.push(Edge { to: path.clone(), span: s.span(), awaited, asked });
+            }
+            Some(Binding::Template { path: Some(path), .. }) if !path.starts_with('@') => {
+                out.push(Edge { to: path.clone(), span: s.span(), awaited, asked });
+            }
             _ => {}
         };
         let callee_is_ref = |c: &crate::ast::Call| matches!(c.callee, Callee::Ref(_));
@@ -845,8 +869,18 @@ fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<(Str
             }
             _ => {}
         }
-    });
-    out
+        match s {
+            Stmt::If { then, .. } => sites_in(then, asked, bindings, out),
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    sites_in(&c.body, asked, bindings, out);
+                }
+            }
+            // The answer comes after the statement's own edge, so later statements see it.
+            Stmt::Request { .. } => asked = true,
+            Stmt::Return(_) => {}
+        }
+    }
 }
 
 /// Shortest chain of functions from `from` to `to`, both included.
