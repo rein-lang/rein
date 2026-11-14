@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" width="128" alt="Rein logo"></p>
+
 # Rein
 
 Status: proof of concept. Private.
