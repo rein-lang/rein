@@ -101,13 +101,7 @@ Examples: [merge-pr](examples/rein/merge-pr), [incident-triage](examples/rein/in
 
 The VS Code extension lives in [rein-lang/vscode-rein](https://github.com/rein-lang/vscode-rein). Its tests run there with `pnpm test`.
 
-Run the docs site locally:
-
-```sh
-cd website/docs
-pnpm install
-pnpm run docs:dev
-```
+The docs site and the landing page live in [rein-lang/rein-lang.com](https://github.com/rein-lang/rein-lang.com) and deploy to https://rein-lang.com.
 
 ## Repository layout
 
@@ -125,7 +119,7 @@ pnpm run docs:dev
 - [Decisions](docs/decisions.md): owner facts, PoC choices, open questions.
 - [Agent interface](docs/interface.md): programs as named apps, the MCP host, and `rein run`.
 
-Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook checks the example pages are generated. It builds the docs site, so a broken link between site pages blocks the push. The hook needs `node`, `pnpm` and `linecheck`. The first push needs the network to fill the pnpm cache for `website/docs`; later pushes work offline. It also builds `rein` from the branch and runs `rein check` on every installed program (`scripts/check-installed-programs.sh`), so a checker change that breaks an installed program blocks the push. `website/docs/reference/cli.md` is generated from `rein docs-cli`: do not edit it, and refresh it with `sh website/docs/scripts/generate-cli.sh`.
+Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook needs `linecheck` and runs it. It builds `rein` from the branch and runs `rein check` on every installed program (`scripts/check-installed-programs.sh`). A checker change that breaks an installed program blocks the push. The site's CLI and example pages are generated from this repo in rein-lang/rein-lang.com. Its CI fails when they drift from the pinned rein commit.
 
 ## License
 
