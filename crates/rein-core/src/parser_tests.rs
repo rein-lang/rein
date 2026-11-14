@@ -568,3 +568,31 @@ fn await_agent_setup_is_a_request_of_the_std_template() {
     assert!(found);
     assert!(matches!(f.answer_struct("setup"), Some(Ok(s)) if s.name.value == "Setup"));
 }
+
+#[test]
+fn agent_setup_sugar_needs_the_setup_type() {
+    let msg = one_error("/** E. */\nexport default async function main() {\n  /** S. */\n  const ok: boolean = await agentSetup(harness=`any`, model=`any`, effort=`any`);\n  return `x`;\n}\n");
+    assert_eq!(msg, "`agentSetup` gives a `Setup`; write `const ok: Setup`");
+}
+
+#[test]
+fn explicit_request_of_agent_setup_keeps_the_old_rules() {
+    let (_, diags) = parse("/** E. */\nexport default async function main() {\n  /** S. */\n  const ok: boolean = await request(agentSetup(harness=`any`, model=`any`, effort=`any`));\n  return `x`;\n}\n");
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn a_local_setup_struct_wins_over_std() {
+    let f = ok("interface Setup {\n  /** Only one row. */\n  ready: boolean;\n}\n/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await request(`x`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["ready"]);
+}
+
+#[test]
+fn setup_without_a_local_struct_is_the_std_setup() {
+    let f = ok("/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await request(`x`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["harness", "model", "effort"]);
+}

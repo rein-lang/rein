@@ -486,7 +486,9 @@ impl Parser {
         };
         let name = self.ident("answer name")?;
         self.expect(Tok::Colon, "`:`")?;
+        let ty_start = self.span();
         let ty = self.answer_type()?;
+        let ty_span = ty_start.to(self.last_span());
         if *self.peek() != Tok::Assign {
             return Err(Diagnostic::error(start, NO_VARIABLES));
         }
@@ -495,7 +497,13 @@ impl Parser {
             return Err(Diagnostic::error(start, NO_VARIABLES));
         }
         self.bump();
-        let (awaited, close) = self.awaited()?;
+        let (awaited, close, sugar) = self.awaited()?;
+        if sugar && !matches!(&ty, InputType::Struct(StructRef::Local(s)) if s.value == "Setup") {
+            return Err(Diagnostic::error(
+                ty_span,
+                format!("`agentSetup` gives a `Setup`; write `const {}: Setup`", name.value),
+            ));
+        }
         if *self.peek() == Tok::Semi {
             self.bump();
         }
@@ -505,25 +513,25 @@ impl Parser {
         Ok(Stmt::Request { response: Box::new(response), awaited, span })
     }
 
-    /// What follows `await`: `request(arg)`, or a reference with optional arguments (a call with return).
-    /// Returns it with the span of its last token.
-    fn awaited(&mut self) -> Result<(Awaited, Span), Diagnostic> {
+    /// What follows `await`: `request(arg)`, `agentSetup(...)`, or a reference with optional arguments (a call with return).
+    /// Returns it with the span of its last token, and whether it is the `agentSetup` sugar.
+    fn awaited(&mut self) -> Result<(Awaited, Span, bool), Diagnostic> {
         if let Tok::Ref(path) = self.peek().clone() {
             if *self.next_tok() == Tok::LParen {
                 let call = self.call()?;
                 let span = call.span;
-                return Ok((Awaited::Call(ReturnValue::Call(call)), span));
+                return Ok((Awaited::Call(ReturnValue::Call(call)), span, false));
             }
             let span = self.bump();
-            return Ok((Awaited::Call(ReturnValue::Ref(Spanned { value: path, span })), span));
+            return Ok((Awaited::Call(ReturnValue::Ref(Spanned { value: path, span })), span, false));
         }
-        let callee = self.ident("`request` or a reference like `@program`")?;
+        let callee = self.ident("`request`, `agentSetup` or a reference like `@program`")?;
         if callee.value == crate::stdlib::AGENT_SETUP {
             // `await agentSetup(...)` is `await request(agentSetup(...))`.
             let call = self.call_rest(Callee::Std(callee.clone()))?;
             let close = call.span;
             let request = Spanned { value: "request".to_string(), span: callee.span };
-            return Ok((Awaited::Request { callee: request, arg: Value::Call(call) }, close));
+            return Ok((Awaited::Request { callee: request, arg: Value::Call(call) }, close, true));
         }
         if callee.value != "request" {
             return Err(Diagnostic::error(callee.span, ONLY_AWAIT));
@@ -534,7 +542,7 @@ impl Parser {
             self.bump();
         }
         let close = self.expect(Tok::RParen, "`)`")?;
-        Ok((Awaited::Request { callee, arg }, close))
+        Ok((Awaited::Request { callee, arg }, close, false))
     }
 
     /// A string, a template literal, or a template call. A call is only allowed here, as the argument of `request`.

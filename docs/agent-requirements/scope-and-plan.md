@@ -15,7 +15,8 @@ Each step is one small pull request.
 
 1. Built: the std struct `Setup` and the std template `agentSetup`, with
    `await agentSetup(...)` as a built-in await. Tests in `rein-core`.
-2. The language server: hover and completion for the new std names.
+2. Built: completion for `agentSetup` in the language server (tested). Hover
+   on it is not tested yet.
 3. The std templates `subagent`, `localSession` and `remoteSession`.
 
 ## Open questions

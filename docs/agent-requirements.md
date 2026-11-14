@@ -41,11 +41,8 @@ export default async function main() {
     case "ok":
       return `Commit the staged changes with a short message, then push.`;
     case "mismatch":
-      return subagent(
-        model=`the cheapest model`,
-        effort=`medium`,
-        task=`Run the commit-push program.`,
-      );
+      return `Start a subagent on the cheapest model with effort medium.
+Give it this task: run the commit-push program.`;
     case "unknown":
       return askUser(question=`Is your effort medium or higher?`);
   }
