@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    Binding, Callee, Call, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
+    Awaited, Binding, Callee, Call, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
     StructParam, StructRef, TemplateLit, Value, STRUCT_SUFFIX,
 };
 use crate::diagnostic::{line_col, Diagnostic, Span};
@@ -97,8 +97,9 @@ fn quoted_text(stmts: &[Stmt]) -> Vec<Diagnostic> {
             ReturnValue::Call(call) => call_quoted_text(call, &mut out),
             ReturnValue::Ref(_) | ReturnValue::Template(_) => {}
         },
-        Stmt::Request { arg, .. } => value_quoted_text(arg, &mut out),
-        Stmt::If { .. } | Stmt::Switch { .. } => {}
+        Stmt::Request { awaited: Awaited::Request { arg, .. }, .. } => value_quoted_text(arg, &mut out),
+        Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)), .. } => call_quoted_text(call, &mut out),
+        Stmt::Request { .. } | Stmt::If { .. } | Stmt::Switch { .. } => {}
     });
     out
 }
@@ -597,7 +598,7 @@ impl<'a> Checker<'a> {
             Stmt::Switch { subject, cases, .. } => {
                 self.switch(subject, cases);
             }
-            Stmt::Request { response, arg, .. } => {
+            Stmt::Request { response, awaited, .. } => {
                 let name = response.name.value.as_str();
                 if !self.f.is_async {
                     self.error(s.span(), "`await` needs `export default async function`");
@@ -624,7 +625,10 @@ impl<'a> Checker<'a> {
                     self.error(response.name.span, format!("duplicate name `{name}`"));
                 }
                 self.names.insert(name.to_string());
-                self.value(arg);
+                match awaited {
+                    Awaited::Request { arg, .. } => self.value(arg),
+                    Awaited::Call(target) => self.awaited_call(target),
+                }
                 self.answers.push((**response).clone());
             }
             Stmt::Return(r) => match &r.value {
@@ -633,6 +637,25 @@ impl<'a> Checker<'a> {
                 ReturnValue::Template(lit) => self.template_names(lit),
                 ReturnValue::Call(call) => self.call(call, true),
             },
+        }
+    }
+
+    /// `await @ref` or `await @ref(args)`: a call with return. The target is a function, with the argument rules
+    /// of a hand-off. A template gives text, not a run, so it cannot be awaited.
+    fn awaited_call(&mut self, target: &ReturnValue) {
+        let (key, span) = match target {
+            ReturnValue::Ref(r) => (r.value.as_str(), r.span),
+            ReturnValue::Call(call) => (call.callee.key(), call.callee.span()),
+            ReturnValue::Text(_) | ReturnValue::Template(_) => return,
+        };
+        if let Ok(Kind::Template { .. }) = (self.resolve)(key) {
+            self.error(span, format!("`@{key}` is a template; only a function can be awaited"));
+            return;
+        }
+        match target {
+            ReturnValue::Ref(r) => self.returned_ref(r),
+            ReturnValue::Call(call) => self.call(call, true),
+            ReturnValue::Text(_) | ReturnValue::Template(_) => {}
         }
     }
 

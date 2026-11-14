@@ -1,7 +1,7 @@
 //! Recursive descent parser: tokens to a `Function` syntax tree.
 
 use crate::ast::{
-    Arg, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
+    Arg, Awaited, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
     StructParam, StructRef, TemplateLit, Value,
 };
 use crate::diagnostic::{Diagnostic, Span};
@@ -32,6 +32,9 @@ struct Parser {
 const DOC_PLACES: &str =
     "the doc comment must go right before `export default function`, an `interface`, a parameter, a field, or a const answer";
 const NO_VARIABLES: &str = "Rein has no variables, except `/** question */ const x: type = await request(...)`";
+const ONLY_AWAIT: &str = "only `request` or a reference like `@program` can be awaited";
+const AWAIT_NEEDS_CONST: &str =
+    "`await` gives an answer; write `/** question */ const name: Type = await @program(...);`, then read `name`";
 const NO_ELSE: &str = "Rein has no `else`: end the `if` block with a return, and handle the other case after it";
 
 fn no_default(span: Span) -> Diagnostic {
@@ -353,12 +356,16 @@ impl Parser {
             Tok::Else => Err(Diagnostic::error(self.span(), NO_ELSE)),
             Tok::Doc(_) => {
                 let doc = self.doc_block().ok_or_else(|| self.unexpected("statement"))?;
+                if matches!(self.peek(), Tok::Ident(w) if w == "await") {
+                    return Err(Diagnostic::error(self.span(), AWAIT_NEEDS_CONST));
+                }
                 if !matches!(self.peek(), Tok::Reserved(w) if w == "const") {
                     return Err(Diagnostic::error(doc.span, DOC_PLACES));
                 }
                 self.request_stmt(Some(doc))
             }
             Tok::Reserved(word) if word == "const" => self.request_stmt(None),
+            Tok::Ident(word) if word == "await" => Err(Diagnostic::error(self.span(), AWAIT_NEEDS_CONST)),
             Tok::Reserved(word) => {
                 let message = match word.as_str() {
                     "for" | "while" | "do" => "Rein has no loops yet",
@@ -455,6 +462,7 @@ impl Parser {
                     (ReturnValue::Ref(Spanned { value: path, span }), span)
                 }
             }
+            Tok::Ident(word) if word == "await" => return Err(Diagnostic::error(self.span(), AWAIT_NEEDS_CONST)),
             Tok::Ident(_) if *self.next_tok() == Tok::LParen => {
                 let call = self.call()?;
                 let span = call.span;
@@ -485,9 +493,31 @@ impl Parser {
             return Err(Diagnostic::error(start, NO_VARIABLES));
         }
         self.bump();
-        let callee = self.ident("`request`")?;
+        let (awaited, close) = self.awaited()?;
+        if *self.peek() == Tok::Semi {
+            self.bump();
+        }
+        let span = start.to(close);
+        let description = doc.description.clone();
+        let response = Input { span: name.span.to(close), name, ty, description, doc: Some(doc) };
+        Ok(Stmt::Request { response: Box::new(response), awaited, span })
+    }
+
+    /// What follows `await`: `request(arg)`, or a reference with optional arguments (a call with return).
+    /// Returns it with the span of its last token.
+    fn awaited(&mut self) -> Result<(Awaited, Span), Diagnostic> {
+        if let Tok::Ref(path) = self.peek().clone() {
+            if *self.next_tok() == Tok::LParen {
+                let call = self.call()?;
+                let span = call.span;
+                return Ok((Awaited::Call(ReturnValue::Call(call)), span));
+            }
+            let span = self.bump();
+            return Ok((Awaited::Call(ReturnValue::Ref(Spanned { value: path, span })), span));
+        }
+        let callee = self.ident("`request` or a reference like `@program`")?;
         if callee.value != "request" {
-            return Err(Diagnostic::error(callee.span, "only `request` can be awaited"));
+            return Err(Diagnostic::error(callee.span, ONLY_AWAIT));
         }
         self.expect(Tok::LParen, "`(`")?;
         let arg = self.value()?;
@@ -495,13 +525,7 @@ impl Parser {
             self.bump();
         }
         let close = self.expect(Tok::RParen, "`)`")?;
-        if *self.peek() == Tok::Semi {
-            self.bump();
-        }
-        let span = start.to(close);
-        let description = doc.description.clone();
-        let response = Input { span: name.span.to(close), name, ty, description, doc: Some(doc) };
-        Ok(Stmt::Request { response: Box::new(response), callee, arg, span })
+        Ok((Awaited::Request { callee, arg }, close))
     }
 
     /// A string, a template literal, or a template call. A call is only allowed here, as the argument of `request`.

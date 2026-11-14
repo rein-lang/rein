@@ -1271,3 +1271,28 @@ fn an_await_request_line_above_an_if_needs_an_empty_line_before_it() {
         [("add an empty line before `if`".to_string(), "if".to_string())]
     );
 }
+
+#[test]
+fn await_of_a_function_with_its_arguments_is_clean() {
+    clean("/** F. */\nexport default async function f(\n  /** The PR. */\n  pr: string,\n) {\n  /** Merged? */\n  const ok: boolean = await @./merge(pr=pr);\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n");
+    clean("/** F. */\nexport default async function f() {\n  /** Done? */\n  const ok: boolean = await @./other;\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n");
+}
+
+#[test]
+fn await_reports_each_error_of_a_call_with_return() {
+    let src = |line: &str| format!("/** F. */\nexport default async function f() {{\n  /** Done? */\n  {line}\n\n  if (ok) {{\n    return `yes`;\n  }}\n\n  return `no`;\n}}\n");
+    let cases = [
+        ("const ok: boolean = await @./tpl(a=`x`, b=`y`);", "`@./tpl` is a template; only a function can be awaited"),
+        ("const ok: boolean = await @./tpl;", "`@./tpl` is a template; only a function can be awaited"),
+        ("const ok: boolean = await @./missing;", "cannot find function `@./missing`"),
+        ("const ok: boolean = await @./merge;", "`@./merge` takes 1 argument, got 0"),
+        ("const ok: boolean = await @./merge(url=`u`);", "`url` is not a parameter of `@./merge`; parameters are pr"),
+        ("const ok: boolean = await @./other(a=`x`);", "`@./other` takes no arguments"),
+        ("const ok: string = await @./other;", "a `string` answer is not allowed"),
+    ];
+    for (line, part) in cases {
+        expect_diag(&src(line), Severity::Error, part);
+    }
+    let sync = "/** F. */\nexport default function f() {\n  /** Done? */\n  const ok: boolean = await @./other;\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n";
+    expect_diag(sync, Severity::Error, "`await` needs `export default async function`");
+}

@@ -451,3 +451,23 @@ fn a_program_changed_since_the_run_gives_no_graph() {
     assert!(a["runs"][0]["mermaid"].is_null(), "{a}");
     assert_eq!(a["runs"][0]["program_changed"], true, "{a}");
 }
+
+#[test]
+fn answers_of_two_calls_of_one_function_stay_apart() {
+    let dir = folder("calls");
+    write(
+        &dir,
+        "mcp-1-1000.jsonl",
+        &[
+            json!({"ts": 1000, "event": "agent", "transport": "mcp", "pid": pid_self(), "cwd": "/work", "session": null}),
+            json!({"ts": 1001, "event": "start", "run": "run-1", "program": null, "entry": "main", "step": question("main.a", &["main", "fn"])}),
+            json!({"ts": 1002, "event": "answer", "run": "run-1", "key": "main.a>fn.ok", "value": "yes", "step": question("main.a", &["main", "fn"])}),
+            json!({"ts": 1003, "event": "answer", "run": "run-1", "key": "main.b>fn.ok", "value": "no", "step": question("main.b", &["main", "fn"])}),
+        ],
+    );
+    let list = agents(&dir, 2000);
+    let run = &agent_named(&list, "mcp-1-1000")["runs"][0];
+    let functions = run["functions"].as_array().unwrap();
+    let fn_answers = &functions.iter().find(|f| f["name"] == "fn").expect("fn")["answers"];
+    assert_eq!(fn_answers, &json!({"ok (main.a)": "yes", "ok (main.b)": "no"}), "{run}");
+}

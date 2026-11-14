@@ -1,0 +1,26 @@
+interface Projects {
+  /**
+   * The high priority repositories (`owner/name`), comma-separated,
+   * or `-`.
+   */
+  repos: string;
+  /** Did find_projects find no repository? */
+  none: boolean;
+}
+
+/**
+ * Work on the high priority projects of a workplace.
+ */
+export default async function main(
+  /** The workplace folder that lists the projects. */
+  workplace: string,
+) {
+  /** The high priority repositories. */
+  const projects: Projects = await @./find_projects(workplace=workplace);
+
+  if (projects.none) {
+    return `No priority project has activity.`;
+  }
+
+  return @./open_prs(repos=projects.repos);
+}

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-const EXAMPLES: [&str; 4] = ["incident-triage", "merge-pr", "pr-handling", "support-ticket"];
+const EXAMPLES: [&str; 5] = ["incident-triage", "merge-pr", "pr-handling", "priority-work", "support-ticket"];
 
 fn examples() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples").canonicalize().unwrap()
