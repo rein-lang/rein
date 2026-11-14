@@ -4,8 +4,10 @@ Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
 
 The requirements are tags in the doc comment of the entry function, in
 `main.rein`. They are not a manifest field and not a parameter. The doc
-comment already describes the program, so the agent and the reader see the
-requirements next to the description.
+comment already describes the program, so the reader sees the requirements
+next to the description. The parser keeps tags out of the description, so
+`rein list --json`, `rein_programs` and the agent context show the
+requirements as their own field.
 
 ```ts
 /**

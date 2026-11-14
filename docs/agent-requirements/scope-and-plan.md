@@ -13,7 +13,8 @@ Each step is one small pull request.
 
 1. `rein-core`: parse and check the `@requires`, `@recommends` and
    `@mismatch` tags of the entry function.
-2. `rein show` and `rein list --json` print the requirements.
+2. `rein show`, `rein list --json`, `rein_programs` and the agent context
+   print the requirements.
 3. The resolver: the harness from MCP `initialize` or `--harness`, the user
    tier map, and the `claude-code` default.
 4. `rein_start`, `rein run` and `rein step`: the `model` and `effort`
