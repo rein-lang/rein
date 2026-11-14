@@ -1,4 +1,0 @@
-# vitepress-plugin-mermaid pre-bundles mermaid's own deps by bare name (vite optimizeDeps.include).
-# pnpm's isolated layout hides them, so mermaid's CJS deps reach the browser raw and the page crashes.
-nodeLinker: hoisted
-dangerouslyAllowAllBuilds: true
