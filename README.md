@@ -75,7 +75,7 @@ $ rein step --json --answer main.vip=no --answer main.category=how_to --answer f
 # exit 0
 ```
 
-A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein eval` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](docs/spec.md#11-stepping-agent-interface).
+A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein eval` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](docs/spec/stepping.md#11-stepping-agent-interface).
 
 ## Quickstart
 
