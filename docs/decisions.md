@@ -161,9 +161,9 @@ Anyone can build and share a program, so two authors can pick the same name. The
 
 ## Planned (not built)
 
-- Agent requirements: std functions (`requireEffort`, `recommendModel`, and
-  others) ask the agent its setup and compare it; the program writes only the
-  mismatch handlers. See `docs/agent-requirements.md`.
+- Agent requirements: the std function `agentSetup` asks the agent for the
+  matrix of its setup and compares it; the program writes only the mismatch
+  handlers. See `docs/agent-requirements.md`.
 - Bundle tool: compiles a program into one self-contained `.rein` file, so an agent can load one file and run it as a full program.
 - Research an agent-agnostic tool that installs agent hooks. Why: each agent keeps its hook config in its own format and place, so Rein should not own a per-agent installer.
 

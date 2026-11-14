@@ -2,10 +2,11 @@
 
 Status: proposal. Nothing on this page is built.
 
-A program states which harness, model tier and effort it needs, with std
-functions. Std asks the agent for its setup, compares it, and returns a typed
-result. The program's own code is only the handlers: what the agent does when
-the setup does not match.
+A program states which harness, model tier and effort suit it, with one std
+function, `agentSetup`. Std tells the agent to give the matrix of its setup:
+harness, model tier and effort. Std compares the matrix with the program's
+targets and returns one result per row. The developer's code is only the
+handlers: what happens when a row does not match.
 
 Example: a program that only commits and pushes runs well on the cheapest
 model of any harness, with medium effort or more. A review program needs the
@@ -17,8 +18,8 @@ strongest model and high effort.
   more and runs slower.
 - Some programs fail on a weak model or a low effort. The author knows this.
   The agent that starts the program does not.
-- The check is the same in every program, so it belongs in std. What to do on
-  a mismatch differs per program and per author: send a subagent, open a new
+- The ask and the compare are the same in every program, so they are std.
+  What to do on a mismatch differs per program: send a subagent, open a new
   local or remote session, ask the user, or go on. That is the handler.
 
 ## Example
@@ -28,10 +29,10 @@ strongest model and high effort.
  * Commit the staged changes and push them.
  */
 export default async function main() {
-  /** Is your effort medium or higher? */
-  const effort: Check = await requireEffort(min="medium");
+  /** Your setup. */
+  const setup: Setup = await agentSetup(model="cheap", effort="medium+");
 
-  switch (effort) {
+  switch (setup.effort) {
     case "ok":
       return `Commit the staged changes with a short message, then push.`;
     case "mismatch":
@@ -46,15 +47,18 @@ export default async function main() {
 }
 ```
 
-- `requireEffort(min="medium")` is std. It asks the agent for its effort,
-  compares it with `medium`, and returns a `Check`.
-- The `switch` is the author's code. Each case is a handler. Rein has no
-  `default`, so the author must handle `"mismatch"` and `"unknown"`.
+- `agentSetup(...)` is std. It asks the agent for its harness, model tier and
+  effort in one request, compares each one, and returns a `Setup`.
+- `setup.effort` is `"ok"`, `"mismatch"` or `"unknown"`. The `switch` is the
+  developer's code. Rein has no `default`, so every case has a handler.
+- Required or recommended is the handler's choice. Here a low effort sends a
+  subagent, so effort is required. The model row has no handler, so the
+  cheapest model is only a recommendation.
 
 ## Topics
 
-- [The std functions](agent-requirements/std-functions.md): the `require` and
-  `recommend` functions, the `Check` result, and the checker rules.
+- [The std function](agent-requirements/std-functions.md): `agentSetup`, its
+  targets, the `Setup` result, and the checker rules.
 - [Handlers](agent-requirements/handling.md): what a handler can do, the std
   templates for a bad setup, and hand-offs.
 - [Scope, build order and open questions](agent-requirements/scope-and-plan.md).

@@ -2,8 +2,8 @@
 
 Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
 
-A handler is the author's code for one `Check` result. The program handles the
-result with `switch` or `if`, with no `else` and no `default`. Std does the
+A handler is the developer's code for one row of the `Setup`. The program
+handles the row with `switch` or `if`, with no `else` and no `default`. Std does the
 compare. The handler only says what the agent does next.
 
 ## What a handler can do
@@ -18,10 +18,10 @@ compare. The handler only says what the agent does next.
 ## Required
 
 ```ts
-  /** Do you run on the strongest model tier? */
-  const model: Check = await requireModel(min="frontier");
+  /** Your setup. */
+  const setup: Setup = await agentSetup(model="frontier+", effort="high+");
 
-  switch (model) {
+  switch (setup.model) {
     case "ok":
       return @./review;
     case "mismatch":
@@ -39,10 +39,10 @@ compare. The handler only says what the agent does next.
 ## Recommended
 
 ```ts
-  /** Do you run on the cheapest model tier? */
-  const model: Check = await recommendModel(tier="cheap");
+  /** Your setup. */
+  const setup: Setup = await agentSetup(model="cheap");
 
-  if (model === "mismatch") {
+  if (setup.model === "mismatch") {
     return @./commit(hint=`A cheaper model can run this program next time.`);
   }
 

@@ -1,18 +1,26 @@
+interface Matrix {
+  /** The model tier you run on. */
+  model: "cheap" | "standard" | "frontier" | "unknown";
+  /** The effort you run with. */
+  effort: "low" | "medium" | "high" | "xhigh" | "max" | "unknown";
+}
+
 /**
  * Commit the staged changes and push them.
  */
 export default async function main() {
-  // Today's form of `await requireEffort(min="medium")`: ask the value,
-  // then compare here. The std function will do the compare.
-  /** The effort you run with. */
-  const effort: "low" | "medium" | "high" | "xhigh" | "max" | "unknown" =
-    await request(`Say which effort you run with.`);
+  // Today's form of `await agentSetup(model="cheap", effort="medium+")`:
+  // ask the matrix, then compare here. The std function will compare.
+  /** Your setup. */
+  const setup: Matrix = await request(
+    `Give your setup: model tier and effort.`,
+  );
 
-  if (effort === "unknown") {
+  if (setup.effort === "unknown") {
     return askUser(question=`Is your effort medium or higher?`);
   }
 
-  if (effort === "low") {
+  if (setup.effort === "low") {
     return `Start a subagent on the cheapest model with effort medium.
 Give it this task: run the commit-push program.`;
   }

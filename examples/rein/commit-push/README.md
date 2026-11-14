@@ -6,14 +6,15 @@ first, and sends a subagent when the effort is too low.
 
 It shows the proposed agent requirement checks: see
 `docs/agent-requirements.md` in the repository. The std function
-`requireEffort(min="medium")` is not built yet, so the program asks with
-`request` and compares the value in its own code, which works today.
+`agentSetup(model="cheap", effort="medium+")` is not built yet, so the
+program asks with `request` for the matrix and compares it in its own code,
+which works today.
 
 ## Files
 
 | File | Function | Job |
 | --- | --- | --- |
-| `main.rein` | `main` | Asks the effort. Unknown: ask the user. Low: send a subagent. Else: commit and push. |
+| `main.rein` | `main` | Asks the setup matrix. Effort unknown: ask the user. Low: send a subagent. Else: commit and push. |
 
 ## Run it
 
