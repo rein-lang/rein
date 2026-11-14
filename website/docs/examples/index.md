@@ -2,6 +2,7 @@
 
 Each example is a flow under `examples/rein/<flow>/`, with a `package.json` manifest. Open one to read its files and run it.
 
+- [commit-push](/examples/commit-push): Commit the staged changes and push them.
 - [incident-triage](/examples/incident-triage): Decide how the on-call agent handles a new production alert.
 - [merge-pr](/examples/merge-pr): Decide the next step for a pull request task.
 - [pr-handling](/examples/pr-handling): Decide the next step for a pull request: review it, fix it, or merge it.

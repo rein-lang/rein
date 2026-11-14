@@ -1,0 +1,10 @@
+/**
+ * Commit the staged changes and push them.
+ *
+ * @recommends model cheap
+ * @requires effort medium
+ * @mismatch @./mismatch
+ */
+export default function main() {
+  return `Commit the staged changes with a short message, then push.`;
+}
