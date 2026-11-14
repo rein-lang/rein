@@ -22,8 +22,18 @@ pub enum Kind {
 
 /// The severity of a call that omits a `boolean` or union parameter of the callee. A missing `string`
 /// parameter is always an error.
+///
+/// While it is a warning, a callee asks for a parameter that the caller did not pass, or reuses its stored
+/// answer. After the flip to `Error`, a bare hand-off back to an earlier function, like `return @./main;` to a
+/// `main` with a `boolean` parameter, is an error too. Each function on the way back must take that value and
+/// pass it on (`return @./main(ready=ready);`), or get it again with `await request(...)`.
 // ponytail: a warning while installed programs migrate (the pre-push hook checks them); flip to `Error` after.
 pub const MISSING_TYPED_ARG: Severity = Severity::Warning;
+
+/// Template parameters, which are all `string`, with their type.
+fn texts(params: Vec<String>) -> Vec<(String, InputType)> {
+    params.into_iter().map(|p| (p, InputType::Text)).collect()
+}
 
 /// `1 argument` or `2 arguments`.
 fn count_args(n: usize) -> String {
@@ -45,6 +55,7 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
         answers: Vec::new(),
         pending: Vec::new(),
         names: BTreeSet::new(),
+        literals: Vec::new(),
     };
     c.out.extend(crate::naming::camel_case_names(f));
     if let Some(stem) = name.strip_suffix(STRUCT_SUFFIX) {
@@ -85,7 +96,8 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
             }
         }
     }
-    c.out.extend(quoted_text(&f.body));
+    let literals = std::mem::take(&mut c.literals);
+    c.out.extend(quoted_text(&f.body).into_iter().filter(|d| !literals.contains(&d.span)));
     c.out
 }
 
@@ -307,6 +319,8 @@ struct Checker<'a> {
     pending: Vec<String>,
     /// Every answer name seen in the function, for the duplicate-name rule.
     names: BTreeSet<String>,
+    /// Quoted union members passed as arguments, like `task="merge"`. They are values, not text.
+    literals: Vec<Span>,
 }
 
 impl<'a> Checker<'a> {
@@ -700,11 +714,10 @@ impl<'a> Checker<'a> {
                     self.error(call.span, format!("`@{}` takes no arguments; return it without a call", path.value));
                 }
                 Ok(Kind::Function { params }) => {
-                    let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
-                    self.arguments(call, &names, &format!("@{}", path.value), &params);
+                    self.arguments(call, &params, &format!("@{}", path.value));
                     typed = params;
                 }
-                Ok(Kind::Template { params }) => self.arguments(call, &params, &format!("@{}", path.value), &[]),
+                Ok(Kind::Template { params }) => self.arguments(call, &texts(params), &format!("@{}", path.value)),
                 Ok(Kind::Request) => {}
             },
             Callee::Std(name) => match stdlib::item(&name.value) {
@@ -714,7 +727,7 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Binding::Template { function, .. }) => {
                     let params: Vec<String> = function.inputs.iter().map(|i| i.name.value.clone()).collect();
-                    self.arguments(call, &params, &name.value, &[]);
+                    self.arguments(call, &texts(params), &name.value);
                 }
                 // Std names are templates or `request`, never functions.
                 Ok(Binding::Function(_)) => {}
@@ -730,52 +743,54 @@ impl<'a> Checker<'a> {
     }
 
     /// The argument for the `boolean` or union parameter `param` of `@target`: a bare name of a parameter or an
-    /// answer of the caller, of the same type. A union fits when each of its members is a member of `ty`.
+    /// answer of the caller, of the same type, or a literal: `true` or `false`, or a quoted member of the union.
+    /// A union name fits when each of its members is a member of `ty`.
     fn typed_arg(&mut self, v: &Value, param: &str, ty: &InputType, target: &str) {
         let want = ty.ts_type();
-        let Value::Name(name) = v else {
-            let msg = format!("`{param}` of `@{target}` is `{want}`; pass a parameter or an answer of that type, like `{param}={param}`");
-            self.error(v.span(), msg);
-            return;
+        let members = |m: &[Spanned<String>], value: &str| m.iter().any(|w| w.value == value);
+        let name = match (v, ty) {
+            (Value::Str(s), InputType::Choice(m)) if members(m, &s.value) => return self.literals.push(s.span),
+            (Value::Name(name), _) => name,
+            _ => {
+                let msg = format!("`{param}` of `@{target}` is `{want}`; pass a parameter or an answer of that type, like `{param}={param}`");
+                return self.error(v.span(), msg);
+            }
         };
         self.used.insert(name.value.clone());
-        let fits = match (self.lookup(&name.value), ty) {
+        let have = match (self.lookup(&name.value), ty) {
+            (None, InputType::Bool) if matches!(name.value.as_str(), "true" | "false") => return,
             (None, _) => return self.unknown(name),
-            (Some(InputType::Bool), InputType::Bool) => true,
-            (Some(InputType::Choice(have)), InputType::Choice(want)) => have.iter().all(|m| want.iter().any(|w| w.value == m.value)),
-            (Some(_), _) => false,
+            (Some(InputType::Bool), InputType::Bool) => return,
+            (Some(InputType::Choice(have)), InputType::Choice(m)) if have.iter().all(|h| members(m, &h.value)) => return,
+            (Some(have), _) => have.ts_type(),
         };
-        if !fits {
-            let have = self.lookup(&name.value).map(|t| t.ts_type()).unwrap_or_default();
-            self.error(name.span, format!("`{}` is `{have}`, but `{param}` of `@{target}` is `{want}`", name.value));
-        }
+        self.error(name.span, format!("`{}` is `{have}`, but `{param}` of `@{target}` is `{want}`", name.value));
     }
 
     /// The arguments of a call bind by name. Each one is `name=value`, its name is a parameter, and no name
-    /// repeats. Every parameter is given, by name or by its place in a positional argument. `types` holds the
-    /// type of each parameter of a function; a missing `boolean` or union one is a [`MISSING_TYPED_ARG`].
-    fn arguments(&mut self, call: &Call, params: &[String], target: &str, types: &[(String, InputType)]) {
-        let list = params.join(", ");
+    /// repeats. Every parameter is given, by name or by its place in a positional argument. `params` holds each
+    /// parameter with its type; a missing `boolean` or union one is a [`MISSING_TYPED_ARG`].
+    fn arguments(&mut self, call: &Call, params: &[(String, InputType)], target: &str) {
+        let list = params.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>().join(", ");
         let mut given: BTreeSet<&str> = BTreeSet::new();
         for (i, arg) in call.args.iter().enumerate() {
             let Some(name) = &arg.name else {
-                match params.get(i) {
+                match params.get(i).map(|(p, _)| p) {
                     Some(p) => self.error(arg.span, format!("missing argument `{p}` in call to `{target}`; write `{p}=value`")),
                     None => self.error(arg.span, format!("unexpected argument in call to `{target}`; parameters are {list}")),
                 }
                 continue;
             };
-            if !params.contains(&name.value) {
+            if !params.iter().any(|(p, _)| *p == name.value) {
                 self.error(name.span, format!("`{}` is not a parameter of `{target}`; parameters are {list}", name.value));
             } else if !given.insert(name.value.as_str()) {
                 self.error(name.span, format!("`{}` is given twice in call to `{target}`; give each name once", name.value));
             }
         }
-        for (i, p) in params.iter().enumerate() {
+        for (i, (p, ty)) in params.iter().enumerate() {
             let positional = call.args.get(i).is_some_and(|a| a.name.is_none());
             if !given.contains(p.as_str()) && !positional {
-                let typed = types.iter().any(|(n, t)| n == p && *t != InputType::Text);
-                let severity = if typed { MISSING_TYPED_ARG } else { Severity::Error };
+                let severity = if *ty == InputType::Text { Severity::Error } else { MISSING_TYPED_ARG };
                 let message = format!("missing argument `{p}` in call to `{target}`; write `{p}=value`");
                 self.out.push(Diagnostic { severity, span: call.span, message });
             }

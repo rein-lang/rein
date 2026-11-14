@@ -971,4 +971,54 @@ fn a_passed_boolean_binds_and_the_callee_does_not_ask() {
         panic!("{res:?}")
     };
     assert_eq!((instruction.as_str(), trace), ("kept", vec!["main".to_string(), "two".to_string()]));
+    let literal = project_with_main_body(&project, "return @./two(ok=false);");
+    let res = step(&literal, &req("main", &[]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("{res:?}") };
+    assert_eq!(instruction, "swapped");
+}
+
+/// `project` with `main.rein` replaced by an entry without parameters whose body is `body`.
+fn project_with_main_body(project: &Project, body: &str) -> Project {
+    let two = project.get("two").unwrap().text.clone();
+    let main = format!("/** Entry. */\nexport default function main() {{\n  {body}\n}}\n");
+    self::project(&[("main.rein", &main), ("two.rein", &two)])
+}
+
+const MERGE_CI: &str = "/** Merge. */\nexport default function merge(\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge it.`;\n    case \"red\":\n      return `Fix CI.`;\n  }\n}\n";
+
+#[test]
+fn a_passed_union_binds_through_an_await() {
+    let main = "/** Entry. */\nexport default async function main() {\n  /** CI? */\n  const ci: \"green\" | \"red\" = await request(`Read CI.`);\n  /** Merged? */\n  const merged: boolean = await @./merge(ci=ci);\n  if (merged) {\n    return `done`;\n  }\n  return `not merged`;\n}\n";
+    let project = project(&[("main.rein", main), ("merge.rein", MERGE_CI)]);
+    let res = step(&project, &req("main", &[("main.ci", "red")]));
+    let StepResponse::Request { key, instruction, .. } = res else { panic!("{res:?}") };
+    assert_eq!(key, "main.merged");
+    assert!(instruction.starts_with("Fix CI."), "{instruction}");
+}
+
+#[test]
+fn struct_fields_pass_to_another_program_through_step() {
+    let main = "interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The next PR. */\n  const pick: Pick = await request(`pick a PR`);\n  return @pr-handling/main(pr=pick.pr, draft=false, task=pick.task);\n}\n";
+    let p = crate::program_fixture::with_main(main.to_string());
+    let res = step(&p, &req("main", &[("main.pick", r#"{"pr":"L","task":"merge"}"#)]));
+    let StepResponse::Done { instruction, trace, .. } = res else { panic!("{res:?}") };
+    assert_eq!(instruction, "Do merge on L.");
+    assert_eq!(trace, ["main", "@pr-handling/main"]);
+}
+
+/// After the flip of `MISSING_TYPED_ARG`, a hand-off back to `main` must pass `ready`. The passed value wins over
+/// the stored answer `main.ready`.
+#[test]
+fn a_hand_off_back_passes_the_value_and_it_beats_the_stored_answer() {
+    let main = "/** Entry. */\nexport default function main(\n  /** Ready? */\n  ready: boolean,\n) {\n  if (ready) {\n    return `done`;\n  }\n  return @./fix;\n}\n";
+    let fix = |back: &str| format!("/** Fix. */\nexport default async function fix() {{\n  /** Ready now? */\n  const ready: boolean = await request(`Fix it.`);\n  if (ready) {{\n    return {back};\n  }}\n  return `give up`;\n}}\n");
+    let passing = project(&[("main.rein", main), ("fix.rein", &fix("@./main(ready=ready)"))]);
+    assert!(passing.check().values().flatten().all(|d| d.severity != crate::diagnostic::Severity::Error && !d.message.contains("missing")));
+    let res = step(&passing, &req("main", &[("main.ready", "no"), ("fix.ready", "yes")]));
+    let StepResponse::Done { instruction, trace, .. } = res else { panic!("{res:?}") };
+    assert_eq!((instruction.as_str(), trace.len()), ("done", 3));
+
+    let bare = project(&[("main.rein", main), ("fix.rein", &fix("@./main"))]);
+    let diags: Vec<_> = bare.check().into_values().flatten().filter(|d| d.severity == crate::check::MISSING_TYPED_ARG).collect();
+    assert!(diags.iter().any(|d| d.message.contains("`@./main` takes 1 argument, got 0; pass `ready`")), "{diags:?}");
 }

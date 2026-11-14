@@ -1339,3 +1339,22 @@ fn await_reports_each_error_of_a_call_with_return() {
     let sync = "/** F. */\nexport default function f() {\n  /** Done? */\n  const ok: boolean = await @./other;\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n";
     expect_diag(sync, Severity::Error, "`await` needs `export default async function`");
 }
+
+#[test]
+fn a_literal_of_the_right_type_is_a_typed_argument() {
+    clean(&review_caller("pr=pr, big=true, ci=\"green\"").replace("  return", "  if (big || ci === \"red\") {\n    return `x`;\n  }\n\n  return"));
+    let msg = "`ci` of `@./review` is `\"green\" | \"red\"`; pass a parameter or an answer";
+    expect_diag(&review_caller("pr=pr, big=big, ci=\"blue\""), Severity::Error, msg);
+    expect_diag(&review_caller("pr=pr, big=big, ci=true"), Severity::Error, "unknown parameter `true`");
+    expect_diag(&review_caller("pr=pr, big=\"green\", ci=ci"), Severity::Error, "`big` of `@./review` is `boolean`");
+}
+
+#[test]
+fn a_bare_hand_off_back_to_a_function_with_a_boolean_is_a_missing_typed_argument() {
+    let src = "/** F. */\nexport default function f() {\n  return @./typed;\n}\n";
+    let diags = check_src(src);
+    assert!(
+        diags.iter().any(|d| d.severity == MISSING_TYPED_ARG && d.message.contains("`@./typed` takes 1 argument, got 0; pass `ok`")),
+        "{diags:?}"
+    );
+}
