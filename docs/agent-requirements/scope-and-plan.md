@@ -6,8 +6,8 @@ Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
 
 - Rein does not start models, call model APIs, or count cost.
 - Rein does not check the agent's answer against the real session.
-- No manifest field, doc tag or tier map. The std function is the check, and
-  the program's handlers are the only custom code.
+- The std function is the check, and the program's handlers are the only
+  custom code.
 
 ## Build order
 

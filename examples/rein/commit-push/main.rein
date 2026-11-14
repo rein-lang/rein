@@ -2,19 +2,20 @@
  * Commit the staged changes and push them.
  */
 export default async function main() {
-  // Today's form of `await requireEffort(min="medium")`.
-  /** Is your effort medium or higher? */
-  const effort: "ok" | "mismatch" | "unknown" = await request(
-    `Say if your effort is medium or higher: ok, mismatch, or unknown.`,
-  );
+  // Today's form of `await requireEffort(min="medium")`: ask the value,
+  // then compare here. The std function will do the compare.
+  /** The effort you run with. */
+  const effort: "low" | "medium" | "high" | "xhigh" | "max" | "unknown" =
+    await request(`Say which effort you run with.`);
 
-  switch (effort) {
-    case "ok":
-      return `Commit the staged changes with a short message, then push.`;
-    case "mismatch":
-      return `Start a subagent on the cheapest model with effort medium.
-Give it this task: run the commit-push program.`;
-    case "unknown":
-      return askUser(question=`Is your effort medium or higher?`);
+  if (effort === "unknown") {
+    return askUser(question=`Is your effort medium or higher?`);
   }
+
+  if (effort === "low") {
+    return `Start a subagent on the cheapest model with effort medium.
+Give it this task: run the commit-push program.`;
+  }
+
+  return `Commit the staged changes with a short message, then push.`;
 }

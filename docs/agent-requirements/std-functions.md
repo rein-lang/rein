@@ -2,7 +2,8 @@
 
 Status: proposal. Not built. [Agent requirements](../agent-requirements.md).
 
-Std adds six functions. Like `request`, each one is built in and needs no
+Std adds six functions. Their names are open (see
+[open questions](scope-and-plan.md)). Like `request`, each one is built in and needs no
 import. Each one asks the agent one question about itself, compares the
 answer, and gives the program a `Check`.
 
@@ -54,10 +55,12 @@ The agent answers its own value. Std compares it, and the `const` gets the
  "instruction": "Say which effort you run with.",
  "response": {"name": "effort", "type": "union",
   "options": ["low", "medium", "high", "xhigh", "max", "unknown"],
-  "description": "Is your effort medium or higher?"}}
+  "description": "Which effort do you run with?"}}
 ```
 
 - The agent answers a value, such as `high`. The program sees `"ok"`.
+- The `instruction` and `description` come from std, not from the `const`
+  doc comment, because the agent answers its value, not the check.
 - The step protocol does not change. Only the evaluator learns the compare.
 - Evaluation is lazy ([Evaluation](../spec/evaluation.md)). A check runs only
   when the path reaches it.
@@ -68,7 +71,10 @@ The agent answers its own value. Std compares it, and the `const` gets the
 
 - A call is `const NAME: Check = await requireEffort(min="medium");`, with a
   doc comment, in an `async` function. The rules of
-  [Async requests](../spec/async-requests.md) apply.
+  [Async requests](../spec/async-requests.md) apply, with one change: `await`
+  takes these six names, next to `request` and a reference. That spec page
+  and [Std and templates](../spec/std-and-templates.md) list them once they
+  are built.
 - The type must be `Check`: `` `requireEffort` gives a `Check`; write
   `const x: Check` ``.
 - Each function takes its one named argument.

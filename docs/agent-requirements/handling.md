@@ -53,7 +53,9 @@ The author decides that `"unknown"` goes on with no hint.
 
 ## Std templates for a handler
 
-Std adds three templates, next to `delegate` and `askUser`:
+Std adds three templates, next to `delegate` and `askUser`. `subagent` is
+`delegate` plus `effort`. `delegate` stays as it is, because a new argument
+would break every call of it today.
 
 | Template | Text it gives the agent |
 | --- | --- |
@@ -63,8 +65,9 @@ Std adds three templates, next to `delegate` and `askUser`:
 
 - `task` usually starts the same program again. The new agent answers the
   checks again, and this time they pass.
-- How each harness acts on the text: in Claude Code the Agent tool takes
-  `model` (`haiku`, `sonnet`, `opus`, `fable`) and `effort` (`low` to `max`).
+- `model` is text, such as `the cheapest model`. The agent maps it to a model
+  id of its harness. In Claude Code the Agent tool takes `model` (`haiku`,
+  `sonnet`, `opus`, `fable`) and `effort` (`low` to `max`).
   Codex takes `codex exec -m <model> -c model_reasoning_effort=<effort>`.
 
 ## Hand-offs
