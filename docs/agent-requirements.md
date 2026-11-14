@@ -34,7 +34,7 @@ export default async function main() {
   const setup: Setup = await agentSetup(
     harness=`any`,
     model=`cheap`,
-    effort=`medium+`,
+    effort=`>= medium`,
   );
 
   switch (setup.effort) {

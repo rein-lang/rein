@@ -11,7 +11,7 @@ Std has one function for the setup, `agentSetup`, and one std struct,
   const setup: Setup = await agentSetup(
     harness=`claude-code | codex`,
     model=`cheap`,
-    effort=`medium+`,
+    effort=`>= medium`,
   );
 ```
 
@@ -26,10 +26,11 @@ for a row with no target.
 | Argument | Value | `"ok"` when the agent's value is |
 | --- | --- | --- |
 | `harness` | ids joined with ` \| `, such as `` `claude-code \| codex` `` | one of them |
-| `model` | a tier, such as `` `cheap` `` | exactly that tier |
-| `model` | a tier with `+`, such as `` `standard+` `` | that tier or a stronger one |
-| `effort` | an effort, such as `` `high` `` | exactly that effort |
-| `effort` | an effort with `+`, such as `` `medium+` `` | that effort or a higher one |
+| `model`, `effort` | a value, such as `` `cheap` ``, or `==` and a value | exactly that value |
+| `model`, `effort` | `>=` and a value, such as `` `>= medium` `` | that value or a higher one |
+| `model`, `effort` | `>` and a value, such as `` `> cheap` `` | a higher value |
+| `model`, `effort` | `<=` and a value, such as `` `<= standard` `` | that value or a lower one |
+| `model`, `effort` | `<` and a value, such as `` `< frontier` `` | a lower value |
 | any | `` `any` `` | every value |
 
 | Row | Values |
@@ -41,8 +42,9 @@ for a row with no target.
 - A tier, not a model id. A model id ages, and each harness has its own ids.
   `cheap` is the smallest and fastest model of the harness, `frontier` the
   strongest, `standard` the one between.
-- An exact target also fails on a stronger model, because a stronger model
-  costs more. A `+` target accepts it.
+- The operators follow the order in the table below. An exact target also
+  fails on a stronger model, because a stronger model costs more. `>=`
+  accepts it, and `<=` caps the cost.
 
 ## The result
 
@@ -66,7 +68,7 @@ order of the values. The agent rates each row and answers a `Setup`:
 
 ```json
 {"kind": "request", "key": "main.setup", "function": "main",
- "instruction": "Check your setup against the targets of this program.\nHarness: claude-code | codex. Model tier: cheap. Effort: medium+. ...",
+ "instruction": "Check your setup against the targets of this program.\nHarness: claude-code | codex. Model tier: cheap. Effort: >= medium. ...",
  "response": {"name": "setup", "type": "struct", "fields": [
   {"name": "harness", "type": "union", "options": ["ok", "mismatch", "unknown"]},
   {"name": "model", "type": "union", "options": ["ok", "mismatch", "unknown"]},

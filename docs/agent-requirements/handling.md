@@ -21,7 +21,7 @@ compare. The handler only says what the agent does next.
   /** Your setup. */
   const setup: Setup = await agentSetup(
     harness=`any`,
-    model=`frontier+`,
+    model=`>= frontier`,
     effort=`any`,
   );
 
