@@ -264,6 +264,144 @@ fn cycle_warns_on_every_return_on_the_cycle() {
     );
 }
 
+/// Cycle warnings of `files`, in a project whose `main` returns `@./a`.
+fn cycle_warnings_of(files: &[(&str, &str)]) -> BTreeMap<String, Vec<Diagnostic>> {
+    let mut all = vec![("main", "/** m */\nexport default function main() { return @./a }\n")];
+    all.extend_from_slice(files);
+    project_of(&all).check()
+}
+
+fn has_cycle_warning(diags: &[Diagnostic]) -> bool {
+    diags.iter().any(|d| d.message.contains("reference cycle"))
+}
+
+const SELF_AWAIT: &str = "/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n";
+const GUARDED_SELF_AWAIT: &str = "/** Recurse until the agent says stop. */\nexport default async function a(\n  /** Keep going? */\n  more: boolean,\n) {\n  if (!more) {\n    return `stopped`;\n  }\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n";
+const AWAIT_B: &str = "/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await @./b;\n  return `a`;\n}\n";
+const AWAIT_A: &str = "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./a;\n  return `b`;\n}\n";
+const GUARDED_AWAIT_B: &str = "/** d */\nexport default async function a(\n  /** A? */\n  go: boolean,\n) {\n  if (!go) {\n    return `a stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await @./b;\n  return `a`;\n}\n";
+const GUARDED_AWAIT_A: &str = "/** d */\nexport default async function b(\n  /** B? */\n  go: boolean,\n) {\n  if (!go) {\n    return `b stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await @./a;\n  return `b`;\n}\n";
+
+#[test]
+fn hand_off_self_cycle_still_warns() {
+    // c1
+    let diags = cycle_warnings_of(&[("a", "/** d */\nexport default function a() { return @./a }\n")]);
+    assert!(
+        has(&diags["a"], Severity::Warning, "reference cycle: a -> a; Rein has no loops yet"),
+        "{:?}",
+        diags["a"]
+    );
+}
+
+#[test]
+fn hand_off_two_cycle_warns() {
+    // c2
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default function a() { return @./b }\n"),
+        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn self_await_without_a_question_warns() {
+    // c3: the await is the first step, so every level asks the same key.
+    let diags = cycle_warnings_of(&[("a", SELF_AWAIT)]);
+    assert!(
+        has(&diags["a"], Severity::Warning, "reference cycle: a -> a"),
+        "{:?}",
+        diags["a"]
+    );
+}
+
+#[test]
+fn self_await_after_a_question_is_not_warned() {
+    // c10: the parameter is asked before the await, at each level.
+    let diags = cycle_warnings_of(&[("a", GUARDED_SELF_AWAIT)]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+}
+
+#[test]
+fn mutual_await_without_a_question_warns() {
+    // c4
+    let diags = cycle_warnings_of(&[("a", AWAIT_B), ("b", AWAIT_A)]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn mutual_await_after_questions_is_not_warned() {
+    // c11
+    let diags = cycle_warnings_of(&[("a", GUARDED_AWAIT_B), ("b", GUARDED_AWAIT_A)]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(!has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn hand_off_then_await_without_a_question_warns() {
+    // c5: a returns b, and b awaits a with no question before it.
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default function a() { return @./b }\n"),
+        ("b", AWAIT_A),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn hand_off_cycle_with_an_await_elsewhere_warns() {
+    // c6: the await is not on the cycle, and the two returns replay the same answers.
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await @./c;\n  return @./b;\n}\n"),
+        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+        ("c", "/** d */\nexport default function c() { return `c` }\n"),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn await_without_a_cycle_is_not_warned() {
+    // c7
+    let diags = cycle_warnings_of(&[("a", "/** d */\nexport default function a() { return `f` }\n")]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+}
+
+#[test]
+fn await_answer_does_not_count_as_a_question_before_its_own_edge() {
+    // c8: `ok` is the answer to the await, so it comes after the edge.
+    let diags = cycle_warnings_of(&[
+        ("a", AWAIT_B),
+        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn mixed_cycle_without_a_question_warns() {
+    // c9: one await edge, but no question before any edge.
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default function a() { return @./b }\n"),
+        ("b", "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./c;\n  return `b`;\n}\n"),
+        ("c", "/** d */\nexport default function c() { return @./a }\n"),
+    ]);
+    for name in ["a", "b", "c"] {
+        assert!(has_cycle_warning(&diags[name]), "{name}: {:?}", diags[name]);
+    }
+}
+
+#[test]
+fn request_answer_before_the_await_is_a_question() {
+    // A `request` answer above the await asks a new key at each level.
+    let diags = cycle_warnings_of(&[(
+        "a",
+        "/** d */\nexport default async function a() {\n  /** Checked? */\n  const checked: boolean = await request(`Check the thing.`);\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n",
+    )]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+}
+
 #[test]
 fn missing_main_is_a_project_error() {
     let root = PathBuf::from("/proj");

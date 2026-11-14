@@ -933,3 +933,29 @@ fn the_first_call_of_a_prefixed_key_must_be_reached_from_the_entry() {
     assert_eq!(key, "main.a>other.ok");
     assert!(instruction.starts_with("Leaf ok."), "{instruction}");
 }
+
+#[test]
+fn self_await_without_a_question_fails_at_the_hop_limit() {
+    // Matches the checker warning for `a -> a` with no question before the await.
+    let project = project(&[
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n"),
+        ("a.rein", "/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n"),
+    ]);
+    let StepResponse::Error { message, .. } = step(&project, &req("main", &[])) else {
+        panic!("expected the hop limit error")
+    };
+    assert_eq!(message, "flow did not finish in 64 steps (reference cycle?)");
+}
+
+#[test]
+fn self_await_after_a_question_asks_at_each_level() {
+    // The question comes before the await, so the first step asks the agent.
+    let project = project(&[
+        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n"),
+        ("a.rein", "/** d */\nexport default async function a(\n  /** Keep going? */\n  more: boolean,\n) {\n  if (!more) {\n    return `stopped`;\n  }\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n"),
+    ]);
+    let StepResponse::Question { key, .. } = step(&project, &req("main", &[])) else {
+        panic!("expected a question")
+    };
+    assert_eq!(key, "a.more");
+}
