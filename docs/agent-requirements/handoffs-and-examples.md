@@ -17,7 +17,9 @@ The target can have its own tags on its entry function.
 ## Worked examples
 
 A program that commits and pushes. Any harness, the cheapest model, medium
-effort or more:
+effort or more. The program is in
+[examples/rein/commit-push](../../examples/rein/commit-push/README.md), with
+its fallback:
 
 ```ts
 /**
