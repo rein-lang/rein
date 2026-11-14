@@ -8,8 +8,8 @@ Rein resolves the field when a run starts. It needs two facts.
    the MCP `initialize` request (`client_info.name`, from `peer_info()` in
    rmcp). A client name is not always a harness id, so Rein keeps a small
    map from client names to ids. An unknown client name is `unknown`.
-   Known: Codex 0.154.0 sends `codex-mcp-client` (`codex`). The Claude Code
-   name is not checked yet. `rein run` and `rein step` take
+   Known: Codex 0.154.0 sends `codex-mcp-client` (`codex`). Claude Code
+   2.1.325 sends `claude-code`, the same as its harness id. `rein run` and `rein step` take
    `--harness <id>` or `REIN_HARNESS`. With no harness, Rein resolves nothing
    and sends the tiers as text.
 2. The model for each tier in that harness. The user tier map holds it, in
