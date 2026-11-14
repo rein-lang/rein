@@ -7,13 +7,13 @@ first, and sends a subagent when the effort is too low.
 It shows the proposed agent requirement checks: see
 `docs/agent-requirements.md` in the repository. The std function
 `requireEffort(min="medium")` is not built yet, so the program asks with
-`request` and compares in its own code, which works today.
+`request`, which works today. The `switch` is the handler code.
 
 ## Files
 
 | File | Function | Job |
 | --- | --- | --- |
-| `main.rein` | `main` | Asks for the effort. Too low or unknown: send a subagent. Else: commit and push. |
+| `main.rein` | `main` | Checks the effort. Ok: commit and push. Mismatch: send a subagent. Unknown: ask the user. |
 
 ## Run it
 
