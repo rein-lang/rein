@@ -20,6 +20,8 @@ so it does not go in `package.json` (see [Install a program](../install-programs
   agent does not match. See [The fallback](fallback.md).
 - A key that is not given means "any". A program with no `agent` field runs
   as today.
+- Rein today ignores the field: `rein check` and `rein step` pass with it.
+  So a program can add it now, before the feature ships.
 
 ## `harness`
 
