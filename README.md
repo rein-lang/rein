@@ -115,6 +115,7 @@ The docs site and the landing page live in [rein-lang/rein-lang.com](https://git
 | [rein-lang/vscode-rein](https://github.com/rein-lang/vscode-rein) | VS Code extension, in its own repo. A thin JS client for the language server, a Rein grammar, snippets, and tests. |
 | `examples` | [rein-lang/examples](https://github.com/rein-lang/examples) as a git submodule. Example programs; the tests use them as fixtures. |
 | [rein-lang/assets](https://github.com/rein-lang/assets) | Logo and brand files, in its own repo. |
+| [rein-lang/videos](https://github.com/rein-lang/videos) | Videos about Rein, such as the concept explainer, in their own repo. |
 | [rein-lang/rein-lang.com](https://github.com/rein-lang/rein-lang.com) | Language reference, decisions and the docs site, in its own repo. |
 
 ## Docs
