@@ -162,7 +162,7 @@ The future of `rein.json` is an open question.
 
 ## Open questions
 
-- The name of the future Rein file, and its fields. Rein-specific fields go there.
+- The name of the future Rein file, and its fields. Rein-specific fields go there. The proposed `agent` field is one: see [Agent requirements](agent-requirements.md).
 - The future of `rein.json`. Does the Rein file replace it?
 - Version selection at start. Is it `rein run pr-handling@1`, or the alias name `rein run pr-handling-v1`?
 - Lockfile sharing. Is there one `pnpm-lock.yaml` for all programs, or one per program?

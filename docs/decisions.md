@@ -161,6 +161,9 @@ Anyone can build and share a program, so two authors can pick the same name. The
 
 ## Planned (not built)
 
+- Agent requirements: a program states the harness, model tier and effort it
+  needs, and a fallback for a mismatch. See
+  [Agent requirements](agent-requirements.md).
 - Bundle tool: compiles a program into one self-contained `.rein` file, so an agent can load one file and run it as a full program.
 - Research an agent-agnostic tool that installs agent hooks. Why: each agent keeps its hook config in its own format and place, so Rein should not own a per-agent installer.
 
