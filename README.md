@@ -75,7 +75,7 @@ $ rein step --json --answer main.vip=no --answer main.category=how_to --answer f
 # exit 0
 ```
 
-A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein eval` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](docs/spec/stepping.md#11-stepping-agent-interface).
+A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein eval` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](https://github.com/rein-lang/rein-lang.com/blob/main/language/spec/stepping.md#11-stepping-agent-interface).
 
 ## Quickstart
 
@@ -85,11 +85,11 @@ cd examples
 rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin
 rein graph support-ticket               # its decision flow as Mermaid (--format dot|json, -o graph.svg)
-rein serve --mcp                        # the MCP host for agents (see docs/interface.md)
+rein serve --mcp                        # the MCP host for agents (see https://github.com/rein-lang/rein-lang.com/blob/main/language/interface.md)
 rein watch                              # a page of the agents that use rein now
 ```
 
-To install, update, or remove a program, see [Install a program](docs/install-programs.md).
+To install, update, or remove a program, see [Install a program](https://github.com/rein-lang/rein-lang.com/blob/main/language/install-programs.md).
 
 Check an example:
 
@@ -111,13 +111,13 @@ The docs site and the landing page live in [rein-lang/rein-lang.com](https://git
 | `crates/rein` | CLI and language server. |
 | [rein-lang/vscode-rein](https://github.com/rein-lang/vscode-rein) | VS Code extension, in its own repo. A thin JS client for the language server, a Rein grammar, snippets, and tests. |
 | `examples` | Example projects. |
-| `docs` | Language reference and decisions. |
+| [rein-lang/rein-lang.com](https://github.com/rein-lang/rein-lang.com) | Language reference, decisions and the docs site, in its own repo. |
 
 ## Docs
 
-- [Language reference](docs/spec.md): syntax, rules, evaluation, CLI.
-- [Decisions](docs/decisions.md): owner facts, PoC choices, open questions.
-- [Agent interface](docs/interface.md): programs as named apps, the MCP host, and `rein run`.
+- [Language reference](https://github.com/rein-lang/rein-lang.com/blob/main/language/spec.md): syntax, rules, evaluation, CLI.
+- [Decisions](https://github.com/rein-lang/rein-lang.com/blob/main/language/decisions.md): owner facts, PoC choices, open questions.
+- [Agent interface](https://github.com/rein-lang/rein-lang.com/blob/main/language/interface.md): programs as named apps, the MCP host, and `rein run`.
 
 Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook needs `linecheck` and runs it. It builds `rein` from the branch and runs `rein check` on every installed program (`scripts/check-installed-programs.sh`). A checker change that breaks an installed program blocks the push. The site's CLI and example pages are generated from this repo in rein-lang/rein-lang.com. Its CI fails when they drift from the pinned rein commit.
 
