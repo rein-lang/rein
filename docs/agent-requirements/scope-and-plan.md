@@ -1,4 +1,4 @@
-# Scope, build order and open questions
+# Scope, build order and decisions
 
 Status: step 1 is built. The rest is a proposal. [Agent requirements](../agent-requirements.md).
 
@@ -19,10 +19,10 @@ Each step is one small pull request.
    on it is not tested yet.
 3. The std templates `subagent`, `localSession` and `remoteSession`.
 
-## Open questions
+## Decided
 
-- The name. `agentSetup`, or another?
-- The tier names. `cheap`, `standard`, `frontier` avoid the word `medium`,
-  which effort uses.
-- Should `Setup` also carry the raw values, so a handler can name them in its
-  text?
+- The name is `agentSetup`.
+- The model tiers are `cheap`, `standard` and `frontier`. They avoid the word
+  `medium`, which effort uses.
+- `Setup` holds only `ok`, `mismatch` or `unknown` per row, not the agent's
+  raw values. Add raw-value fields when a handler needs them.

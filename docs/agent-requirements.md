@@ -65,4 +65,4 @@ Give it this task: run the commit-push program.`;
   targets, the `Setup` result, and the checker rules.
 - [Handlers](agent-requirements/handling.md): what a handler can do, the std
   templates for a bad setup, and hand-offs.
-- [Scope, build order and open questions](agent-requirements/scope-and-plan.md).
+- [Scope, build order and decisions](agent-requirements/scope-and-plan.md).
