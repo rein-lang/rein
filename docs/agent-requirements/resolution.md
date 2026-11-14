@@ -5,7 +5,9 @@ Status: proposal. Not built. Index: [Agent requirements](../agent-requirements.m
 Rein resolves the field when a run starts. It needs two facts.
 
 1. The harness of the caller. `rein serve --mcp` reads the client name from
-   the MCP `initialize` request. `rein run` and `rein step` take
+   the MCP `initialize` request (`client_info.name`, from `peer_info()` in
+   rmcp). A client name is not always a harness id, so Rein keeps a small
+   map from client names to ids. An unknown client name is `unknown`. `rein run` and `rein step` take
    `--harness <id>` or `REIN_HARNESS`. With no harness, Rein resolves nothing
    and sends the tiers as text.
 2. The model for each tier in that harness. The user tier map holds it, in

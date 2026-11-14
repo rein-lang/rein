@@ -30,8 +30,8 @@ so it does not go in `package.json` (see [Install a program](../install-programs
 - `required` is a list of harness ids. The program starts only in one of them.
 - `recommended` is one harness id. It is a hint for a person who picks the
   agent. Rein does not act on it.
-- Harness ids are the polyhook caller names, such as `claude-code`, `codex`,
-  `gemini-cli` and `opencode`.
+- Harness ids are the polyhook 0.2 caller names: `claude-code`, `codex`,
+  `gemini-cli`, `cursor`, `windsurf`, `cline`, `amp`, `hermes` and `pi`.
 
 ## `model`
 
