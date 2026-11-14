@@ -1,8 +1,8 @@
 # commit-push
 
-A program that commits the staged changes and pushes them. It runs on any
-model, but it needs medium effort or more. It asks the agent for its effort
-first, and sends a subagent when the effort is too low.
+A program that commits the staged changes and pushes them. It runs best on
+the cheapest model, and it needs medium effort or more. It asks the agent for
+its setup first, and sends a subagent when the effort is too low.
 
 It shows the proposed agent requirement checks: see
 `docs/agent-requirements.md` in the repository. The std function

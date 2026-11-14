@@ -50,7 +50,8 @@ export default async function main() {
 - `agentSetup(...)` is std. It asks the agent for its harness, model tier and
   effort in one request, compares each one, and returns a `Setup`.
 - `setup.effort` is `"ok"`, `"mismatch"` or `"unknown"`. The `switch` is the
-  developer's code. Rein has no `default`, so every case has a handler.
+  developer's code. A `switch` has no `default`, so it lists every case. An
+  `if` handles only the case it tests, and the code after it handles the rest.
 - Required or recommended is the handler's choice. Here a low effort sends a
   subagent, so effort is required. The model row has no handler, so the
   cheapest model is only a recommendation.

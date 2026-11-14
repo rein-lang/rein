@@ -19,7 +19,7 @@ compare. The handler only says what the agent does next.
 
 ```ts
   /** Your setup. */
-  const setup: Setup = await agentSetup(model="frontier+", effort="high+");
+  const setup: Setup = await agentSetup(model="frontier+");
 
   switch (setup.model) {
     case "ok":
@@ -43,13 +43,13 @@ compare. The handler only says what the agent does next.
   const setup: Setup = await agentSetup(model="cheap");
 
   if (setup.model === "mismatch") {
-    return @./commit(hint=`A cheaper model can run this program next time.`);
+    return `Commit and push. A cheaper model can run this next time.`;
   }
 
-  return @./commit(hint=`-`);
+  return `Commit and push.`;
 ```
 
-The author decides that `"unknown"` goes on with no hint.
+The developer decides that `"ok"` and `"unknown"` go on with no hint.
 
 ## Std templates for a handler
 

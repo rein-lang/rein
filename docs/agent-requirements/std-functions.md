@@ -7,6 +7,7 @@ Like `request`, it needs no import. Its name is open (see
 [open questions](scope-and-plan.md)).
 
 ```ts
+/** Your setup. */
 const setup: Setup = await agentSetup(harness="claude-code | codex",
   model="cheap", effort="medium+");
 ```
@@ -23,11 +24,11 @@ Each argument is optional. A missing argument means "any".
 | `effort` | an effort, such as `"high"` | exactly that effort |
 | `effort` | an effort with `+`, such as `"medium+"` | that effort or a higher one |
 
-| Kind | Values, lowest first |
+| Row | Values |
 | --- | --- |
-| Harness id | `claude-code`, `codex`, `gemini-cli`, `cursor`, `windsurf`, `cline`, `amp`, `hermes`, `pi`, `other` |
-| Model tier | `cheap`, `standard`, `frontier` |
-| Effort | `low`, `medium`, `high`, `xhigh`, `max` |
+| harness (no order) | `claude-code`, `codex`, `gemini-cli`, `cursor`, `windsurf`, `cline`, `amp`, `hermes`, `pi`, `other` |
+| model, lowest first | `cheap`, `standard`, `frontier` |
+| effort, lowest first | `low`, `medium`, `high`, `xhigh`, `max` |
 
 - The harness ids are the polyhook 0.2 caller names, plus `other`.
 - A tier, not a model id. A model id ages, and each harness has its own ids.
@@ -63,7 +64,7 @@ A call stops the run with one `request`, as in
  "response": {"name": "setup", "type": "struct", "fields": [
   {"name": "harness", "type": "union", "options": ["claude-code", "codex",
    "gemini-cli", "cursor", "windsurf", "cline", "amp", "hermes", "pi",
-   "other"]},
+   "other", "unknown"]},
   {"name": "model", "type": "union",
    "options": ["cheap", "standard", "frontier", "unknown"]},
   {"name": "effort", "type": "union",
