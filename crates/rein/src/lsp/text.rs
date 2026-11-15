@@ -74,9 +74,9 @@ pub fn line_before(text: &str, offset: usize) -> &str {
     &text[line_start..offset]
 }
 
-/// Characters a reference path can hold after `@`.
+/// Characters a reference path can hold after `@`. A program name, as in `@pr-handling/main`, may hold `-`.
 pub fn is_path_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '.'
+    c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '.' || c == '-'
 }
 
 /// A name a parameter or file can take: a letter or `_`, then letters, digits or `_`.

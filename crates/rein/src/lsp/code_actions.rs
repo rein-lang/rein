@@ -1,4 +1,5 @@
-//! Quick fixes for some diagnostics: add a missing doc comment, and name a positional argument.
+//! Quick fixes for some diagnostics: add a missing doc comment, name a positional argument, and move a function
+//! that one other function calls into that caller's folder.
 
 use std::collections::HashMap;
 
@@ -8,8 +9,10 @@ use lsp_types::{
 };
 use rein_core::ast::Function;
 use rein_core::lexer::{lex, Tok};
+use rein_core::project::Project;
 
 use super::occurrences::calls;
+use super::rename::move_function;
 use super::text::{offset, position};
 use super::workspace::{locate, State};
 
@@ -21,19 +24,36 @@ pub fn code_actions(state: &State, p: &CodeActionParams) -> Option<CodeActionRes
         .diagnostics
         .iter()
         .filter_map(|d| {
-            let (title, edit) = fix(&sf.text, &sf.function, d)?;
-            let changes = HashMap::from([(p.text_document.uri.clone(), vec![edit])]);
+            let (title, edit) = match move_fix(state, &project, &name, d) {
+                Some(moved) => moved,
+                None => {
+                    let (title, edit) = fix(&sf.text, &sf.function, d)?;
+                    let changes = HashMap::from([(p.text_document.uri.clone(), vec![edit])]);
+                    (title, WorkspaceEdit { changes: Some(changes), ..Default::default() })
+                }
+            };
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title,
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![d.clone()]),
-                edit: Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+                edit: Some(edit),
                 is_preferred: Some(true),
                 ..Default::default()
             }))
         })
         .collect();
     Some(actions)
+}
+
+/// Moves function `name` into the folder of its only caller, as the warning says: the file moves and every
+/// reference follows. None when the editor cannot rename files.
+fn move_fix(state: &State, project: &Project, name: &str, d: &Diagnostic) -> Option<(String, WorkspaceEdit)> {
+    if !d.message.contains("so the folders show the flow") {
+        return None;
+    }
+    let home = project.nest_target(name)?;
+    let edit = move_function(state, project, name, &home).ok()?;
+    Some((format!("Move to {home}.rein"), edit))
 }
 
 /// The fix for one diagnostic, found by its message: a title and one text edit.

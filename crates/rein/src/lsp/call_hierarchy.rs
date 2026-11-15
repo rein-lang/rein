@@ -9,7 +9,7 @@ use lsp_types::{
 use rein_core::diagnostic::Span;
 use rein_core::project::Project;
 
-use super::occurrences::{callers, header_span, refs, symbol_at, Symbol};
+use super::occurrences::{callers, header_span, refs, symbol_at, target, Symbol};
 use super::text::{offset, position, range};
 use super::workspace::{locate, uri_for, Docs, State};
 use crate::cli::description;
@@ -51,8 +51,8 @@ pub fn outgoing(state: &State, p: &CallHierarchyOutgoingCallsParams) -> Option<V
     let sf = project.get(&name)?;
     let mut by_target: BTreeMap<String, Vec<Span>> = BTreeMap::new();
     for (r, _) in refs(&sf.function) {
-        if let Ok(target) = project.resolve(&name, &r.value) {
-            by_target.entry(target).or_default().push(r.span);
+        if let Some(to) = target(&project, &name, &r.value) {
+            by_target.entry(to).or_default().push(r.span);
         }
     }
     by_target

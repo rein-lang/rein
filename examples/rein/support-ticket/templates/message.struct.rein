@@ -1,9 +1,0 @@
-/**
- * One sentence for the customer: what happened, then what comes next.
- */
-export default interface Message {
-  /** The first part of the sentence, such as the action taken. */
-  opening: string;
-  /** The next step the customer can expect. */
-  nextStep: string;
-}

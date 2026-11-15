@@ -3,11 +3,11 @@ set -e
 
 cd "$(git rev-parse --show-toplevel)"
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "node not found. Install Node.js from https://nodejs.org to run the example-pages check." >&2
+if ! command -v linecheck >/dev/null 2>&1; then
+  echo "linecheck not found. Install it with: cargo install linecheck --version 1.2.1" >&2
   exit 1
 fi
 
-node website/docs/scripts/generate-examples.mjs --check
-sh website/docs/scripts/check-cli-drift.sh
+linecheck
+
 sh scripts/check-installed-programs.sh

@@ -10,68 +10,60 @@ expression: text
     {
       "id": "f0",
       "kind": "function",
-      "function": "answer/faq",
-      "label": "answer/faq"
+      "function": "escalate",
+      "label": "escalate"
     },
     {
       "id": "f0_0",
+      "kind": "done",
+      "function": "escalate",
+      "label": "Assign the ticket to the tier 2 queue. Tell the customer a person\nwill reply within one business day. Do not promise a refund or a fix."
+    },
+    {
+      "id": "f1",
+      "kind": "function",
+      "function": "faq",
+      "label": "faq"
+    },
+    {
+      "id": "f1_0",
       "kind": "question",
-      "function": "answer/faq",
-      "label": "Did you find a help article that answers the question?\narticleFound: boolean",
-      "name": "articleFound",
+      "function": "faq",
+      "label": "Did you find a help article that answers the question?\narticle_found: boolean",
+      "name": "article_found",
       "type": "boolean"
     },
     {
-      "id": "f0_1",
+      "id": "f1_1",
       "kind": "request",
-      "function": "answer/faq",
+      "function": "faq",
       "label": "request: `Reply with the help article link and ask the customer if it solved the\nproblem.`"
     },
     {
-      "id": "f0_2",
+      "id": "f1_2",
       "kind": "question",
-      "function": "answer/faq",
+      "function": "faq",
       "label": "Did the customer confirm the article solved the problem?\nsolved: boolean",
       "name": "solved",
       "type": "boolean"
     },
     {
-      "id": "f0_3",
+      "id": "f1_3",
       "kind": "done",
-      "function": "answer/faq",
-      "label": "@../templates/close_ticket(opening=`Glad the help article solved the problem.`, nextStep=`Reply to this ticket if it comes back.`)"
-    },
-    {
-      "id": "f1",
-      "kind": "function",
-      "function": "billing/refund",
-      "label": "billing/refund"
-    },
-    {
-      "id": "f1_0",
-      "kind": "question",
-      "function": "billing/refund",
-      "label": "Is the requested refund above the agent's limit?\nrefundOverLimit: boolean",
-      "name": "refundOverLimit",
-      "type": "boolean"
-    },
-    {
-      "id": "f1_1",
-      "kind": "done",
-      "function": "billing/refund",
-      "label": "@../templates/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\nticket.`, nextStep=`Then tell the customer the refund takes 5 business days.`)"
+      "function": "faq",
+      "label": "@./faq/close_ticket(opening=`Glad the help article solved the problem.`, next_step=`Reply to this ticket if it comes back.`)"
     },
     {
       "id": "f2",
       "kind": "function",
-      "function": "escalate",
-      "label": "escalate"
+      "function": "faq/close_ticket",
+      "label": "faq/close_ticket(opening, next_step)"
     },
     {
       "id": "f2_0",
       "kind": "done",
-      "function": "escalate",
-      "label": "Assign the ticket to the tier 2 queue. Tell the customer a person\nwill reply within one business day. Do not promise a refund or a fix."
+      "function": "faq/close_ticket",
+      "label": "Tell the customer: ${opening} ${next_step} Then close the ticket as\nsolved."
     },
     {
       "id": "f3",
@@ -99,26 +91,34 @@ expression: text
     {
       "id": "f4",
       "kind": "function",
-      "function": "templates/close_ticket",
-      "label": "templates/close_ticket(opening, nextStep)"
+      "function": "refund",
+      "label": "refund"
     },
     {
       "id": "f4_0",
+      "kind": "question",
+      "function": "refund",
+      "label": "Is the requested refund above the agent's limit?\nrefund_over_limit: boolean",
+      "name": "refund_over_limit",
+      "type": "boolean"
+    },
+    {
+      "id": "f4_1",
       "kind": "done",
-      "function": "templates/close_ticket",
-      "label": "Tell the customer: ${opening} ${nextStep} Then close the ticket as\nsolved."
+      "function": "refund",
+      "label": "@./refund/tell_customer(opening=`Refund the amount the customer asked for and confirm it in the\nticket.`, next_step=`Then tell the customer the refund takes 5 business days.`)"
     },
     {
       "id": "f5",
       "kind": "function",
-      "function": "templates/tell_customer",
-      "label": "templates/tell_customer(opening, nextStep)"
+      "function": "refund/tell_customer",
+      "label": "refund/tell_customer(opening, next_step)"
     },
     {
       "id": "f5_0",
       "kind": "done",
-      "function": "templates/tell_customer",
-      "label": "${opening} ${nextStep}"
+      "function": "refund/tell_customer",
+      "label": "${opening} ${next_step}"
     }
   ],
   "edges": [
@@ -128,60 +128,43 @@ expression: text
       "kind": "flow"
     },
     {
-      "from": "f0_0",
-      "to": "f2",
-      "kind": "handoff",
-      "label": "no"
-    },
-    {
-      "from": "f0_0",
-      "to": "f0_1",
-      "kind": "flow",
-      "label": "yes"
-    },
-    {
-      "from": "f0_1",
-      "to": "f0_2",
-      "kind": "flow"
-    },
-    {
-      "from": "f0_2",
-      "to": "f0_3",
-      "kind": "flow",
-      "label": "yes"
-    },
-    {
-      "from": "f0_3",
-      "to": "f4",
-      "kind": "template"
-    },
-    {
-      "from": "f0_2",
-      "to": "f2",
-      "kind": "handoff",
-      "label": "no"
-    },
-    {
       "from": "f1",
       "to": "f1_0",
       "kind": "flow"
     },
     {
       "from": "f1_0",
-      "to": "f2",
+      "to": "f0",
       "kind": "handoff",
-      "label": "yes"
+      "label": "no"
     },
     {
       "from": "f1_0",
       "to": "f1_1",
       "kind": "flow",
-      "label": "no"
+      "label": "yes"
     },
     {
       "from": "f1_1",
-      "to": "f5",
+      "to": "f1_2",
+      "kind": "flow"
+    },
+    {
+      "from": "f1_2",
+      "to": "f1_3",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f1_3",
+      "to": "f2",
       "kind": "template"
+    },
+    {
+      "from": "f1_2",
+      "to": "f0",
+      "kind": "handoff",
+      "label": "no"
     },
     {
       "from": "f2",
@@ -195,7 +178,7 @@ expression: text
     },
     {
       "from": "f3_0",
-      "to": "f2",
+      "to": "f0",
       "kind": "handoff",
       "label": "yes"
     },
@@ -207,19 +190,19 @@ expression: text
     },
     {
       "from": "f3_1",
-      "to": "f1",
+      "to": "f4",
       "kind": "handoff",
       "label": "billing"
     },
     {
       "from": "f3_1",
-      "to": "f2",
+      "to": "f0",
       "kind": "handoff",
       "label": "account"
     },
     {
       "from": "f3_1",
-      "to": "f0",
+      "to": "f1",
       "kind": "handoff",
       "label": "how_to"
     },
@@ -227,6 +210,23 @@ expression: text
       "from": "f4",
       "to": "f4_0",
       "kind": "flow"
+    },
+    {
+      "from": "f4_0",
+      "to": "f0",
+      "kind": "handoff",
+      "label": "yes"
+    },
+    {
+      "from": "f4_0",
+      "to": "f4_1",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f4_1",
+      "to": "f5",
+      "kind": "template"
     },
     {
       "from": "f5",

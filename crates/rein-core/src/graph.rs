@@ -1,10 +1,14 @@
 //! The program graph behind `rein graph`: the decision flow of every function, or only the references.
 //! Node ids and order come from the function names and the source order, so the output is stable.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
-use crate::ast::{Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
+use crate::ast::{Awaited, Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
+use crate::eval;
 use crate::project::{Project, SourceFile};
+use crate::step::{inputs_of, owners, Answers, StepResponse, CALL};
 
 /// Version of the JSON schema. Bump it when a field changes meaning or goes away.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -17,6 +21,23 @@ pub struct Graph {
     pub entry: String,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// With a walk (`rein graph --answer ...`): the ids of the nodes taken, in walk order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+    /// With a walk: the node where it stopped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<Current>,
+}
+
+/// Where a walk stopped: the next question, a request, or the outcome.
+#[derive(Debug, Serialize)]
+pub struct Current {
+    pub node: String,
+    /// `question`, `request` or `done`, as the step response `kind`.
+    pub kind: &'static str,
+    /// The answer key a question or request asks for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -70,6 +91,8 @@ pub enum EdgeKind {
     Handoff,
     /// A template call: the text comes from that template.
     Template,
+    /// `await @function(...)`: the function runs, and its result is the answer. The flow goes on from the `await`.
+    Call,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,6 +106,9 @@ pub struct Edge {
     /// The named arguments of a hand-off, as written.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<Arg>,
+    /// With a walk: the walk took this edge.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub taken: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,13 +120,47 @@ pub struct Arg {
 /// The decision flow of every function in the project, `entry` flagged.
 pub fn flow(project: &Project, entry: &str) -> Graph {
     let mut b = Builder::new(project, entry, "flow");
-    for (i, (name, sf)) in project.functions().enumerate() {
-        let id = b.function_node(name, sf);
-        b.function = name;
-        b.fid = i;
-        b.step = 0;
-        b.block(&sf.function, &sf.function.body, (id, None));
+    b.flow();
+    b.graph
+}
+
+/// The decision flow with the walk of a step `response` marked: `path`, `taken` edges and `current`.
+/// The step engine walks the flow; each function on its trace is walked again here, against the same
+/// answers and with the same evaluator, to find the nodes. An error response gets the plain flow.
+pub fn walk<'a>(project: &'a Project, entry: &str, response: &'a StepResponse) -> Graph {
+    let (answers, trace, kind, key, asker) = match response {
+        StepResponse::Question { answers, trace, key, .. } => (answers, trace, "question", Some(key.clone()), None),
+        StepResponse::Request { answers, trace, key, function, .. } => {
+            (answers, trace, "request", Some(key.clone()), Some(function))
+        }
+        StepResponse::Done { answers, trace, .. } => (answers, trace, "done", None, None),
+        StepResponse::Error { .. } => return flow(project, entry),
+    };
+    let mut b = Builder::new(project, entry, "flow");
+    // The graph draws functions, not calls. A function that the walk visits in several calls is drawn with the
+    // answers of its first call, in the order `rein step` walks: `main.a>fn` before `main.b>fn`.
+    // The walk is stepped again to learn the call of each hop. When it does not give the response's trace, as for
+    // a logged run of a program that changed since, each function on the trace is read through its plain keys.
+    let plain = |o: &str| o.rsplit_once(CALL).map_or(o, |(_, f)| f).to_string();
+    let stepped = owners(project, entry, answers);
+    let walked = if stepped.iter().map(|o| plain(o)).eq(trace.iter().cloned()) { stepped } else { trace.clone() };
+    let mut first: HashMap<String, String> = HashMap::new();
+    for owner in walked {
+        first.entry(plain(&owner)).or_insert(owner);
     }
+    b.walk = Some((answers, first));
+    b.flow();
+    // A request is asked at the last node its function's walk reaches. After an `await` callee ends, that is the
+    // caller's `await` node, not the callee's outcome.
+    let asked = asker.and_then(|f| b.paths.get(f.as_str())).and_then(|p| p.last().cloned());
+    let mut path: Vec<String> = Vec::new();
+    for id in trace.iter().filter_map(|f| b.paths.remove(f)).flatten() {
+        if !path.contains(&id) {
+            path.push(id);
+        }
+    }
+    b.graph.current = asked.or_else(|| path.last().cloned()).map(|node| Current { node, kind, key });
+    b.graph.path = path;
     b.graph
 }
 
@@ -116,13 +176,13 @@ pub fn refs(project: &Project, entry: &str) -> Graph {
         let kind = NodeKind::Program;
         b.graph.nodes.push(Node { id: id.clone(), kind, function: label.clone(), label, entry: false, name: None, ty: None });
         let from = b.id_of(&from);
-        b.graph.edges.push(Edge { from, to: id, kind: EdgeKind::Handoff, label: None, args: Vec::new() });
+        b.graph.edges.push(Edge { from, to: id, kind: EdgeKind::Handoff, label: None, args: Vec::new(), taken: false });
     }
     for (from, to) in project.references() {
         let template = project.get(&to).is_some_and(|sf| sf.function.is_template());
         let kind = if template { EdgeKind::Template } else { EdgeKind::Handoff };
         let (from, to) = (b.id_of(&from), b.id_of(&to));
-        b.graph.edges.push(Edge { from, to, kind, label: None, args: Vec::new() });
+        b.graph.edges.push(Edge { from, to, kind, label: None, args: Vec::new(), taken: false });
     }
     b.graph
 }
@@ -136,12 +196,52 @@ struct Builder<'a> {
     function: &'a str,
     fid: usize,
     step: usize,
+    /// The answers of a walk, when there is one, and the owner of the first call of each function it walks.
+    walk: Option<(&'a Answers, HashMap<String, String>)>,
+    /// The answers of the function being drawn, for the walk.
+    vars: HashMap<String, String>,
+    /// The nodes the walk took, per function, in walk order.
+    paths: HashMap<String, Vec<String>>,
 }
 
 impl<'a> Builder<'a> {
     fn new(project: &'a Project, entry: &str, view: &'static str) -> Self {
-        let graph = Graph { version: SCHEMA_VERSION, view, entry: entry.to_string(), nodes: Vec::new(), edges: Vec::new() };
-        Builder { project, graph, function: "", fid: 0, step: 0 }
+        let graph = Graph {
+            version: SCHEMA_VERSION,
+            view,
+            entry: entry.to_string(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            path: Vec::new(),
+            current: None,
+        };
+        let (walk, vars, paths) = (None, HashMap::new(), HashMap::new());
+        Builder { project, graph, function: "", fid: 0, step: 0, walk, vars, paths }
+    }
+
+    /// Every function's flow. With a walk, the functions on its trace are walked too.
+    fn flow(&mut self) {
+        let project = self.project;
+        for (i, (name, sf)) in project.functions().enumerate() {
+            let id = self.function_node(name, sf);
+            self.function = name;
+            self.fid = i;
+            self.step = 0;
+            let walked = self.walk.as_ref().and_then(|(a, first)| first.get(name.as_str()).map(|o| (*a, o.clone())));
+            if let Some((answers, owner)) = &walked {
+                self.vars = eval::with_struct_fields(&sf.function, &inputs_of(owner, answers));
+                self.paths.entry(name.to_string()).or_default().push(id.clone());
+            }
+            self.block(&sf.function, &sf.function.body, (id, None), walked.is_some());
+        }
+    }
+
+    /// With `on`, the walk took the last edge: mark it and add its target to the path.
+    fn mark(&mut self, on: bool) {
+        let Some(e) = self.graph.edges.last_mut().filter(|_| on) else { return };
+        e.taken = true;
+        let to = e.to.clone();
+        self.paths.entry(self.function.to_string()).or_default().push(to);
     }
 
     // ponytail: linear scan per lookup; index the names if a project ever has thousands of files.
@@ -189,7 +289,7 @@ impl<'a> Builder<'a> {
     }
 
     fn edge(&mut self, from: From, to: &str, kind: EdgeKind, args: Vec<Arg>) {
-        self.graph.edges.push(Edge { from: from.0, to: to.to_string(), kind, label: from.1, args });
+        self.graph.edges.push(Edge { from: from.0, to: to.to_string(), kind, label: from.1, args, taken: false });
     }
 
     /// A new step node after `from`.
@@ -200,38 +300,50 @@ impl<'a> Builder<'a> {
     }
 
     /// The statements of one block, from `from`. An `if` splits the flow: its block on one answer, the rest
-    /// of this block on the other.
-    fn block(&mut self, f: &Function, stmts: &[Stmt], from: From) {
+    /// of this block on the other. `on`: the walk reaches this block. A missing answer stops it there.
+    fn block(&mut self, f: &Function, stmts: &[Stmt], from: From, on: bool) {
         let Some((first, rest)) = stmts.split_first() else { return };
         match first {
             Stmt::If { cond, then, .. } => {
                 let (node, taken, other) = self.decision(f, cond);
                 self.edge(from, &node, EdgeKind::Flow, Vec::new());
-                self.block(f, then, (node.clone(), Some(taken)));
-                self.block(f, rest, (node, Some(other)));
+                self.mark(on);
+                let holds = if on { eval::holds(f, cond, &self.vars) } else { None };
+                self.block(f, then, (node.clone(), Some(taken)), holds == Some(true));
+                self.block(f, rest, (node, Some(other)), holds == Some(false));
             }
             Stmt::Switch { subject, cases, .. } => {
                 let node = self.question(f, &subject.value);
                 self.edge(from, &node, EdgeKind::Flow, Vec::new());
+                self.mark(on);
+                let value = if on { self.vars.get(&subject.value).cloned() } else { None };
                 // ponytail: the checker makes every case return, so nothing after a switch is drawn.
                 for case in cases {
                     let label = case.values.iter().map(|v| v.value.as_str()).collect::<Vec<_>>().join(" / ");
-                    self.block(f, &case.body, (node.clone(), Some(label)));
+                    let hit = value.as_ref().is_some_and(|v| case.values.iter().any(|c| c.value == *v));
+                    self.block(f, &case.body, (node.clone(), Some(label)), hit);
                 }
             }
-            Stmt::Request { response, arg, .. } => {
-                let mut label = format!("request: {}", value_text(arg));
-                // A struct answer shows its name and struct, like `pick: Pick`.
-                if matches!(response.ty, InputType::Struct(_)) {
+            Stmt::Request { response, awaited, .. } => {
+                let mut label = match awaited {
+                    Awaited::Request { arg, .. } => format!("request: {}", value_text(arg)),
+                    Awaited::Call(target) => format!("await {}", return_text(target)),
+                };
+                // A struct answer, or the answer of a call, shows its name and type, like `pick: Pick`.
+                if matches!(response.ty, InputType::Struct(_)) || matches!(awaited, Awaited::Call(_)) {
                     label.push_str(&format!("\n{}: {}", response.name.value, response.ty.ts_type()));
                 }
                 let node = self.step_to(from, NodeKind::Request, label);
-                if let Value::Call(call) = arg {
-                    self.template_edges(&node, call);
+                self.mark(on);
+                match awaited {
+                    Awaited::Request { arg: Value::Call(call), .. } => self.template_edges(&node, call),
+                    Awaited::Call(target) => self.call_edge(&node, target),
+                    Awaited::Request { .. } => {}
                 }
-                self.block(f, rest, (node, None));
+                let answered = on && self.vars.contains_key(&response.name.value);
+                self.block(f, rest, (node, None), answered);
             }
-            Stmt::Return(r) => self.ret(&r.value, from),
+            Stmt::Return(r) => self.ret(&r.value, from, on),
         }
     }
 
@@ -258,7 +370,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn ret(&mut self, value: &ReturnValue, from: From) {
+    fn ret(&mut self, value: &ReturnValue, from: From, on: bool) {
         match value {
             ReturnValue::Text(text) => {
                 self.step_to(from, NodeKind::Done, text.value.clone());
@@ -288,12 +400,32 @@ impl<'a> Builder<'a> {
                     let delegate = matches!(&call.callee, Callee::Std(s) if s.value == "delegate");
                     let kind = if delegate { NodeKind::Delegate } else { NodeKind::Done };
                     let node = self.step_to(from, kind, call_text(call));
+                    self.mark(on);
                     self.template_edges(&node, call);
+                    return;
                 }
                 _ => {
                     self.step_to(from, NodeKind::Unresolved, call_text(call));
                 }
             },
+        }
+        self.mark(on);
+    }
+
+    /// A `call` edge from the node of an `await` to the function it runs, with the named arguments. A target
+    /// that does not resolve gets no edge; `rein check` reports it.
+    fn call_edge(&mut self, node: &str, target: &ReturnValue) {
+        let (key, args) = match target {
+            ReturnValue::Ref(r) => (r.value.as_str(), Vec::new()),
+            ReturnValue::Call(call) => {
+                let args = call.args.iter().map(|a| Arg { name: arg_name(a), value: value_text(&a.value) }).collect();
+                (call.callee.key(), args)
+            }
+            ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => return,
+        };
+        if let Ok(Binding::Function(path)) = self.project.binding_for(self.function, key) {
+            let to = self.target_node(&path);
+            self.edge((node.to_string(), None), &to, EdgeKind::Call, args);
         }
     }
 
@@ -337,6 +469,17 @@ fn value_text(v: &Value) -> String {
     }
 }
 
+/// The target of an `await` as written: `@./x`, or `@program` without its arguments (the edge carries them).
+fn return_text(v: &ReturnValue) -> String {
+    match v {
+        ReturnValue::Ref(r) => format!("@{}", r.value),
+        ReturnValue::Call(c) => format!("@{}", c.callee.key()),
+        ReturnValue::Text(t) => t.value.clone(),
+        ReturnValue::Template(lit) => template_text(&lit.pieces),
+        ReturnValue::Callback(name) => name.value.clone(),
+    }
+}
+
 fn call_text(c: &Call) -> String {
     let callee = match &c.callee {
         Callee::Std(s) => s.value.clone(),
@@ -365,6 +508,19 @@ fn edge_lines(e: &Edge) -> Vec<String> {
     e.label.iter().cloned().chain(e.args.iter().map(|a| format!("{}={}", a.name, a.value))).collect()
 }
 
+/// The walk class of a node: `current`, `taken` or `dimmed`. `None` without a walk.
+fn node_mark(g: &Graph, id: &str) -> Option<&'static str> {
+    if g.path.is_empty() {
+        None
+    } else if g.current.as_ref().is_some_and(|c| c.node == id) {
+        Some("current")
+    } else if g.path.iter().any(|p| p == id) {
+        Some("taken")
+    } else {
+        Some("dimmed")
+    }
+}
+
 /// Nodes in runs of one function each, in graph order.
 fn groups(g: &Graph) -> Vec<&[Node]> {
     g.nodes.chunk_by(|a, b| a.function == b.function).collect()
@@ -377,7 +533,9 @@ pub fn mermaid(g: &Graph) -> String {
             .replace('"', "#quot;")
             .replace('<', "#lt;")
             .replace('>', "#gt;")
-            .replace('`', "#96;")
+            // ponytail: Mermaid reads a backtick as a markdown code span, which fails inside a label with a line break.
+            // The grave accent looks like it and renders as text. Upgrade if Mermaid fixes its markdown.
+            .replace('`', "\u{2cb}")
             .replace('\n', "<br/>")
     };
     let shape = |n: &Node| {
@@ -404,7 +562,11 @@ pub fn mermaid(g: &Graph) -> String {
         out.push("    end".to_string());
     }
     for e in &g.edges {
-        let arrow = if e.kind == EdgeKind::Template { "-.->" } else { "-->" };
+        let arrow = match e.kind {
+            EdgeKind::Template => "-.->",
+            EdgeKind::Call => "==>",
+            EdgeKind::Flow | EdgeKind::Handoff => "-->",
+        };
         let lines = edge_lines(e);
         if lines.is_empty() {
             out.push(format!("    {} {arrow} {}", e.from, e.to));
@@ -417,6 +579,24 @@ pub fn mermaid(g: &Graph) -> String {
     }
     if g.nodes.iter().any(|n| n.kind == NodeKind::Unresolved) {
         out.push("    classDef unresolved stroke:#c00,color:#c00".to_string());
+    }
+    if !g.path.is_empty() {
+        out.push("    classDef taken fill:#dcfce7,stroke:#16a34a,stroke-width:2px".to_string());
+        out.push("    classDef current fill:#fde68a,stroke:#d97706,stroke-width:4px".to_string());
+        out.push("    classDef dimmed opacity:0.4".to_string());
+        for mark in ["taken", "current", "dimmed"] {
+            let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).filter(|id| node_mark(g, id) == Some(mark)).collect();
+            if !ids.is_empty() {
+                out.push(format!("    class {} {mark}", ids.join(",")));
+            }
+        }
+        let (taken, dimmed): (Vec<usize>, Vec<usize>) = (0..g.edges.len()).partition(|&i| g.edges[i].taken);
+        for (ids, style) in [(taken, "stroke:#16a34a,stroke-width:3px"), (dimmed, "opacity:0.3")] {
+            if !ids.is_empty() {
+                let ids: Vec<String> = ids.iter().map(usize::to_string).collect();
+                out.push(format!("    linkStyle {} {style}", ids.join(",")));
+            }
+        }
     }
     out.join("\n") + "\n"
 }
@@ -435,7 +615,13 @@ pub fn dot(g: &Graph) -> String {
             NodeKind::Program | NodeKind::Callback => "shape=box, style=dashed",
             NodeKind::Unresolved => "shape=octagon, color=red",
         };
-        format!("{} [label=\"{}\", {shape}];", n.id, esc(&n.label))
+        let walk = match node_mark(g, &n.id) {
+            Some("current") => ", color=\"#d97706\", penwidth=4",
+            Some("taken") => ", color=\"#16a34a\", penwidth=2",
+            Some(_) => ", color=gray70, fontcolor=gray60",
+            None => "",
+        };
+        format!("{} [label=\"{}\", {shape}{walk}];", n.id, esc(&n.label))
     };
     let mut out = vec!["digraph rein {".to_string(), "    node [fontname=\"Helvetica\"];".to_string()];
     for group in groups(g) {
@@ -456,6 +642,13 @@ pub fn dot(g: &Graph) -> String {
         }
         if e.kind == EdgeKind::Template {
             a.push("style=dashed".to_string());
+        }
+        if e.kind == EdgeKind::Call {
+            a.push("style=bold".to_string());
+        }
+        if !g.path.is_empty() {
+            let walk = if e.taken { "color=\"#16a34a\", penwidth=2" } else { "color=gray80, fontcolor=gray70" };
+            a.push(walk.to_string());
         }
         let a = if a.is_empty() { String::new() } else { format!(" [{}]", a.join(", ")) };
         out.push(format!("    {} -> {}{a};", e.from, e.to));

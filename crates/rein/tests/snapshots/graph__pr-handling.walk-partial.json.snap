@@ -1,0 +1,24 @@
+---
+source: crates/rein/tests/graph.rs
+expression: json
+---
+{
+  "current": {
+    "key": "merge.ci",
+    "kind": "question",
+    "node": "f3_0"
+  },
+  "path": [
+    "f2",
+    "f2_0",
+    "f2_2",
+    "f3",
+    "f3_0"
+  ],
+  "taken": [
+    "f2 -> f2_0",
+    "f2_0 -> f2_2",
+    "f2_2 -> f3",
+    "f3 -> f3_0"
+  ]
+}

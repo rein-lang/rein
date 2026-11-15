@@ -191,19 +191,24 @@ fn npm_programs(npm_dir: &Path, scope: Scope) -> Vec<Flow> {
         .collect()
 }
 
+/// Whether `dir` is a program root: a folder, not a hidden one, that holds a `rein.json` or a `main.rein`.
+pub fn is_program_dir(dir: &Path) -> bool {
+    let hidden = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.'));
+    !hidden && dir.is_dir() && (dir.join(MANIFEST).is_file() || dir.join(MAIN_FILE).is_file())
+}
+
 /// The program in `root`: a folder with a manifest or a `main.rein`. `None` for any other folder,
 /// and for a hidden one. `package.json` wins over `rein.json` for `name` and `description`.
 pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
     let folder = root.file_name()?.to_str()?.to_string();
-    let has_manifest = root.join(MANIFEST).is_file();
-    if folder.starts_with('.') || !root.is_dir() || !(has_manifest || root.join(MAIN_FILE).is_file()) {
+    if !is_program_dir(&root) {
         return None;
     }
     // ponytail: a manifest that does not parse falls back to the defaults; `rein check` could report it.
     let manifest: Manifest = read_json(&root.join(MANIFEST)).unwrap_or_default();
     let package: PackageJson = read_json(&root.join(PACKAGE)).unwrap_or_default();
     let entry_file = manifest.entry.unwrap_or_else(|| MAIN_FILE.to_string());
-    let entry = entry_file.strip_suffix(".rein").unwrap_or(&entry_file).to_string();
+    let entry = entry_name(&entry_file);
     let description = package
         .description
         .or(manifest.description)
@@ -211,6 +216,11 @@ pub fn program(root: PathBuf, scope: Scope) -> Option<Flow> {
     let name = package.name.or(manifest.name).unwrap_or(folder);
     let engines_rein = package.engines.and_then(|e| e.rein);
     Some(Flow { name, scope, root, description, entry, shadowed_by: None, version: package.version, engines_rein })
+}
+
+/// The function name of an entry file, such as `main` for `main.rein`. `rein.json` names the file.
+pub(crate) fn entry_name(file: &str) -> String {
+    file.strip_suffix(".rein").unwrap_or(file).to_string()
 }
 
 /// The JSON file at `path`, or None when it is missing or not valid.

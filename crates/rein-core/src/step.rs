@@ -8,12 +8,11 @@
 //! JSON-RPC server sends a [`StepRequest`] and returns a [`StepResponse`] unchanged. A loaded
 //! [`Project`] is `Send + Sync`, so a daemon can load it once and step many requests.
 
-use std::collections::{BTreeMap, HashMap};
-use std::ops::AddAssign;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{Function, Input, InputType, Struct};
+use crate::ast::{walk_stmts, Awaited, Binding, Function, Input, InputType, ReturnValue, Stmt, Struct};
 use crate::diagnostic::{line_col, Severity};
 use crate::eval::{self, Outcome};
 use crate::project::{Project, ENTRY};
@@ -157,6 +156,24 @@ pub struct StepDiagnostic {
 
 /// Steps the flow from `req.entry` as far as the answers allow.
 pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
+    run(project, req, &mut Vec::new())
+}
+
+/// The owner of each function a step walks, in walk order, as [`scoped`] gives it: `main`, then `main.b>fn`.
+/// `rein graph` reads a function's answers through the first of its owners. A `string` input of `entry` is walked
+/// as `<name>`: no condition reads an input, so the walk is the same as with the real inputs.
+pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<String> {
+    let inputs = project.get(entry).map_or_else(BTreeMap::new, |sf| {
+        sf.function.text_inputs().map(|i| (i.name.value.clone(), format!("<{}>", i.name.value))).collect()
+    });
+    let req = StepRequest { version: PROTOCOL_VERSION, entry: entry.to_string(), answers: answers.clone(), flow: None, inputs };
+    let mut owners = Vec::new();
+    run(project, &req, &mut owners);
+    owners
+}
+
+/// [`step`], pushing the owner of each function it walks to `owners`.
+fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepResponse {
     let answers = req.answers.clone();
     if req.version != PROTOCOL_VERSION {
         return invalid_request(format!(
@@ -172,7 +189,7 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
         );
         return failure(message, None, errors, answers, Vec::new());
     }
-    if let Err((key, message)) = check_answers(project, &req.answers) {
+    if let Err((key, message)) = check_answers(project, &req.entry, &req.answers) {
         return failure(message, Some(key), Vec::new(), answers, Vec::new());
     }
     let Some(entry) = project.get(&req.entry) else {
@@ -191,21 +208,24 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     if let Err(message) = check_entry_inputs(&entry.function, &req.inputs) {
         return failure(message, None, Vec::new(), answers, Vec::new());
     }
+
+    let mut trace = Vec::new();
+    let mut current = req.entry.clone();
     // The `string` values of the function being run, and the qualified path of each callback. The entry gets them
     // from the request; a hand-off passes them on, bound to the target's parameters by name.
     let mut strings = match entry_values(project, &entry.function, &req.inputs) {
         Ok(values) => values,
         Err(message) => return failure(message, None, Vec::new(), answers, Vec::new()),
     };
-
-    let mut trace = Vec::new();
-    let mut current = req.entry.clone();
-    // How often each function was entered in this call. A later visit has its own answers.
+    // How often each function was entered in each call scope in this call. A later visit has its own answers.
     let mut visits: HashMap<String, usize> = HashMap::new();
+    // The key prefix of the call being walked: empty at the top, else the caller's answer key, such as `main.b`.
+    let mut scope = String::new();
+    // The callers that wait in an `await`, innermost last: the function, its owner key, and the answer the callee's
+    // text fills.
+    let mut callers: Vec<(String, String, String)> = Vec::new();
     for _ in 0..HOP_LIMIT {
         trace.push(current.clone());
-        let visit = visits.entry(current.clone()).or_insert(0);
-        let owner = visit_key(&current, visit);
         let Some(sf) = project.get(&current) else {
             return failure(
                 format!("unknown function `{current}`"),
@@ -215,6 +235,10 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                 trace,
             );
         };
+        // The owner of this visit's answer keys: `fn`, `fn#2` on a later visit, or `main.b>fn` inside the call `main.b`.
+        let visit = visits.entry(scoped(&scope, &current)).or_insert(0);
+        let owner = scoped(&scope, &visit_key(&current, visit));
+        owners.push(owner.clone());
         let mut inputs = inputs_of(&owner, &req.answers);
         inputs.extend(strings.iter().map(|(k, v)| (k.clone(), v.clone())));
         let outcome = match eval::run(&sf.function, &inputs, &project.bindings(&current)) {
@@ -223,27 +247,28 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
         };
         match outcome {
             // Auto-follow: the agent does not need to see a hop that asks nothing.
-            // The target is already qualified: the bindings and a callback value give full paths.
-            Outcome::Ref { target, args } => {
-                let Some(next) = project.get(&target) else {
-                    return failure(format!("unknown function `{target}`"), None, Vec::new(), answers, trace);
-                };
-                let mut given: BTreeMap<String, String> = args.into_iter().collect();
-                let mut bound = BTreeMap::new();
-                for input in next.function.passed_inputs() {
-                    let name = &input.name.value;
-                    let Some(value) = given.remove(name) else {
-                        return failure(format!("`{target}` is missing argument `{name}`"), None, Vec::new(), answers, trace);
-                    };
-                    bound.insert(name.clone(), value);
+            Outcome::Ref { target, args } => match bind(project, &current, &target, args) {
+                Ok((target, bound)) => (current, strings) = (target, bound),
+                Err(message) => return failure(message, None, Vec::new(), answers, trace),
+            },
+            // A call with return: walk the callee as a hand-off, and remember who waits for its text.
+            Outcome::Call { target, args, response } => match bind(project, &current, &target, args) {
+                Ok((target, bound)) => {
+                    // Each call gets its own keys, so a second call of `fn`, or a recursive call, asks again.
+                    let caller = std::mem::replace(&mut current, target);
+                    scope = format!("{owner}.{response}");
+                    callers.push((caller, owner, response));
+                    strings = bound;
                 }
-                if let Some(extra) = given.keys().next() {
-                    return failure(format!("`{target}` has no parameter `{extra}`"), None, Vec::new(), answers, trace);
+                Err(message) => return failure(message, None, Vec::new(), answers, trace),
+            },
+            Outcome::Text(text) => {
+                // The callee of an `await` ended. Its text is a request whose answer is the caller's `const`.
+                if let Some((caller, caller_owner, response)) = callers.pop() {
+                    let instruction = format!("{text}\n\nThen answer `{caller_owner}.{response}` with the result.");
+                    return request(project, &caller, &caller_owner, &response, instruction, answers, trace);
                 }
-                strings = bound;
-                current = target;
-            }
-            Outcome::Text(instruction) => {
+                let instruction = text;
                 return StepResponse::Done {
                     version: PROTOCOL_VERSION,
                     instruction,
@@ -279,41 +304,75 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
                     trace,
                 };
             }
-            Outcome::Request {
-                instruction,
-                response,
-            } => {
-                let Some(input) = sf.function.response(&response) else {
-                    return failure(
-                        format!("unknown answer `{response}`"),
-                        None,
-                        Vec::new(),
-                        answers,
-                        trace,
-                    );
-                };
-                let (r#type, options) = type_of(input);
-                let spec = ResponseSpec {
-                    name: response.clone(),
-                    r#type,
-                    options,
-                    description: input.description.value.clone(),
-                    fields: sf.function.answer_struct(&response).and_then(|s| s.as_ref().ok()).map(field_specs),
-                };
-                return StepResponse::Request {
-                    version: PROTOCOL_VERSION,
-                    key: format!("{owner}.{response}"),
-                    function: current.clone(),
-                    instruction,
-                    response: spec,
-                    answers,
-                    trace,
-                };
+            Outcome::Request { instruction, response } => {
+                return request(project, &current, &owner, &response, instruction, answers, trace);
             }
         }
     }
     let message = format!("flow did not finish in {HOP_LIMIT} steps (reference cycle?)");
     failure(message, None, Vec::new(), answers, trace)
+}
+
+/// The function a hand-off or a call from `from` goes to, and its `string` values, bound by name from `args`.
+fn bind(
+    project: &Project,
+    from: &str,
+    target: &str,
+    args: Vec<(String, String)>,
+) -> Result<(String, BTreeMap<String, String>), String> {
+    let target = project.qualify(from, target);
+    let Some(next) = project.get(&target) else {
+        return Err(format!("unknown function `{target}`"));
+    };
+    let mut given: BTreeMap<String, String> = args.into_iter().collect();
+    let mut bound = BTreeMap::new();
+    for input in next.function.passed_inputs() {
+        let name = &input.name.value;
+        let Some(value) = given.remove(name) else {
+            return Err(format!("`{target}` is missing argument `{name}`"));
+        };
+        bound.insert(name.clone(), value);
+    }
+    if let Some(extra) = given.keys().next() {
+        return Err(format!("`{target}` has no parameter `{extra}`"));
+    }
+    Ok((target, bound))
+}
+
+/// A request for the `const` answer `response` of `function`, after the agent does `instruction`. `owner` is the
+/// function with its call scope, as [`scoped`] gives it; the key is `<owner>.<response>`.
+fn request(
+    project: &Project,
+    function: &str,
+    owner: &str,
+    response: &str,
+    instruction: String,
+    answers: Answers,
+    trace: Vec<String>,
+) -> StepResponse {
+    let Some(f) = project.get(function).map(|sf| &sf.function) else {
+        return failure(format!("unknown function `{function}`"), None, Vec::new(), answers, trace);
+    };
+    let Some(input) = f.response(response) else {
+        return failure(format!("unknown answer `{response}`"), None, Vec::new(), answers, trace);
+    };
+    let (r#type, options) = type_of(input);
+    let spec = ResponseSpec {
+        name: response.to_string(),
+        r#type,
+        options,
+        description: input.description.value.clone(),
+        fields: f.answer_struct(response).and_then(|s| s.as_ref().ok()).map(field_specs),
+    };
+    StepResponse::Request {
+        version: PROTOCOL_VERSION,
+        key: format!("{owner}.{response}"),
+        function: function.to_string(),
+        instruction,
+        response: spec,
+        answers,
+        trace,
+    }
 }
 
 fn failure(
@@ -334,7 +393,7 @@ fn failure(
 }
 
 /// The wire type name and the options of an input.
-fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
+pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
     let options = input
         .ty
         .options()
@@ -343,8 +402,8 @@ fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
-        InputType::Struct(_) => "struct",
         InputType::Callback => "callback",
+        InputType::Struct(_) => "struct",
     };
     (name.to_string(), options)
 }
@@ -392,9 +451,9 @@ fn error_diagnostics(project: &Project, entry: &str) -> Vec<StepDiagnostic> {
 }
 
 /// The `(key, message)` of the first answer that names no parameter or answer, or has a bad value.
-fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, String)> {
+fn check_answers(project: &Project, entry: &str, answers: &Answers) -> Result<(), (String, String)> {
     for (key, raw) in answers {
-        let Some((function, input)) = declared(project, key) else {
+        let Some((function, input)) = declared(project, entry, key) else {
             return Err((key.clone(), format!("unknown key `{key}`")));
         };
         if input.ty == InputType::Text {
@@ -411,24 +470,133 @@ fn check_answers(project: &Project, answers: &Answers) -> Result<(), (String, St
     Ok(())
 }
 
-/// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key.
-fn declared<'a>(project: &'a Project, key: &str) -> Option<(&'a Function, &'a Input)> {
+/// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key. A key
+/// inside a call, such as `main.b>fn.ok`, names `fn.ok`, and each part before a `>` must name a `const` answer.
+fn declared<'a>(project: &'a Project, entry: &str, key: &str) -> Option<(&'a Function, &'a Input)> {
     let (owner, name) = key.rsplit_once('.')?;
-    // A key of a later visit, such as `main#2.pick`, names the same function.
-    let function = owner.rsplit_once('#').filter(|(_, n)| n.parse::<usize>().is_ok()).map_or(owner, |(f, _)| f);
-    let f = &project.get(function)?.function;
+    let f = &project.get(owner_function(project, entry, owner)?)?.function;
     f.input(name).or_else(|| f.response(name)).map(|i| (f, i))
 }
 
-/// The owner part of an answer key, for one more visit of `function` in this call: the path on the first visit,
-/// then `path#2`, `path#3`, and so on. So a cycle, such as a callback back into its caller, asks its questions
-/// again instead of reusing the answers of the first visit.
+/// The function that `owner` names, such as `fn` for `main.a>fn`, when each call in it is one a walk from `entry`
+/// can make: the first part is a function that `entry` reaches through hand-offs, outside any call, and each part
+/// before a `>` is `<function>.<const>`, an `await` whose target reaches the next part's function through
+/// hand-offs. `None` for any other owner, so its keys are unknown. An owner with no `>` is any function, as before.
+fn owner_function<'a>(project: &Project, entry: &str, owner: &'a str) -> Option<&'a str> {
+    let mut reach: Option<BTreeSet<String>> = owner.contains(CALL).then(|| handoff_reach(project, entry.to_string()));
+    let mut parts = owner.split(CALL).peekable();
+    while let Some(part) = parts.next() {
+        let last = parts.peek().is_none();
+        let function = bare_function(if last { part } else { part.rsplit_once('.')?.0 });
+        if reach.as_ref().is_some_and(|r| !r.contains(function)) {
+            return None;
+        }
+        if last {
+            return Some(function);
+        }
+        reach = Some(call_reach(project, function, part.rsplit_once('.')?.1)?);
+    }
+    None
+}
+
+/// The functions a walk can be in during the call `<function>.<name>`: the target of that `await`, and each
+/// function the target reaches through hand-offs. `None` when `name` is not an `await` of a function.
+fn call_reach(project: &Project, function: &str, name: &str) -> Option<BTreeSet<String>> {
+    let f = &project.get(function)?.function;
+    let mut target = None;
+    walk_stmts(&f.body, &mut |s| {
+        if let Stmt::Request { response, awaited: Awaited::Call(value), .. } = s {
+            if response.name.value == name {
+                target = target.or(ref_key(value));
+            }
+        }
+    });
+    Some(handoff_reach(project, follow(project, function, target?)?))
+}
+
+/// `start`, and each function it reaches through hand-offs (returns, not awaits).
+fn handoff_reach(project: &Project, start: String) -> BTreeSet<String> {
+    let mut queue = vec![start];
+    let mut seen = BTreeSet::new();
+    while let Some(g) = queue.pop() {
+        if !seen.insert(g.clone()) {
+            continue;
+        }
+        let Some(sf) = project.get(&g) else { continue };
+        walk_stmts(&sf.function.body, &mut |s| {
+            if let Stmt::Return(r) = s {
+                if let Some(next) = ref_key(&r.value).and_then(|k| follow(project, &g, k)) {
+                    queue.push(next);
+                }
+            }
+        });
+    }
+    seen
+}
+
+/// The reference key a returned or awaited value names, such as `./x` or `program/fn`. `None` for text.
+fn ref_key(v: &ReturnValue) -> Option<&str> {
+    match v {
+        ReturnValue::Ref(r) => Some(&r.value),
+        ReturnValue::Call(c) => Some(c.callee.key()),
+        ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => None,
+    }
+}
+
+/// The function that the reference `key`, written in `from`, runs, named as the walk names it. `None` for a
+/// template or a reference that does not resolve.
+fn follow(project: &Project, from: &str, key: &str) -> Option<String> {
+    match project.bindings(from).get(key)? {
+        Binding::Function(path) => Some(project.qualify(from, path)),
+        _ => None,
+    }
+}
+
+/// Separates the caller's answer key from the callee in the key of a call with return: `main.b>fn.ok`.
+pub const CALL: char = '>';
+
+/// `function` inside the call `scope`: `main.b>fn`, or `fn` at the top, where `scope` is empty.
+fn scoped(scope: &str, function: &str) -> String {
+    if scope.is_empty() {
+        function.to_string()
+    } else {
+        format!("{scope}{CALL}{function}")
+    }
+}
+
+/// The function and the name an answer key names, without its call scope: `main.b>fn.ok` gives `("fn", "ok")`.
+pub fn key_parts(key: &str) -> Option<(&str, &str)> {
+    let (owner, name) = key.rsplit_once('.')?;
+    Some((bare_function(owner.rsplit_once(CALL).map_or(owner, |(_, f)| f)), name))
+}
+
+/// The function part of an owner: `fn` for `fn#2`, the visit that a later entry of `fn` in one call gets.
+fn bare_function(owner: &str) -> &str {
+    owner.rsplit_once('#').filter(|(_, n)| n.parse::<usize>().is_ok()).map_or(owner, |(f, _)| f)
+}
+
+/// The owner part of an answer key for one visit of `function` in a call: `fn` on the first visit, then `fn#2`,
+/// `fn#3`, and so on. So a cycle, such as a callback back into its caller, asks its questions again.
 fn visit_key(function: &str, count: &mut usize) -> String {
-    count.add_assign(1);
-    match count {
+    *count += 1;
+    match *count {
         1 => function.to_string(),
         n => format!("{function}#{n}"),
     }
+}
+
+/// The entry callbacks, each replaced by the qualified path of the function it names.
+fn entry_values(project: &Project, entry: &Function, given: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>, String> {
+    let mut values = given.clone();
+    for input in entry.inputs.iter().filter(|i| i.ty == InputType::Callback) {
+        let name = input.name.value.clone();
+        let raw = values.get(&name).cloned().unwrap_or_default();
+        match project.callback_target(&raw) {
+            Ok(target) => values.insert(name, target),
+            Err(m) => return Err(format!("input `{name}` is not valid; {m}")),
+        };
+    }
+    Ok(values)
 }
 
 /// The error for a `string` input that was not given.
@@ -447,22 +615,8 @@ fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>) -> Res
     }
 }
 
-/// The entry inputs, with each callback value turned into the qualified path of its function.
-fn entry_values(project: &Project, entry: &Function, given: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>, String> {
-    let mut values = given.clone();
-    for input in entry.inputs.iter().filter(|i| i.ty == InputType::Callback) {
-        let name = input.name.value.clone();
-        let raw = values.get(&name).cloned().unwrap_or_default();
-        match project.callback_target(&raw) {
-            Ok(target) => values.insert(name, target),
-            Err(m) => return Err(format!("input `{name}` is not valid; {m}")),
-        };
-    }
-    Ok(values)
-}
-
 /// The answers that belong to `function`, keyed by the bare name the evaluator uses.
-fn inputs_of(function: &str, answers: &Answers) -> HashMap<String, String> {
+pub(crate) fn inputs_of(function: &str, answers: &Answers) -> HashMap<String, String> {
     answers
         .iter()
         .filter_map(|(key, raw)| {

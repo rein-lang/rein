@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::ast::{
-    Binding, Callee, Call, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
+    Awaited, Binding, Callee, Call, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
     StructParam, StructRef, TemplateLit, Value, STRUCT_SUFFIX,
 };
 use crate::diagnostic::{line_col, Diagnostic, Span};
@@ -41,6 +41,7 @@ pub fn check_function<'a>(f: &'a Function, name: &str, resolve: &'a dyn Fn(&str)
         pending: Vec::new(),
         names: BTreeSet::new(),
     };
+    c.out.extend(crate::naming::camel_case_names(f));
     if let Some(stem) = name.strip_suffix(STRUCT_SUFFIX) {
         c.struct_file(stem);
         return c.out;
@@ -97,8 +98,9 @@ fn quoted_text(stmts: &[Stmt]) -> Vec<Diagnostic> {
             ReturnValue::Call(call) => call_quoted_text(call, &mut out),
             ReturnValue::Ref(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => {}
         },
-        Stmt::Request { arg, .. } => value_quoted_text(arg, &mut out),
-        Stmt::If { .. } | Stmt::Switch { .. } => {}
+        Stmt::Request { awaited: Awaited::Request { arg, .. }, .. } => value_quoted_text(arg, &mut out),
+        Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)), .. } => call_quoted_text(call, &mut out),
+        Stmt::Request { .. } | Stmt::If { .. } | Stmt::Switch { .. } => {}
     });
     out
 }
@@ -144,6 +146,51 @@ pub fn check_line_length(text: &str, max: u64) -> Vec<Diagnostic> {
         start += line.len() + 1;
     }
     diags
+}
+
+/// Checks the blank lines around each `if` of a function. The line above an `if` is empty, unless the `if` is the
+/// first statement of its block. The line below an `if` block's closing `}` is empty, unless the next non-empty line
+/// is a `}` or the file ends. These are warnings, so a program with them still runs. `text` is the file's source.
+pub fn check_if_blank_lines(f: &Function, text: &str) -> Vec<Diagnostic> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out = Vec::new();
+    if_blank_lines_in(&f.body, &lines, text, &mut out);
+    out
+}
+
+fn if_blank_lines_in(stmts: &[Stmt], lines: &[&str], text: &str, out: &mut Vec<Diagnostic>) {
+    for (i, stmt) in stmts.iter().enumerate() {
+        match stmt {
+            Stmt::If { then, span, .. } => {
+                let (first, _) = line_col(text, span.start);
+                let (close, _) = line_col(text, span.end);
+                let blank_above = first == 0 || lines[first - 1].trim().is_empty();
+                if i > 0 && !blank_above {
+                    out.push(Diagnostic::warning(Span::new(span.start, span.start + "if".len()), "add an empty line before `if`"));
+                }
+                if !blank_below_block(lines, close) {
+                    out.push(Diagnostic::warning(Span::new(span.end - 1, span.end), "add an empty line after the `if` block"));
+                }
+                if_blank_lines_in(then, lines, text, out);
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    if_blank_lines_in(&case.body, lines, text, out);
+                }
+            }
+            Stmt::Request { .. } | Stmt::Return(_) => {}
+        }
+    }
+}
+
+/// True when the line after the closing `}` at line `close` is empty, or the next non-empty line is a `}`, or no
+/// non-empty line follows.
+fn blank_below_block(lines: &[&str], close: usize) -> bool {
+    let rest = &lines[close + 1..];
+    match rest.iter().find(|l| !l.trim().is_empty()) {
+        None => true,
+        Some(next) => rest[0].trim().is_empty() || next.trim_start().starts_with('}'),
+    }
 }
 
 /// Checks the length of one function file. The function's lines run from its `export default` line to its
@@ -579,7 +626,7 @@ impl<'a> Checker<'a> {
             Stmt::Switch { subject, cases, .. } => {
                 self.switch(subject, cases);
             }
-            Stmt::Request { response, arg, .. } => {
+            Stmt::Request { response, awaited, .. } => {
                 let name = response.name.value.as_str();
                 if !self.f.is_async {
                     self.error(s.span(), "`await` needs `export default async function`");
@@ -609,7 +656,10 @@ impl<'a> Checker<'a> {
                     self.error(response.name.span, format!("duplicate name `{name}`"));
                 }
                 self.names.insert(name.to_string());
-                self.value(arg);
+                match awaited {
+                    Awaited::Request { arg, .. } => self.value(arg),
+                    Awaited::Call(target) => self.awaited_call(target),
+                }
                 self.answers.push((**response).clone());
             }
             Stmt::Return(r) => match &r.value {
@@ -629,6 +679,25 @@ impl<'a> Checker<'a> {
                     }
                 }
             },
+        }
+    }
+
+    /// `await @ref` or `await @ref(args)`: a call with return. The target is a function, with the argument rules
+    /// of a hand-off. A template gives text, not a run, so it cannot be awaited.
+    fn awaited_call(&mut self, target: &ReturnValue) {
+        let (key, span) = match target {
+            ReturnValue::Ref(r) => (r.value.as_str(), r.span),
+            ReturnValue::Call(call) => (call.callee.key(), call.callee.span()),
+            ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => return,
+        };
+        if let Ok(Kind::Template { .. }) = (self.resolve)(key) {
+            self.error(span, format!("`@{key}` is a template; only a function can be awaited"));
+            return;
+        }
+        match target {
+            ReturnValue::Ref(r) => self.returned_ref(r),
+            ReturnValue::Call(call) => self.call(call, true),
+            ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => {}
         }
     }
 

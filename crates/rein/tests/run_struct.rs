@@ -13,6 +13,7 @@ fn run_lists_struct_fields_rejects_a_bad_object_and_takes_a_good_one() {
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("main.rein"), PICKER).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(["run", "--root", dir.to_str().unwrap()])
         .env("REIN_HOME", dir.join("home"))
         .env("REIN_SYSTEM_DIRS", dir.join("none"))

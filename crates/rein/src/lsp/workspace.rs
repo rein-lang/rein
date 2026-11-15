@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use lsp_types::{InitializeParams, Location, ResourceOperationKind, Url};
 use rein_core::diagnostic::Span;
-use rein_core::project::Project;
+use rein_core::flows::is_program_dir;
+use rein_core::project::{skipped_folder, Project};
 
 use super::text::range;
 
@@ -47,18 +48,26 @@ impl State {
 }
 
 /// Project under `root`: files on disk, with open buffers replacing their disk copies.
-/// A buffer in a nested project is left out, as its file is left out of this one.
+/// A buffer the loader would skip, such as one in a nested project, is left out, as its file is left out of this one.
 pub fn build_project(docs: &Docs, root: &Path) -> Project {
     let mut by_path: BTreeMap<PathBuf, String> = BTreeMap::new();
     if let Ok(disk) = Project::load(root) {
         by_path.extend(disk.files.into_values().map(|sf| (sf.path, sf.text)));
     }
     by_path.extend(docs.iter().filter_map(|(uri, text)| {
-        let path = doc_path(uri)?;
-        (Project::find_root(&path) == root).then(|| (path, text.clone()))
+        let path = Project::loaded_path(root, &doc_path(uri)?)?;
+        Some((path, text.clone()))
     }));
     let mut project = Project::from_sources(root.to_path_buf(), by_path.into_iter().collect());
-    project.link_programs(&|name| crate::scopes::find(name).map(|f| (f.root, f.entry)));
+    // The scopes are searched only when a `@program` reference names a program. Scopes resolve from the project root,
+    // as `rein check` run there does. The server's own directory is unrelated.
+    if !project.program_refs().is_empty() {
+        let visible = crate::scopes::discover_from(root);
+        // Open buffers of other programs replace their files on disk, as they do in this project.
+        let open: Vec<(PathBuf, String)> =
+            docs.iter().filter_map(|(uri, text)| Some((doc_path(uri)?, text.clone()))).collect();
+        project.link_programs_with(&move |name| crate::scopes::find_in(&visible, name), &open);
+    }
     project
 }
 
@@ -83,6 +92,22 @@ pub fn uri_for(docs: &Docs, path: &Path) -> Option<Url> {
         .find(|u| doc_path(u).as_deref() == Some(path))
         .cloned()
         .or_else(|| Url::from_file_path(path).ok())
+}
+
+/// The outermost folder between `root` and `path` that the loader skips by its name (a hidden folder, `target/` or
+/// `node_modules/`), as a path under `root`. A nested flow is not named: it is a project of its own. A program inside
+/// that folder, such as an installed `node_modules/<name>` with a `rein.json`, is a program of its own too, so `None`.
+pub fn skipped_folder_of(root: &Path, path: &Path) -> Option<PathBuf> {
+    let rel = path.strip_prefix(root).ok()?;
+    let folder = rel
+        .ancestors()
+        .skip(1)
+        .take_while(|d| !d.as_os_str().is_empty())
+        .filter(|d| d.file_name().and_then(|n| n.to_str()).is_some_and(skipped_folder))
+        .last()?;
+    let skipped = root.join(folder);
+    let in_program = path.ancestors().skip(1).take_while(|d| *d != skipped).any(is_program_dir);
+    (!in_program).then(|| folder.to_path_buf())
 }
 
 pub fn doc_path(uri: &Url) -> Option<PathBuf> {

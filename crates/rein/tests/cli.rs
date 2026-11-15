@@ -14,6 +14,7 @@ fn repo() -> PathBuf {
 
 fn rein(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(args)
         .current_dir(repo())
         .output()
@@ -55,7 +56,7 @@ fn eval_merge_task_returns_ref_to_merge_pr() {
     assert_eq!(v["kind"], "ref");
     assert_eq!(v["function"], "merge_pr");
     assert_eq!(v["description"], "Decide whether a pull request can be merged.");
-    assert_eq!(v["inputs"][0]["name"], "docsOnly");
+    assert_eq!(v["inputs"][0]["name"], "docs_only");
     assert_eq!(v["inputs"][0]["description"], "Does the PR change only documentation files?");
     assert_eq!(v["inputs"][0]["type"], "boolean");
     assert_eq!(v["inputs"][1]["type"], "union");
@@ -67,13 +68,13 @@ fn eval_merge_pr_without_input_asks_for_it() {
     assert_eq!(code(&out), 2);
     let v = json(&out);
     assert_eq!(v["kind"], "need_input");
-    assert_eq!(v["input"]["name"], "docsOnly");
+    assert_eq!(v["input"]["name"], "docs_only");
     assert_eq!(v["input"]["type"], "boolean");
 }
 
 #[test]
 fn eval_with_docs_only_returns_approved() {
-    let out = rein(&["eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docsOnly=yes", "--json"]);
+    let out = rein(&["eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docs_only=yes", "--json"]);
     assert_eq!(code(&out), 0);
     assert_eq!(json(&out), serde_json::json!({"kind": "text", "value": "approved"}));
 }
@@ -81,13 +82,13 @@ fn eval_with_docs_only_returns_approved() {
 #[test]
 fn eval_red_ci_returns_ref_to_the_project_path() {
     let out = rein(&[
-        "eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docsOnly=no", "--set", "ci=red", "--json",
+        "eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docs_only=no", "--set", "ci=red", "--json",
     ]);
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["kind"], "ref");
-    assert_eq!(v["function"], "ci/fix");
-    assert_eq!(v["inputs"][0]["name"], "fixPushed");
+    assert_eq!(v["function"], "merge_pr/fix");
+    assert_eq!(v["inputs"][0]["name"], "fix_pushed");
 }
 
 #[test]
@@ -338,9 +339,9 @@ fn check_symlinked_file_is_checked_in_the_project_of_the_link() {
 
 #[test]
 fn set_twice_is_an_error() {
-    let out = rein(&["eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docsOnly=yes", "--set", "docsOnly=no"]);
+    let out = rein(&["eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docs_only=yes", "--set", "docs_only=no"]);
     assert_eq!(code(&out), 1);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("error: input `docsOnly` set twice"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: input `docs_only` set twice"));
 }
 
 #[test]
@@ -349,10 +350,10 @@ fn text_output_uses_typescript_types() {
     assert_eq!(code(&out), 2);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).lines().next().unwrap(),
-        "need input docsOnly: boolean - Does the PR change only documentation files?"
+        "need input docs_only: boolean - Does the PR change only documentation files?"
     );
 
-    let out = rein(&["eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docsOnly=no"]);
+    let out = rein(&["eval", "merge_pr", "--root", "examples/rein/merge-pr", "--set", "docs_only=no"]);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).lines().next().unwrap(),
         "need input ci: \"green\" | \"red\" | \"pending\" - What is the CI status of the PR?"
@@ -361,8 +362,45 @@ fn text_output_uses_typescript_types() {
     let out = rein(&["eval", "--root", "examples/rein/merge-pr", "--set", "task=merge"]);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "next: merge_pr\n  Decide whether a pull request can be merged.\n  docsOnly: boolean - Does the PR change only documentation files?\n  ci: \"green\" | \"red\" | \"pending\" - What is the CI status of the PR?\n"
+        "next: merge_pr\n  Decide whether a pull request can be merged.\n  docs_only: boolean - Does the PR change only documentation files?\n  ci: \"green\" | \"red\" | \"pending\" - What is the CI status of the PR?\n"
     );
+}
+
+#[test]
+fn step_question_keeps_every_line_of_a_multi_line_field_doc() {
+    let root = temp_dir("fielddoc");
+    fs::write(
+        root.join("main.rein"),
+        "interface Input {\n  /** The link. */\n  pr: string;\n  /** Does the pull request wait for another pull request or change that is\n   * not merged yet? */\n  blocked: boolean;\n  /** Which task? */\n  task: \"a\" | \"b\";\n}\n\n/**\n * Demo.\n */\nexport default function main({ pr, blocked, task }: Input) {\n  if (blocked) {\n    return `blocked ${pr}`;\n  }\n  return `ok`;\n}\n",
+    )
+    .unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--input", "pr=x", "--json"]);
+    let v = json(&out);
+    assert_eq!(v["key"], "main.blocked");
+    assert_eq!(
+        v["description"],
+        "Does the pull request wait for another pull request or change that is not merged yet?"
+    );
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn async_answer_doc_over_several_lines_keeps_every_line() {
+    let root = temp_dir("answerdoc");
+    fs::write(
+        root.join("main.rein"),
+        "/** Entry. */\nexport default async function main() {\n  /**\n   * Did the runbook steps\n   * clear the alert?\n   */\n  const fixed: boolean = await request(\n    `Run the steps.`,\n  );\n  if (fixed) {\n    return `closed`;\n  }\n  return `paged`;\n}\n",
+    )
+    .unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
+    let v = json(&out);
+    assert_eq!(v["kind"], "request");
+    assert_eq!(v["response"]["description"], "Did the runbook steps clear the alert?");
+
+    fs::remove_dir_all(&root).unwrap();
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -374,42 +412,42 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 #[test]
 fn running_a_template_is_an_error() {
-    let out = rein(&["eval", "templates/tell_customer", "--root", "examples/rein/support-ticket"]);
+    let out = rein(&["eval", "refund/tell_customer", "--root", "examples/rein/support-ticket"]);
     assert_eq!(code(&out), 1);
     assert!(String::from_utf8_lossy(&out.stderr).contains("templates are called from functions, not run"));
 }
 
 #[test]
 fn describe_shows_template_params_as_strings() {
-    let out = rein(&["describe", "templates/tell_customer", "--root", "examples/rein/support-ticket"]);
+    let out = rein(&["describe", "refund/tell_customer", "--root", "examples/rein/support-ticket"]);
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["inputs"][0]["type"], "string");
-    assert_eq!(v["inputs"][1]["name"], "nextStep");
+    assert_eq!(v["inputs"][1]["name"], "next_step");
 }
 
 #[test]
 fn review_code_delegates_by_risk() {
-    let out = rein(&["eval", "review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=yes", "--json"]);
+    let out = rein(&["eval", "merge_pr/review_code", "--root", "examples/rein/merge-pr", "--set", "security_sensitive=yes", "--json"]);
     assert_eq!(code(&out), 0);
     let v = json(&out);
     assert_eq!(v["kind"], "text");
     assert!(v["value"].as_str().unwrap().contains("Model: use opus model"), "{v}");
 
-    let out = rein(&["eval", "review_code", "--root", "examples/rein/merge-pr", "--set", "securitySensitive=no", "--json"]);
+    let out = rein(&["eval", "merge_pr/review_code", "--root", "examples/rein/merge-pr", "--set", "security_sensitive=no", "--json"]);
     assert!(json(&out)["value"].as_str().unwrap().contains("Model: use haiku model"));
 }
 
 #[test]
 fn faq_asks_the_agent_for_the_answer_then_continues() {
-    let out = rein(&["eval", "answer/faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--json"]);
+    let out = rein(&["eval", "faq", "--root", "examples/rein/support-ticket", "--set", "article_found=yes", "--json"]);
     assert_eq!(code(&out), 3);
     let v = json(&out);
     assert_eq!(v["kind"], "request");
     assert_eq!(v["response"]["name"], "solved");
     assert_eq!(v["response"]["type"], "boolean");
 
-    let out = rein(&["eval", "answer/faq", "--root", "examples/rein/support-ticket", "--set", "articleFound=yes", "--set", "solved=no"]);
+    let out = rein(&["eval", "faq", "--root", "examples/rein/support-ticket", "--set", "article_found=yes", "--set", "solved=no"]);
     assert_eq!(code(&out), 0);
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("next: escalate"));
 }
@@ -473,3 +511,18 @@ fn call_arguments_must_be_named_and_known() {
 
 /// A template with two parameters, used by the argument tests above.
 const GREET: &str = "interface Input {\n  /** Greeting. */\n  greeting: string;\n  /** Who? */\n  name: string;\n}\n\n/** Greet. */\nexport default function greet({ greeting, name }: Input) {\n  return `${greeting} ${name}`;\n}\n";
+
+#[test]
+fn step_with_root_starts_at_the_entry_in_the_manifest() {
+    // `check` uses `entry` from rein.json. `step --root` must start there too, not at `main`.
+    let root = temp_dir("entry-root");
+    fs::write(root.join("rein.json"), r#"{"entry": "start"}"#).unwrap();
+    fs::write(root.join("start.rein"), "/** Start. */\nexport default function start() {\n  return `go`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Main. */\nexport default function main() {\n  return `main`;\n}\n").unwrap();
+
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stdout));
+    assert_eq!(json(&out)["instruction"], "go");
+
+    fs::remove_dir_all(&root).unwrap();
+}

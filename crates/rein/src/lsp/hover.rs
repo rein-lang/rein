@@ -2,6 +2,7 @@
 
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Range, TextDocumentPositionParams};
 use rein_core::ast::{Binding, Function, Input};
+use rein_core::project::Project;
 
 use super::occurrences::{declaration, symbol_at, Symbol};
 use super::structs::{struct_decl, struct_markdown};
@@ -23,7 +24,13 @@ pub fn hover(state: &State, p: &TextDocumentPositionParams) -> Option<Hover> {
         return Some(markdown(value, None));
     };
     let value = match symbol {
-        Symbol::Function(target) => function_markdown(&target, &project.get(&target)?.function),
+        Symbol::Function(target) => {
+            let doc = function_markdown(&target, &project.get(&target)?.function);
+            match target.strip_prefix('@').and_then(|t| t.split_once('/')) {
+                Some((program, _)) => format!("{}\n\n---\n\n{doc}", program_markdown(&project, program)?),
+                None => doc,
+            }
+        }
         Symbol::Param { function, name: n } => param_markdown(declaration(&project.get(&function)?.function, &n)?),
         Symbol::Struct { file, name: n } => struct_markdown(struct_decl(&project, &file, &n)?),
         Symbol::Field { file, strukt, name: n } => param_markdown(struct_decl(&project, &file, &strukt)?.field(&n)?),
@@ -34,6 +41,13 @@ pub fn hover(state: &State, p: &TextDocumentPositionParams) -> Option<Hover> {
 
 fn markdown(value: String, range: Option<Range>) -> Hover {
     Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range }
+}
+
+/// The program `name` as the project links it: its version, scope and folder.
+fn program_markdown(project: &Project, name: &str) -> Option<String> {
+    let flow = &project.programs.get(name)?.as_ref().ok()?.flow;
+    let version = flow.version.as_ref().map_or_else(String::new, |v| format!(" {v}"));
+    Some(format!("program `{name}`{version}, {} scope\n\n`{}`", flow.scope.label(), flow.root.display()))
 }
 
 fn std_markdown(n: &str) -> Option<String> {

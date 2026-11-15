@@ -20,3 +20,11 @@ fn call_at_skips_closed_calls_and_conditions() {
     assert_eq!(call.current.as_deref(), Some("model"));
     assert!(!call.at_name);
 }
+
+#[test]
+fn call_at_reads_a_program_reference() {
+    let text = "  return @pr-handling/main(pr=pr, ";
+    let call = call_at(text, text.len()).unwrap();
+    assert_eq!(call.callee, "pr-handling/main");
+    assert_eq!(call.given, ["pr"]);
+}

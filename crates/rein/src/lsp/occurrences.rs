@@ -1,7 +1,7 @@
 //! Where each name of a project is written: references to functions, and uses of parameters and answers.
 //! References, rename, call hierarchy and code lens all read these sites. They come from the parsed tree.
 
-use rein_core::ast::{walk_stmts, walk_vars, Call, Callee, Function, Input, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
+use rein_core::ast::{walk_stmts, walk_vars, Awaited, Binding, Call, Callee, Function, Input, Piece, ReturnValue, Spanned, Stmt, TemplateLit, Value};
 use rein_core::diagnostic::Span;
 use rein_core::lexer::{lex, Tok};
 use rein_core::project::Project;
@@ -28,17 +28,21 @@ pub fn calls(f: &Function) -> Vec<&Call> {
     let mut out = Vec::new();
     walk_stmts(&f.body, &mut |s| match s {
         Stmt::Return(Spanned { value: ReturnValue::Call(call), .. }) => out.extend(call.calls()),
-        Stmt::Request { arg: Value::Call(call), .. } => out.extend(call.calls()),
+        Stmt::Request { awaited: Awaited::Request { arg: Value::Call(call), .. } | Awaited::Call(ReturnValue::Call(call)), .. } => {
+            out.extend(call.calls())
+        }
         _ => {}
     });
     out
 }
 
-/// Every `@./path` token in `f`, in file order, with the call it starts when it is a call.
+/// Every reference token in `f` (`@./path` or `@program/path`), in file order, with the call it starts when it is a call.
 pub fn refs(f: &Function) -> Vec<(&Spanned<String>, Option<&Call>)> {
     let mut out = Vec::new();
     walk_stmts(&f.body, &mut |s| {
-        if let Stmt::Return(Spanned { value: ReturnValue::Ref(r), .. }) = s {
+        if let Stmt::Return(Spanned { value: ReturnValue::Ref(r), .. })
+        | Stmt::Request { awaited: Awaited::Call(ReturnValue::Ref(r)), .. } = s
+        {
             out.push((r, None));
         }
     });
@@ -49,6 +53,15 @@ pub fn refs(f: &Function) -> Vec<(&Spanned<String>, Option<&Call>)> {
     }
     out.sort_by_key(|(r, _)| r.span.start);
     out
+}
+
+/// The function a reference written in `from` names: a project path for `@./x`, or `@program/path` for a function
+/// of another installed program (`@program` alone names its entry). The checker resolves it the same way.
+pub fn target(project: &Project, from: &str, key: &str) -> Option<String> {
+    match project.binding_for(from, key).ok()? {
+        Binding::Function(path) | Binding::Template { path: Some(path), .. } => Some(path),
+        Binding::Template { path: None, .. } | Binding::Request => None,
+    }
 }
 
 /// The parameters of `f`, then its `const` answers, in file order.
@@ -74,7 +87,11 @@ pub fn name_uses(f: &Function) -> Vec<&Spanned<String>> {
     walk_stmts(&f.body, &mut |s| match s {
         Stmt::If { cond, .. } => walk_vars(cond, &mut |v| out.push(v)),
         Stmt::Switch { subject, .. } => out.push(subject),
-        Stmt::Request { arg, .. } => value_names(arg, &mut out),
+        Stmt::Request { awaited: Awaited::Request { arg, .. }, .. } => value_names(arg, &mut out),
+        Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)), .. } => {
+            call.args.iter().for_each(|a| value_names(&a.value, &mut out))
+        }
+        Stmt::Request { .. } => {}
         Stmt::Return(r) => match &r.value {
             ReturnValue::Template(lit) => template_names(lit, &mut out),
             ReturnValue::Call(call) => call.args.iter().for_each(|a| value_names(&a.value, &mut out)),
@@ -123,7 +140,7 @@ pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, S
     let f = &sf.function;
     let local = |n: &Spanned<String>| (param_symbol(project, name, &n.value), n.span);
     if let Some((r, _)) = refs(f).into_iter().find(|(r, _)| r.span.contains(off)) {
-        return Some((Symbol::Function(project.resolve(name, &r.value).ok()?), r.span));
+        return Some((Symbol::Function(target(project, name, &r.value)?), r.span));
     }
     for call in calls(f) {
         if let Callee::Std(s) = &call.callee {
@@ -134,13 +151,13 @@ pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, S
         if let Some(arg) = call.args.iter().filter_map(|a| a.name.as_ref()).find(|a| a.span.contains(off)) {
             // A std template's parameters have no file to point to.
             let Callee::Ref(r) = &call.callee else { return None };
-            let target = project.resolve(name, &r.value).ok()?;
-            return Some((param_symbol(project, &target, &arg.value), arg.span));
+            let callee = target(project, name, &r.value)?;
+            return Some((param_symbol(project, &callee, &arg.value), arg.span));
         }
     }
     let mut awaited = None;
     walk_stmts(&f.body, &mut |s| {
-        if let Stmt::Request { callee, .. } = s {
+        if let Stmt::Request { awaited: Awaited::Request { callee, .. }, .. } = s {
             if callee.span.contains(off) {
                 awaited = Some(callee.clone());
             }
@@ -185,12 +202,13 @@ fn param_symbol(project: &Project, function: &str, n: &str) -> Symbol {
     }
 }
 
-/// Every `@./` reference to function `target`: the function it is written in, and the span of the token.
-pub fn callers(project: &Project, target: &str) -> Vec<(String, Span)> {
+/// Every reference to function `target`, `@./` or `@program/`, in this project: the function it is written in, and the span of the token.
+/// References from other programs are not searched.
+pub fn callers(project: &Project, to: &str) -> Vec<(String, Span)> {
     let mut out = Vec::new();
     for (name, sf) in &project.files {
         for (r, _) in refs(&sf.function) {
-            if project.resolve(name, &r.value).as_deref() == Ok(target) {
+            if target(project, name, &r.value).as_deref() == Some(to) {
                 out.push((name.clone(), r.span));
             }
         }
@@ -208,7 +226,7 @@ pub fn param_uses(project: &Project, function: &str, n: &str) -> Vec<(String, Sp
     for (caller, sf) in &project.files {
         for (r, call) in refs(&sf.function) {
             let Some(call) = call else { continue };
-            if project.resolve(caller, &r.value).as_deref() != Ok(function) {
+            if target(project, caller, &r.value).as_deref() != Some(function) {
                 continue;
             }
             let named = call.args.iter().filter_map(|a| a.name.as_ref()).filter(|a| a.value == n);

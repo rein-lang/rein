@@ -264,6 +264,144 @@ fn cycle_warns_on_every_return_on_the_cycle() {
     );
 }
 
+/// Cycle warnings of `files`, in a project whose `main` returns `@./a`.
+fn cycle_warnings_of(files: &[(&str, &str)]) -> BTreeMap<String, Vec<Diagnostic>> {
+    let mut all = vec![("main", "/** m */\nexport default function main() { return @./a }\n")];
+    all.extend_from_slice(files);
+    project_of(&all).check()
+}
+
+fn has_cycle_warning(diags: &[Diagnostic]) -> bool {
+    diags.iter().any(|d| d.message.contains("reference cycle"))
+}
+
+const SELF_AWAIT: &str = "/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n";
+const GUARDED_SELF_AWAIT: &str = "/** Recurse until the agent says stop. */\nexport default async function a(\n  /** Keep going? */\n  more: boolean,\n) {\n  if (!more) {\n    return `stopped`;\n  }\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n";
+const AWAIT_B: &str = "/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await @./b;\n  return `a`;\n}\n";
+const AWAIT_A: &str = "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./a;\n  return `b`;\n}\n";
+const GUARDED_AWAIT_B: &str = "/** d */\nexport default async function a(\n  /** A? */\n  go: boolean,\n) {\n  if (!go) {\n    return `a stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await @./b;\n  return `a`;\n}\n";
+const GUARDED_AWAIT_A: &str = "/** d */\nexport default async function b(\n  /** B? */\n  go: boolean,\n) {\n  if (!go) {\n    return `b stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await @./a;\n  return `b`;\n}\n";
+
+#[test]
+fn hand_off_self_cycle_still_warns() {
+    // c1
+    let diags = cycle_warnings_of(&[("a", "/** d */\nexport default function a() { return @./a }\n")]);
+    assert!(
+        has(&diags["a"], Severity::Warning, "reference cycle: a -> a; Rein has no loops yet"),
+        "{:?}",
+        diags["a"]
+    );
+}
+
+#[test]
+fn hand_off_two_cycle_warns() {
+    // c2
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default function a() { return @./b }\n"),
+        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn self_await_without_a_question_warns() {
+    // c3: the await is the first step, so every level asks the same key.
+    let diags = cycle_warnings_of(&[("a", SELF_AWAIT)]);
+    assert!(
+        has(&diags["a"], Severity::Warning, "reference cycle: a -> a"),
+        "{:?}",
+        diags["a"]
+    );
+}
+
+#[test]
+fn self_await_after_a_question_is_not_warned() {
+    // c10: the parameter is asked before the await, at each level.
+    let diags = cycle_warnings_of(&[("a", GUARDED_SELF_AWAIT)]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+}
+
+#[test]
+fn mutual_await_without_a_question_warns() {
+    // c4
+    let diags = cycle_warnings_of(&[("a", AWAIT_B), ("b", AWAIT_A)]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn mutual_await_after_questions_is_not_warned() {
+    // c11
+    let diags = cycle_warnings_of(&[("a", GUARDED_AWAIT_B), ("b", GUARDED_AWAIT_A)]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(!has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn hand_off_then_await_without_a_question_warns() {
+    // c5: a returns b, and b awaits a with no question before it.
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default function a() { return @./b }\n"),
+        ("b", AWAIT_A),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn hand_off_cycle_with_an_await_elsewhere_warns() {
+    // c6: the await is not on the cycle, and the two returns replay the same answers.
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await @./c;\n  return @./b;\n}\n"),
+        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+        ("c", "/** d */\nexport default function c() { return `c` }\n"),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn await_without_a_cycle_is_not_warned() {
+    // c7
+    let diags = cycle_warnings_of(&[("a", "/** d */\nexport default function a() { return `f` }\n")]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+}
+
+#[test]
+fn await_answer_does_not_count_as_a_question_before_its_own_edge() {
+    // c8: `ok` is the answer to the await, so it comes after the edge.
+    let diags = cycle_warnings_of(&[
+        ("a", AWAIT_B),
+        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+    ]);
+    assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+    assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
+}
+
+#[test]
+fn mixed_cycle_without_a_question_warns() {
+    // c9: one await edge, but no question before any edge.
+    let diags = cycle_warnings_of(&[
+        ("a", "/** d */\nexport default function a() { return @./b }\n"),
+        ("b", "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./c;\n  return `b`;\n}\n"),
+        ("c", "/** d */\nexport default function c() { return @./a }\n"),
+    ]);
+    for name in ["a", "b", "c"] {
+        assert!(has_cycle_warning(&diags[name]), "{name}: {:?}", diags[name]);
+    }
+}
+
+#[test]
+fn request_answer_before_the_await_is_a_question() {
+    // A `request` answer above the await asks a new key at each level.
+    let diags = cycle_warnings_of(&[(
+        "a",
+        "/** d */\nexport default async function a() {\n  /** Checked? */\n  const checked: boolean = await request(`Check the thing.`);\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n",
+    )]);
+    assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
+}
+
 #[test]
 fn missing_main_is_a_project_error() {
     let root = PathBuf::from("/proj");
@@ -814,4 +952,261 @@ fn struct_files_are_checked_for_line_length() {
     let text = text.replace(&doc, &"x".repeat(72));
     let project = project_of(&[("ticket.struct", text.as_str())]);
     assert!(project.check()["ticket.struct"].iter().any(|d| d.message.starts_with("line has 81 characters")));
+}
+
+#[test]
+fn a_missing_blank_line_around_an_if_is_a_warning_not_an_error() {
+    let text = "/** Long. */\nexport default function long(/** A? */ a: boolean) {\n  if (a) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
+    let project = project_of(&[("long", text)]);
+    let diags = &project.check()["long"];
+    assert!(has(diags, Severity::Warning, "add an empty line after the `if` block"), "{diags:?}");
+    assert!(!diags.iter().any(|d| d.severity == Severity::Error), "{diags:?}");
+}
+
+/// A function named `name` with a boolean question `a`: it returns `yes` when `a` holds, else `no`.
+fn branch(name: &str, yes: &str, no: &str) -> String {
+    format!(
+        "/** {name} */\nexport default function {name}(\n  /** A? */\n  a: boolean,\n) {{\n  if (a) {{\n    return {yes};\n  }}\n  return {no};\n}}\n"
+    )
+}
+
+#[test]
+fn a_function_with_one_caller_belongs_in_the_caller_folder() {
+    let leaf = |body: &str| format!("/** l */\nexport default function leaf() {{ return {body} }}\n");
+    let ticket = "/** A ticket. */\nexport default interface Ticket {\n  /** The ticket id. */\n  id: string;\n}\n";
+    let files = [
+        ("main", branch("main", "@./merge", "@./shared")),
+        ("merge", branch("merge", "@./steps/fix_ci", "@./merge/done")),
+        ("merge/done", leaf("@../shared")),
+        ("steps/fix_ci", leaf("`fixed`")),
+        ("shared", leaf("`shared`")),
+        ("ticket.struct", ticket.to_string()),
+    ];
+    let files: Vec<(&str, &str)> = files.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    let project = project_of(&files);
+    let diags = project.check();
+    let warning = "`steps/fix_ci` is only called by `merge`; move it to `merge/fix_ci.rein` so the folders show the flow";
+    assert!(has(&diags["steps/fix_ci"], Severity::Warning, warning), "{:?}", diags["steps/fix_ci"]);
+    assert_eq!(project.nest_target("steps/fix_ci").as_deref(), Some("merge/fix_ci"));
+    // A callee of the entry stays at the root, a callee already in its caller's folder is in place, a function
+    // with two callers is shared, and a struct is not a function.
+    for name in ["main", "merge", "merge/done", "shared", "ticket.struct"] {
+        assert!(!has(&diags[name], Severity::Warning, "folders show the flow"), "{name}: {:?}", diags[name]);
+        assert_eq!(project.nest_target(name), None, "{name}");
+    }
+}
+
+#[test]
+fn a_function_called_only_by_the_entry_belongs_at_the_root() {
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./security/review }\n"),
+        ("security/review", "/** r */\nexport default function review() { return `ok` }\n"),
+    ]);
+    let warning = "`security/review` is only called by `main`; move it to `review.rein` so the folders show the flow";
+    assert!(has(&project.check()["security/review"], Severity::Warning, warning));
+    assert_eq!(project.nest_target("security/review").as_deref(), Some("review"));
+}
+
+#[test]
+fn the_nesting_warning_says_a_move_changes_keys_and_program_references() {
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("a", "/** a */\nexport default function a() { return @./steps/leaf }\n"),
+        ("steps/leaf", "/** l */\nexport default function leaf() { return `ok` }\n"),
+    ]);
+    let tail = "The move changes its answer keys and breaks `@<program>/steps/leaf` references from other programs";
+    assert!(has(&project.check()["steps/leaf"], Severity::Warning, tail), "{:?}", project.check()["steps/leaf"]);
+}
+
+#[test]
+fn two_callees_with_one_target_name_each_other_and_get_no_move() {
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("a", &branch("a", "@./x/leaf", "@./y/leaf")),
+        ("x/leaf", "/** l */\nexport default function leaf() { return `x` }\n"),
+        ("y/leaf", "/** l */\nexport default function leaf() { return `y` }\n"),
+    ]);
+    let diags = project.check();
+    let clash = "`x/leaf` is only called by `a`, but `a/leaf.rein` is also the place for `y/leaf`; rename one of them";
+    assert!(has(&diags["x/leaf"], Severity::Warning, clash), "{:?}", diags["x/leaf"]);
+    assert!(has(&diags["y/leaf"], Severity::Warning, "is also the place for `x/leaf`"), "{:?}", diags["y/leaf"]);
+    for name in ["x/leaf", "y/leaf"] {
+        assert!(!has(&diags[name], Severity::Warning, "folders show the flow"), "{name}: {:?}", diags[name]);
+        assert_eq!(project.nest_target(name), None, "{name}");
+    }
+}
+
+#[test]
+fn a_target_path_that_another_file_has_gives_no_warning() {
+    // `x/leaf` belongs at `a/leaf`, but `a/leaf` is another function, so `x/leaf` cannot move there.
+    let taken = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("a", &branch("a", "@./x/leaf", "@./a/leaf")),
+        ("a/leaf", "/** l */\nexport default function leaf() { return @../y/leaf }\n"),
+        ("x/leaf", "/** l */\nexport default function leaf() { return `x` }\n"),
+        ("y/leaf", "/** l */\nexport default function leaf() { return `y` }\n"),
+    ]);
+    let diags = taken.check();
+    assert!(!has(&diags["x/leaf"], Severity::Warning, "only called by"), "{:?}", diags["x/leaf"]);
+    assert_eq!(taken.nest_target("x/leaf"), None);
+    assert_eq!(taken.nest_target("y/leaf").as_deref(), Some("a/leaf/leaf"));
+}
+
+#[test]
+fn a_caller_inside_the_function_folder_gives_no_nesting_warning() {
+    // `x` has one caller, `x/y`, which sits in `x/`. Moving `x` to `x/y/x` would move `x/y` along, so the
+    // warning would come back one level deeper each time.
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./x/y }\n"),
+        ("x/y", "/** y */\nexport default function y() { return @../x }\n"),
+        ("x", "/** x */\nexport default function x() { return `x` }\n"),
+    ]);
+    let diags = project.check();
+    assert!(!has(&diags["x"], Severity::Warning, "only called by"), "{:?}", diags["x"]);
+    assert_eq!(project.nest_target("x"), None);
+}
+
+#[test]
+fn a_function_whose_folder_holds_the_entry_gives_no_nesting_warning() {
+    // `app` belongs at `y/app`, but moving its folder would move the entry `app/start` and leave `rein.json`
+    // naming a file that is gone.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-entry-folder-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "app/start.rein"}"#);
+    write("app/start.rein", "/** s */\nexport default function start() { return @../y }\n");
+    write("y.rein", "/** y */\nexport default function y() { return @./app }\n");
+    write("app.rein", "/** a */\nexport default function app() { return `a` }\n");
+    let project = Project::load(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    assert_eq!(project.entry(), "app/start");
+    assert!(!has(&project.check()["app"], Severity::Warning, "only called by"), "{:?}", project.check()["app"]);
+    assert_eq!(project.nest_target("app"), None);
+}
+
+#[test]
+fn a_path_the_loader_skips_is_never_a_nesting_target() {
+    assert!(loadable_path("merge/fix"));
+    assert!(loadable_path("main"));
+    for path in ["target/pick", "node_modules/pick", ".hidden/pick", "a/target/b", "foo/main"] {
+        assert!(!loadable_path(path), "{path}");
+    }
+    // `pick` belongs in `target/`, a folder the loader skips, so it would drop out of the project.
+    let project = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./target }\n"),
+        ("target", "/** t */\nexport default function target() { return @./pick }\n"),
+        ("pick", "/** p */\nexport default function pick() { return `p` }\n"),
+    ]);
+    assert!(!has(&project.check()["pick"], Severity::Warning, "only called by"), "{:?}", project.check()["pick"]);
+    assert_eq!(project.nest_target("pick"), None);
+}
+
+#[test]
+fn a_folder_with_its_own_main_is_never_a_nesting_target() {
+    // `pick` belongs in `x/`, but `x/main.rein` makes `x/` another flow that the loader skips.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-nested-flow-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("main.rein", "/** m */\nexport default function main() { return @./x }\n");
+    write("x.rein", "/** x */\nexport default function x() { return @./pick }\n");
+    write("pick.rein", "/** p */\nexport default function pick() { return `p` }\n");
+    write("x/main.rein", "/** n */\nexport default function main() { return `n` }\n");
+    let project = Project::load(&root).unwrap();
+    assert!(project.loads("pick") && !project.loads("x/pick") && project.loads("y/pick"));
+    let (diags, target) = (project.check(), project.nest_target("pick"));
+    fs::remove_dir_all(&root).unwrap();
+    assert!(!has(&diags["pick"], Severity::Warning, "only called by"), "{:?}", diags["pick"]);
+    assert_eq!(target, None);
+}
+
+#[test]
+fn the_root_main_never_gets_a_nesting_warning() {
+    // With the entry `start`, `main` is a plain function called only by `foo`. It still stays at the root: the
+    // project needs it, and `foo/main.rein` would make `foo/` another flow.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-root-main-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "start.rein"}"#);
+    write("start.rein", "/** s */\nexport default function start() { return @./foo }\n");
+    write("foo.rein", "/** f */\nexport default function foo() { return @./main }\n");
+    write("main.rein", "/** m */\nexport default function main() { return `m` }\n");
+    let project = Project::load(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    assert!(!has(&project.check()["main"], Severity::Warning, "only called by"), "{:?}", project.check()["main"]);
+    assert_eq!(project.nest_target("main"), None);
+}
+
+#[test]
+fn unreachable_functions_get_no_nesting_warning() {
+    // `u` and `v` only call each other. Each has one caller, but neither is reachable from main.
+    let project = project_of(&[
+        ("u", "/** u */\nexport default function u() { return @./v }\n"),
+        ("v", "/** v */\nexport default function v() { return @./u }\n"),
+    ]);
+    let diags = project.check();
+    for name in ["u", "v"] {
+        assert!(has(&diags[name], Severity::Warning, "is not reachable from main"), "{name}: {:?}", diags[name]);
+        assert!(!has(&diags[name], Severity::Warning, "only called by"), "{name}: {:?}", diags[name]);
+        assert_eq!(project.nest_target(name), None, "{name}");
+    }
+}
+
+#[test]
+fn unknown_reachability_gives_no_nesting_warning() {
+    // `u` and `v` only call each other. Reachability from main is unknown when main has a syntax error, and
+    // also when main is missing. Neither case may tell `u` and `v` to move into each other's folder.
+    let broken = project_of(&[
+        ("main", "/** m */\nexport default function main() { return @./u"),
+        ("u", "/** u */\nexport default function u() { return @./v }\n"),
+        ("v", "/** v */\nexport default function v() { return @./u }\n"),
+    ]);
+    let root = PathBuf::from("/proj");
+    let missing = Project::from_sources(
+        root.clone(),
+        vec![
+            (root.join("u.rein"), "/** u */\nexport default function u() { return @./v }\n".to_string()),
+            (root.join("v.rein"), "/** v */\nexport default function v() { return @./u }\n".to_string()),
+        ],
+    );
+    for project in [&broken, &missing] {
+        let diags = project.check();
+        for name in ["u", "v"] {
+            assert!(!has(&diags[name], Severity::Warning, "only called by"), "{name}: {:?}", diags[name]);
+            assert_eq!(project.nest_target(name), None, "{name}");
+        }
+    }
+}
+
+#[test]
+fn reachability_starts_at_the_entry_from_the_manifest() {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-core-entry-{}-{nanos}", std::process::id()));
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "flow.rein"}"#);
+    write("main.rein", "/** m */\nexport default function main() { return `m` }\n");
+    write("flow.rein", "/** f */\nexport default function flow() { return @./step }\n");
+    write("step.rein", "/** s */\nexport default function step() { return `s` }\n");
+    let project = Project::load(&root).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    let diags = project.check();
+    // `step` is reached from `flow`, the entry, and only `flow` calls it, so it stays at the root.
+    assert!(diags["step"].is_empty(), "{:?}", diags["step"]);
+    assert!(diags["flow"].is_empty(), "{:?}", diags["flow"]);
+    assert!(has(&diags["main"], Severity::Warning, "`main` is not reachable from flow"), "{:?}", diags["main"]);
 }

@@ -21,8 +21,15 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
+        Self::start_with(&[])
+    }
+
+    /// Starts the server with extra environment variables, such as a temp `REIN_HOME`.
+    fn start_with(env: &[(&str, &Path)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+            .env("REIN_RUNS_DIR", "")
             .arg("lsp")
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -88,6 +95,28 @@ impl Server {
                 && pred(m["params"]["diagnostics"].as_array().unwrap())
         });
         msg["params"]["diagnostics"].as_array().unwrap().clone()
+    }
+
+    /// Sends a request, which the server answers after the notifications sent before it. Returns one list per
+    /// publish for `uri` that came first, so a publish with no diagnostics is seen too.
+    fn publishes_for(&mut self, uri: &str) -> Vec<Vec<Value>> {
+        const SYNC: i64 = 800;
+        self.send(json!({
+            "jsonrpc": "2.0", "id": SYNC, "method": "textDocument/documentSymbol",
+            "params": {"textDocument": {"uri": uri}}
+        }));
+        let deadline = Instant::now() + TIMEOUT;
+        let mut seen = Vec::new();
+        loop {
+            let left = deadline.checked_duration_since(Instant::now()).expect("timed out waiting for the server");
+            let msg = self.messages.recv_timeout(left).expect("timed out waiting for the server");
+            if msg["id"] == SYNC {
+                return seen;
+            }
+            if msg["method"] == "textDocument/publishDiagnostics" && msg["params"]["uri"] == uri {
+                seen.push(msg["params"]["diagnostics"].as_array().unwrap().clone());
+            }
+        }
     }
 
     /// Shuts the server down and checks it exits with status 0.
@@ -277,7 +306,7 @@ fn hover_on_parameter_shows_its_type_and_doc() {
     let start = uri_of(&root, "start.rein");
     server.open(
         &start,
-        "interface Input {\n  /** Does it change docs? */\n  docsOnly: boolean;\n  /** Which CI status? */\n  ci: \"green\" | \"red\";\n}\n\n/** Start. */\nexport default function start({ docsOnly, ci }: Input) {\n  if (docsOnly) {\n    return `x`;\n  } else {\n    return `y`;\n  }\n}\n",
+        "interface Input {\n  /** Does it change docs? */\n  docs_only: boolean;\n  /** Which CI status? */\n  ci: \"green\" | \"red\";\n}\n\n/** Start. */\nexport default function start({ docs_only, ci }: Input) {\n  if (docs_only) {\n    return `x`;\n  } else {\n    return `y`;\n  }\n}\n",
     );
     let hover = server.request(
         2,
@@ -285,7 +314,7 @@ fn hover_on_parameter_shows_its_type_and_doc() {
         json!({"textDocument": {"uri": start}, "position": {"line": 2, "character": 4}}),
     );
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
-    assert!(text.contains("docsOnly: boolean"), "{text}");
+    assert!(text.contains("docs_only: boolean"), "{text}");
     assert!(text.contains("Does it change docs?"), "{text}");
 
     server.shutdown();
@@ -385,6 +414,131 @@ fn deleting_a_marker_rechecks_open_files_under_the_new_root() {
     );
     let rechecked = server.wait_diagnostics(&x, |d| !has_message(d, "leaves the project root"));
     assert!(!has_message(&rechecked, "leaves the project root"));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_file_in_a_skipped_folder_gets_a_hint_why() {
+    let root = temp_project("skipped-hint");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // The loader skips `target/`, so the file has no language features. The hint says why, at the top of the file.
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    let diags = server.wait_diagnostics(&y, |d| has_message(d, "does not load files in `target/`"));
+    let hint = diags.iter().find(|d| d["severity"] == 4).expect("hint diagnostic");
+    assert!(hint["message"].as_str().unwrap().contains("move this file"), "{hint}");
+    assert_eq!(hint["range"], json!({"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// How many skipped-folder hints a publish holds.
+fn hint_count(diags: &[Value]) -> usize {
+    diags.iter().filter(|d| d["severity"] == 4 && d["message"].as_str().is_some_and(|m| m.contains("does not load"))).count()
+}
+
+/// Opens `file` under `root` with `text`, then checks that no publish for it carries the skipped-folder hint.
+fn assert_no_skipped_hint(server: &mut Server, root: &Path, file: &str, text: &str) {
+    let uri = uri_of(root, file);
+    server.open(&uri, text);
+    let published = server.publishes_for(&uri);
+    assert!(published.iter().all(|d| hint_count(d) == 0), "{published:?}");
+}
+
+#[test]
+fn a_skipped_hint_clears_when_its_file_closes() {
+    let root = temp_project("hint-close");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    server.wait_diagnostics(&y, |d| has_message(d, "does not load files in `target/`"));
+
+    // The buffer closes, so the file is no longer open. Its hint goes with it, as an empty publish.
+    server.notify("textDocument/didClose", json!({"textDocument": {"uri": y}}));
+    let cleared = server.wait_diagnostics(&y, |d| d.is_empty());
+    assert!(cleared.is_empty());
+
+    // Opening another file does not publish the closed file again.
+    let main = uri_of(&root, "main.rein");
+    server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
+    let later = server.publishes_for(&y);
+    assert!(later.is_empty(), "{later:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_skipped_hint_is_published_once_per_publish() {
+    let root = temp_project("hint-once");
+    let target_dir = root.join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let text = "/** Y. */\nexport default function y() {\n  return `done`;\n}\n";
+    fs::write(target_dir.join("y.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let y = uri_of(&root, "target/y.rein");
+    server.open(&y, text);
+    let first = server.wait_diagnostics(&y, |d| has_message(d, "does not load"));
+    assert_eq!(hint_count(&first), 1, "{first:?}");
+
+    let edited = text.replace("done", "gone");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument": {"uri": y, "version": 2}, "contentChanges": [{"text": edited}]}),
+    );
+    let again = server.wait_diagnostics(&y, |d| has_message(d, "does not load"));
+    assert_eq!(hint_count(&again), 1, "{again:?}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_program_installed_under_node_modules_gets_no_hint() {
+    let root = temp_project("installed");
+    let pkg = root.join("node_modules/foo");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("rein.json"), r#"{"entry":"start.rein"}"#).unwrap();
+    let text = "/** Start. */\nexport default function start() {\n  return `s`;\n}\n";
+    fs::write(pkg.join("start.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    assert_no_skipped_hint(&mut server, &root, "node_modules/foo/start.rein", text);
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_program_installed_by_pnpm_gets_no_hint() {
+    let root = temp_project("pnpm");
+    let pkg = root.join("node_modules/.pnpm/foo@1.0.0/node_modules/foo");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("rein.json"), r#"{"entry":"start.rein"}"#).unwrap();
+    let text = "/** Start. */\nexport default function start() {\n  return `s`;\n}\n";
+    fs::write(pkg.join("start.rein"), text).unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    assert_no_skipped_hint(&mut server, &root, "node_modules/.pnpm/foo@1.0.0/node_modules/foo/start.rein", text);
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
@@ -524,11 +678,11 @@ fn at(uri: &str, line: u64, character: u64) -> Value {
 /// Every `@./escalate` in examples/rein/support-ticket.
 fn escalate_calls() -> Vec<Spot> {
     vec![
-        spot("answer/faq.rein", 8, 11, 8, 23),
-        spot("answer/faq.rein", 21, 9, 21, 21),
-        spot("billing/refund.rein", 8, 11, 8, 23),
+        spot("faq.rein", 8, 11, 8, 22),
+        spot("faq.rein", 24, 9, 24, 20),
         spot("main.rein", 12, 11, 12, 22),
-        spot("main.rein", 18, 13, 18, 24),
+        spot("main.rein", 19, 13, 19, 24),
+        spot("refund.rein", 8, 11, 8, 22),
     ]
 }
 
@@ -565,22 +719,22 @@ fn references_of_a_parameter_include_named_arguments() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
     // From `opening=` in the call: the argument, the struct field, each destructuring, and each `${opening}` use.
-    let mut params = at(&refund, 11, 6);
+    let mut params = at(&refund, 12, 6);
     params["context"] = json!({"includeDeclaration": true});
     let refs = server.request(2, "textDocument/references", params);
     assert_eq!(
         spots(&root, &refs["result"]),
         vec![
-            spot("answer/faq.rein", 17, 6, 17, 13),
-            spot("billing/refund.rein", 11, 4, 11, 11),
-            spot("templates/close_ticket.rein", 3, 38, 3, 45),
-            spot("templates/close_ticket.rein", 4, 31, 4, 38),
-            spot("templates/message.struct.rein", 5, 2, 5, 9),
-            spot("templates/tell_customer.rein", 3, 39, 3, 46),
-            spot("templates/tell_customer.rein", 4, 12, 4, 19),
+            spot("faq.rein", 19, 6, 19, 13),
+            spot("faq/close_ticket.rein", 3, 38, 3, 45),
+            spot("faq/close_ticket.rein", 4, 31, 4, 38),
+            spot("message.struct.rein", 5, 2, 5, 9),
+            spot("refund.rein", 12, 4, 12, 11),
+            spot("refund/tell_customer.rein", 3, 39, 3, 46),
+            spot("refund/tell_customer.rein", 4, 12, 4, 19),
         ],
         "{refs}"
     );
@@ -619,17 +773,17 @@ fn definition_goes_to_functions_parameters_and_std() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
     // A reference goes to the name of the function it names.
-    let def = server.request(2, "textDocument/definition", at(&refund, 10, 20));
-    assert_eq!(spot_of(&root, &def["result"]), spot("templates/tell_customer.rein", 3, 24, 3, 36), "{def}");
+    let def = server.request(2, "textDocument/definition", at(&refund, 11, 20));
+    assert_eq!(spot_of(&root, &def["result"]), spot("refund/tell_customer.rein", 3, 24, 3, 36), "{def}");
     // `opening=` in a call goes to that field of the struct.
-    let def = server.request(3, "textDocument/definition", at(&refund, 11, 6));
-    assert_eq!(spot_of(&root, &def["result"]), spot("templates/message.struct.rein", 5, 2, 5, 9), "{def}");
+    let def = server.request(3, "textDocument/definition", at(&refund, 12, 6));
+    assert_eq!(spot_of(&root, &def["result"]), spot("message.struct.rein", 5, 2, 5, 9), "{def}");
     // A parameter used in the body goes to its declaration.
     let def = server.request(4, "textDocument/definition", at(&refund, 7, 8));
-    assert_eq!(spot_of(&root, &def["result"]), spot("billing/refund.rein", 5, 2, 5, 17), "{def}");
+    assert_eq!(spot_of(&root, &def["result"]), spot("refund.rein", 5, 2, 5, 19), "{def}");
 
     // A std template goes to its source. `request` is built in and has none.
     let tmp = temp_project("stddef");
@@ -654,7 +808,7 @@ fn hover_shows_function_docs_and_callee_parameters() {
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
     // On the function's own name: its doc comment.
     let hover = server.request(2, "textDocument/hover", at(&escalate, 3, 26));
@@ -663,7 +817,7 @@ fn hover_shows_function_docs_and_callee_parameters() {
     assert_eq!(hover["result"]["range"], json!({"start": {"line": 3, "character": 24}, "end": {"line": 3, "character": 32}}));
 
     // On `opening=` in a call: the callee's parameter type and question.
-    let hover = server.request(3, "textDocument/hover", at(&refund, 11, 6));
+    let hover = server.request(3, "textDocument/hover", at(&refund, 12, 6));
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
     assert!(text.contains("opening: string"), "{text}");
     assert!(text.contains("The first part of the sentence, such as the action taken."), "{text}");
@@ -704,9 +858,9 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     assert_eq!(
         calls_of(&root, &incoming["result"], "from"),
         vec![
-            ("answer/faq".to_string(), vec![spot("answer/faq.rein", 8, 11, 8, 23), spot("answer/faq.rein", 21, 9, 21, 21)]),
-            ("billing/refund".to_string(), vec![spot("billing/refund.rein", 8, 11, 8, 23)]),
-            ("main".to_string(), vec![spot("main.rein", 12, 11, 12, 22), spot("main.rein", 18, 13, 18, 24)]),
+            ("faq".to_string(), vec![spot("faq.rein", 8, 11, 8, 22), spot("faq.rein", 24, 9, 24, 20)]),
+            ("main".to_string(), vec![spot("main.rein", 12, 11, 12, 22), spot("main.rein", 19, 13, 19, 24)]),
+            ("refund".to_string(), vec![spot("refund.rein", 8, 11, 8, 22)]),
         ],
         "{incoming}"
     );
@@ -714,11 +868,11 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     let items = server.request(4, "textDocument/prepareCallHierarchy", at(&main, 10, 25));
     let outgoing = server.request(5, "callHierarchy/outgoingCalls", json!({"item": items["result"][0]}));
     let names: Vec<String> = calls_of(&root, &outgoing["result"], "to").into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, ["answer/faq", "billing/refund", "escalate"], "{outgoing}");
+    assert_eq!(names, ["escalate", "faq", "refund"], "{outgoing}");
     // Outgoing ranges are in the caller's file.
-    let ranges = &outgoing["result"][2]["fromRanges"];
+    let ranges = &outgoing["result"][0]["fromRanges"];
     assert_eq!(ranges[0], json!({"start": {"line": 12, "character": 11}, "end": {"line": 12, "character": 22}}));
-    assert_eq!(ranges[1], json!({"start": {"line": 18, "character": 13}, "end": {"line": 18, "character": 24}}));
+    assert_eq!(ranges[1], json!({"start": {"line": 19, "character": 13}, "end": {"line": 19, "character": 24}}));
 
     server.shutdown();
 }
@@ -728,13 +882,13 @@ fn document_symbols_outline_the_function_and_its_names() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let faq = open_file(&mut server, &root, "answer/faq.rein");
+    let faq = open_file(&mut server, &root, "faq.rein");
 
     let symbols = server.request(2, "textDocument/documentSymbol", json!({"textDocument": {"uri": faq}}));
     let function = &symbols["result"][0];
-    assert_eq!(function["name"], "answer/faq");
+    assert_eq!(function["name"], "faq");
     assert_eq!(function["kind"], 12);
-    assert_eq!(spot_of(&root, &json!({"uri": faq, "range": function["selectionRange"]})), spot("answer/faq.rein", 3, 30, 3, 39));
+    assert_eq!(spot_of(&root, &json!({"uri": faq, "range": function["selectionRange"]})), spot("faq.rein", 3, 30, 3, 39));
     let children: Vec<(String, String, Spot)> = function["children"]
         .as_array()
         .unwrap()
@@ -747,8 +901,8 @@ fn document_symbols_outline_the_function_and_its_names() {
     assert_eq!(
         children,
         vec![
-            ("articleFound".to_string(), "boolean".to_string(), spot("answer/faq.rein", 5, 2, 5, 14)),
-            ("solved".to_string(), "boolean".to_string(), spot("answer/faq.rein", 11, 8, 11, 14)),
+            ("article_found".to_string(), "boolean".to_string(), spot("faq.rein", 5, 2, 5, 15)),
+            ("solved".to_string(), "boolean".to_string(), spot("faq.rein", 12, 8, 12, 14)),
         ]
     );
 
@@ -766,18 +920,21 @@ fn workspace_symbols_search_every_program() {
 
     let found = server.request(2, "workspace/symbol", json!({"query": "refund"}));
     let found = found["result"].as_array().unwrap();
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0]["name"], "billing/refund");
-    assert_eq!(found[0]["containerName"], "support-ticket");
+    // The query also matches `refund/tell_customer`, which is inside the `refund` folder.
+    assert_eq!(found.len(), 2, "{found:?}");
+    let refund = found.iter().find(|s| s["name"] == "refund").expect("refund symbol");
+    assert_eq!(refund["containerName"], "support-ticket");
     let root = example("support-ticket");
-    assert_eq!(spot_of(&root, &found[0]["location"]), spot("billing/refund.rein", 3, 24, 3, 30));
+    assert_eq!(spot_of(&root, &refund["location"]), spot("refund.rein", 3, 24, 3, 30));
+    let tell = found.iter().find(|s| s["name"] == "refund/tell_customer").expect("tell_customer symbol");
+    assert_eq!(spot_of(&root, &tell["location"]), spot("refund/tell_customer.rein", 3, 24, 3, 36));
 
     // An empty query lists every function of the five example programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
-    assert_eq!(all_symbols.len(), 24, "{all}");
+    assert_eq!(all_symbols.len(), 26, "{all}");
     assert!(
-        all_symbols.iter().any(|s| s["name"] == "templates/message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
+        all_symbols.iter().any(|s| s["name"] == "message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"
     );
 
@@ -820,13 +977,13 @@ fn edits_of(root: &Path, edit: &Value) -> EditSummary {
 fn rename_a_parameter_updates_named_arguments() {
     let root = example("support-ticket");
     let mut server = start_with_file_renames();
-    let refund = open_file(&mut server, &root, "billing/refund.rein");
+    let refund = open_file(&mut server, &root, "refund.rein");
 
-    let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 11, 6));
+    let prepared = server.request(2, "textDocument/prepareRename", at(&refund, 12, 6));
     assert_eq!(prepared["result"]["placeholder"], "opening");
-    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 11, "character": 4}, "end": {"line": 11, "character": 11}}));
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 12, "character": 4}, "end": {"line": 12, "character": 11}}));
 
-    let mut params = at(&refund, 11, 6);
+    let mut params = at(&refund, 12, 6);
     params["newName"] = json!("lead");
     let edit = server.request(3, "textDocument/rename", params);
     let lead = |s: Spot| (s, "lead".to_string());
@@ -834,13 +991,13 @@ fn rename_a_parameter_updates_named_arguments() {
         edits_of(&root, &edit["result"]),
         (
             vec![
-                lead(spot("answer/faq.rein", 17, 6, 17, 13)),
-                lead(spot("billing/refund.rein", 11, 4, 11, 11)),
-                lead(spot("templates/close_ticket.rein", 3, 38, 3, 45)),
-                lead(spot("templates/close_ticket.rein", 4, 31, 4, 38)),
-                lead(spot("templates/message.struct.rein", 5, 2, 5, 9)),
-                lead(spot("templates/tell_customer.rein", 3, 39, 3, 46)),
-                lead(spot("templates/tell_customer.rein", 4, 12, 4, 19)),
+                lead(spot("faq.rein", 19, 6, 19, 13)),
+                lead(spot("faq/close_ticket.rein", 3, 38, 3, 45)),
+                lead(spot("faq/close_ticket.rein", 4, 31, 4, 38)),
+                lead(spot("message.struct.rein", 5, 2, 5, 9)),
+                lead(spot("refund.rein", 12, 4, 12, 11)),
+                lead(spot("refund/tell_customer.rein", 3, 39, 3, 46)),
+                lead(spot("refund/tell_customer.rein", 4, 12, 4, 19)),
             ],
             vec![]
         ),
@@ -848,7 +1005,7 @@ fn rename_a_parameter_updates_named_arguments() {
     );
 
     // A name that is not an identifier fails the request.
-    let mut params = at(&refund, 11, 6);
+    let mut params = at(&refund, 12, 6);
     params["newName"] = json!("2x");
     let failed = server.request(4, "textDocument/rename", params);
     assert_eq!(failed["error"]["code"], -32803, "{failed}");
@@ -875,12 +1032,12 @@ fn rename_a_function_renames_its_file_and_references() {
         edits_of(&root, &edit["result"]),
         (
             vec![
-                handoff(spot("answer/faq.rein", 8, 15, 8, 23)),
-                handoff(spot("answer/faq.rein", 21, 13, 21, 21)),
-                handoff(spot("billing/refund.rein", 8, 15, 8, 23)),
                 handoff(spot("escalate.rein", 3, 24, 3, 32)),
+                handoff(spot("faq.rein", 8, 14, 8, 22)),
+                handoff(spot("faq.rein", 24, 12, 24, 20)),
                 handoff(spot("main.rein", 12, 14, 12, 22)),
-                handoff(spot("main.rein", 18, 16, 18, 24)),
+                handoff(spot("main.rein", 19, 16, 19, 24)),
+                handoff(spot("refund.rein", 8, 14, 8, 22)),
             ],
             vec![("escalate.rein".to_string(), "handoff.rein".to_string())]
         ),
@@ -891,6 +1048,448 @@ fn rename_a_function_renames_its_file_and_references() {
     assert_eq!(changes.last().unwrap()["kind"], "rename");
 
     server.shutdown();
+}
+
+#[test]
+fn rename_a_function_renames_the_folder_of_its_nested_functions() {
+    let root = fs::canonicalize(temp_project("rename-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return @../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("a.rein", 2, 9, 2, 15), "@./c/b".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_to_move_a_folder_that_holds_the_entry() {
+    let root = fs::canonicalize(temp_project("rename-entry-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("rein.json", r#"{"entry": "app/start.rein"}"#);
+    write("app/start.rein", "/** Start. */\nexport default function start() {\n  return @../app;\n}\n");
+    write("app.rein", "/** App. */\nexport default function app() {\n  return `a`;\n}\n");
+    let mut server = start_with_file_renames();
+    let start = open_file(&mut server, &root, "app/start.rein");
+
+    let mut params = at(&start, 2, 13);
+    params["newName"] = json!("web");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("holds the entry `app/start`"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_to_move_a_folder_into_a_path_the_project_skips() {
+    let root = fs::canonicalize(temp_project("rename-skipped-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return `b`;\n}\n");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("node_modules");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`node_modules/b` is a path the project does not load"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_to_move_a_folder_into_another_flow() {
+    let root = fs::canonicalize(temp_project("rename-nested-flow")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return `b`;\n}\n");
+    write("tools/main.rein", "/** Tools. */\nexport default function main() {\n  return `t`;\n}\n");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("tools");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`tools/b` is a path the project does not load"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// A project where `a` holds `a/b`, which calls `../target`. Returns its root, canonical.
+fn folder_project(tag: &str) -> PathBuf {
+    let root = fs::canonicalize(temp_project(tag)).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n");
+    write("a.rein", "/** A. */\nexport default function a() {\n  return @./a/b;\n}\n");
+    write("a/b.rein", "/** B. */\nexport default function b() {\n  return `b`;\n}\n");
+    root
+}
+
+#[test]
+fn rename_refuses_to_leave_a_file_of_the_folder_behind() {
+    let root = folder_project("rename-left-behind");
+    fs::write(root.join("a/notes.md"), "Notes.\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`a/notes.md` is not a `.rein` file of the project"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_to_move_through_a_symlinked_folder() {
+    let root = folder_project("rename-symlink");
+    fs::create_dir_all(root.join("elsewhere")).unwrap();
+    fs::write(root.join("elsewhere/x.md"), "X.\n").unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere"), root.join("a/linked")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`a/linked` is a symbolic link"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_to_move_a_folder_holding_a_hidden_file_symlink() {
+    let root = folder_project("rename-hidden-file-symlink");
+    fs::write(root.join("shared.env"), "KEY=1\n").unwrap();
+    std::os::unix::fs::symlink("../shared.env", root.join("a/.env")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("`a/.env` is a symbolic link"), "{edit}");
+    // Nothing moved: the folder and its link are where they were.
+    assert!(root.join("a/b.rein").is_file(), "{edit}");
+    assert!(fs::symlink_metadata(root.join("a/.env")).unwrap().file_type().is_symlink(), "{edit}");
+    assert!(!root.join("c").exists(), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_keeps_a_broken_reference_that_keeps_its_meaning() {
+    let root = folder_project("rename-broken-same-meaning");
+    // `a` drafts `@./todo`, and `a/b` refers to `@../nope`. Neither exists, and neither names a function after the
+    // rename to `c`: `todo` and `nope` are at the root in both places.
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return @./todo;\n}\n").unwrap();
+    fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../nope;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_broken_reference_that_would_resolve_after_the_move() {
+    let root = folder_project("rename-broken-ref");
+    // `a/b` refers to `../c`, which does not exist yet. Renaming `a` to `c` creates `c.rein`, and from `c/b` the
+    // same text names it.
+    fs::write(root.join("a/b.rein"), "/** B. */\nexport default function b() {\n  return @../c;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("`@../c` in `a/b` does not resolve, but after the move it would resolve to `c`"),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_broken_reference_in_a_file_that_stays_put_that_would_resolve_after_the_move() {
+    let root = folder_project("rename-broken-stays-put");
+    // `x` stays at the root and refers to `@./c`, which does not exist. Renaming `a` to `c` creates `c.rein`, and
+    // the same text in `x` names it, although `x` does not move.
+    fs::write(root.join("x.rein"), "/** X. */\nexport default function x() {\n  return @./c;\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("`@./c` in `x` does not resolve, but after the move it would resolve to `c`"),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// `steps/fix_ci` is only called by `flow/merge`, so the quick fix moves it to `flow/merge/fix_ci.rein`, one folder
+/// deeper. It refers to `@../../nope`, which leaves the root from `steps` but names `nope` from `flow/merge`.
+fn escaping_reference_project(tag: &str, nope: bool) -> (PathBuf, Value) {
+    let root = fs::canonicalize(temp_project(tag)).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fixCi() {\n  return @../../nope;\n}\n");
+    if nope {
+        write("nope.rein", "/** Nope. */\nexport default function nope() {\n  return `n`;\n}\n");
+    }
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "`steps/fix_ci` is only called by `flow/merge`; move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    server.shutdown();
+    (root, actions)
+}
+
+#[test]
+fn quick_fix_moves_a_function_deeper_when_its_escaping_reference_still_names_nothing() {
+    // From `steps/fix_ci`, `@../../nope` leaves the root. From `flow/merge/fix_ci` it names `nope`, which is not a
+    // file, so the move changes nothing about the reference and is allowed.
+    let (root, actions) = escaping_reference_project("escape-allowed", false);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![(spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string())],
+            vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_refuses_a_move_that_makes_an_escaping_reference_name_a_file() {
+    // With `nope.rein` at the root, `@../../nope` from `flow/merge/fix_ci` names it after the move.
+    let (root, actions) = escaping_reference_project("escape-refused", true);
+    let offered = actions["result"].as_array().unwrap().iter().any(|a| a["title"] == "Move to flow/merge/fix_ci.rein");
+    assert!(!offered, "{actions}");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_a_function_to_a_name_that_differs_only_in_case() {
+    let root = fs::canonicalize(temp_project("rename-case")).unwrap();
+    // Only a case-insensitive file system (macOS, Windows, or a casefold folder) finds `TARGET.rein` in this folder.
+    if !root.join("TARGET.rein").exists() {
+        eprintln!("skipped: the temp dir is case-sensitive");
+        fs::remove_dir_all(&root).unwrap();
+        return;
+    }
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("Target");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("main.rein", 2, 12, 2, 18), "Target".to_string()),
+                (spot("target.rein", 1, 24, 1, 30), "Target".to_string()),
+            ],
+            vec![("target.rein".to_string(), "Target.rein".to_string())]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_refuses_a_case_only_rename_of_a_function_with_a_folder() {
+    // Decided from the names and the folder on disk, so this runs on any file system.
+    let root = folder_project("rename-case-folder");
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("A");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edit["error"]["message"],
+        "a rename that only changes case cannot move the folder `a/`; rename it in two steps through another name",
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_hard_link_of_the_source() {
+    let root = fs::canonicalize(temp_project("rename-hard-link")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    fs::hard_link(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+    // Nothing moved: both names still exist.
+    assert!(root.join("a.rein").exists() && root.join("c.rein").exists());
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_refuses_a_destination_that_is_a_symlink_to_the_source() {
+    let root = fs::canonicalize(temp_project("rename-symlink-dest")).unwrap();
+    fs::write(root.join("a.rein"), "/** A. */\nexport default function a() {\n  return `a`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n").unwrap();
+    std::os::unix::fs::symlink(root.join("a.rein"), root.join("c.rein")).unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    let message = edit["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("already exists"), "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_moves_the_editor_leftovers_of_the_folder_with_it() {
+    let root = folder_project("rename-leftovers");
+    fs::write(root.join("a/.DS_Store"), "").unwrap();
+    fs::write(root.join("a/Thumbs.db"), "").unwrap();
+    fs::write(root.join("a/b.rein~"), "").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    let mut params = at(&main, 2, 12);
+    params["newName"] = json!("c");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("a.rein", 1, 24, 1, 25), "c".to_string()),
+                (spot("a.rein", 2, 9, 2, 15), "@./c/b".to_string()),
+                (spot("main.rein", 2, 12, 2, 13), "c".to_string()),
+            ],
+            vec![
+                ("a.rein".to_string(), "c.rein".to_string()),
+                ("a/b.rein".to_string(), "c/b.rein".to_string()),
+                ("a/.DS_Store".to_string(), "c/.DS_Store".to_string()),
+                ("a/Thumbs.db".to_string(), "c/Thumbs.db".to_string()),
+                ("a/b.rein~".to_string(), "c/b.rein~".to_string()),
+            ]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -913,9 +1512,9 @@ fn labels(items: &Value) -> Vec<String> {
     items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
 }
 
-/// A buffer in support-ticket that calls the template with one argument given. Line 2, column 50 is after `, `.
+/// A buffer in support-ticket that calls the template with one argument given. Line 2, column 46 is after `, `.
 const PARTIAL_CALL: &str =
-    "/** R. */\nexport default function r() {\n  return @../templates/tell_customer(opening=`x`, );\n}\n";
+    "/** R. */\nexport default function r() {\n  return @./refund/tell_customer(opening=`x`, );\n}\n";
 
 #[test]
 fn completion_offers_argument_names_and_union_members() {
@@ -924,17 +1523,17 @@ fn completion_offers_argument_names_and_union_members() {
     initialize(&mut server);
 
     // Inside the call, after one named argument: the parameter not given yet.
-    let partial = uri_of(&root, "billing/partial.rein");
+    let partial = uri_of(&root, "partial.rein");
     server.open(&partial, PARTIAL_CALL);
-    let items = server.request(2, "textDocument/completion", at(&partial, 2, 50));
-    assert_eq!(labels(&items), ["nextStep="], "{items}");
-    assert_eq!(items["result"][0]["detail"], "nextStep: string");
+    let items = server.request(2, "textDocument/completion", at(&partial, 2, 46));
+    assert_eq!(labels(&items), ["next_step="], "{items}");
+    assert_eq!(items["result"][0]["detail"], "next_step: string");
 
     // After `case "`: the members of the switch subject. Each replaces the whole literal.
     let main = open_file(&mut server, &root, "main.rein");
-    let items = server.request(3, "textDocument/completion", at(&main, 15, 10));
+    let items = server.request(3, "textDocument/completion", at(&main, 16, 10));
     assert_eq!(labels(&items), ["\"billing\"", "\"account\"", "\"how_to\""], "{items}");
-    let range = json!({"start": {"line": 15, "character": 9}, "end": {"line": 15, "character": 18}});
+    let range = json!({"start": {"line": 16, "character": 9}, "end": {"line": 16, "character": 18}});
     assert_eq!(items["result"][0]["textEdit"]["range"], range);
 
     // After `c === "`: the members of `c`.
@@ -992,19 +1591,19 @@ fn signature_help_shows_the_callee_parameters() {
     let root = example("support-ticket");
     let mut server = Server::start();
     initialize(&mut server);
-    let partial = uri_of(&root, "billing/partial.rein");
+    let partial = uri_of(&root, "partial.rein");
     server.open(&partial, PARTIAL_CALL);
 
-    let help = server.request(2, "textDocument/signatureHelp", at(&partial, 2, 50));
+    let help = server.request(2, "textDocument/signatureHelp", at(&partial, 2, 46));
     let signature = &help["result"]["signatures"][0];
-    assert_eq!(signature["label"], "@../templates/tell_customer(opening: string, nextStep: string)");
-    assert_eq!(signature["parameters"][0]["label"], json!([28, 43]));
-    assert_eq!(signature["parameters"][1]["label"], json!([45, 61]));
+    assert_eq!(signature["label"], "@./refund/tell_customer(opening: string, next_step: string)");
+    assert_eq!(signature["parameters"][0]["label"], json!([24, 39]));
+    assert_eq!(signature["parameters"][1]["label"], json!([41, 58]));
     assert_eq!(signature["parameters"][1]["documentation"], "The next step the customer can expect.");
     assert_eq!(help["result"]["activeParameter"], 1, "{help}");
 
     // In the first argument, the first parameter is active.
-    let help = server.request(3, "textDocument/signatureHelp", at(&partial, 2, 40));
+    let help = server.request(3, "textDocument/signatureHelp", at(&partial, 2, 36));
     assert_eq!(help["result"]["activeParameter"], 0, "{help}");
 
     server.shutdown();
@@ -1054,6 +1653,126 @@ fn quick_fixes_add_doc_comments_and_name_arguments() {
     let (title, edit) = quick_fix(&mut server, 4, &positional, "missing argument `model`");
     assert_eq!(title, "Name the argument `model=`");
     assert_eq!(edit, insert_at(2, 18, "model="));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_moves_a_function_into_the_folder_of_its_only_caller() {
+    // `temp_project` writes `target.rein`. Here only `steps/fix_ci` calls it, so it is a nested relative reference.
+    let root = fs::canonicalize(temp_project("nest")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fixCi() {\n  return @../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "`steps/fix_ci` is only called by `flow/merge`; move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    assert_eq!(diag["severity"], 2, "{diag}");
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![
+                (spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string()),
+                (spot("steps/fix_ci.rein", 2, 9, 2, 19), "@../../target".to_string()),
+            ],
+            vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_leaves_out_a_name_edit_that_changes_nothing() {
+    // `fix_ci` keeps its name when it moves, so writing its function name again changes nothing and is not sent.
+    let root = fs::canonicalize(temp_project("nest-same-name")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fix_ci() {\n  return @../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "`steps/fix_ci` is only called by `flow/merge`; move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![
+                (spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string()),
+                (spot("steps/fix_ci.rein", 2, 9, 2, 19), "@../../target".to_string()),
+            ],
+            vec![("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string())]
+        ),
+        "{actions}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn quick_fix_moves_the_folder_of_nested_functions_with_the_file() {
+    // `steps/fix_ci/retry` is already in the folder of its only caller. When `steps/fix_ci` moves, it moves too.
+    let root = fs::canonicalize(temp_project("nest-folder")).unwrap();
+    let write = |rel: &str, text: &str| {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("main.rein", "/** Entry. */\nexport default function main() {\n  return @./flow/merge;\n}\n");
+    write("flow/merge.rein", "/** Merge. */\nexport default function merge() {\n  return @../steps/fix_ci;\n}\n");
+    write("steps/fix_ci.rein", "/** Fix CI. */\nexport default function fixCi() {\n  return @./fix_ci/retry;\n}\n");
+    write("steps/fix_ci/retry.rein", "/** Retry. */\nexport default function retry() {\n  return @../../target;\n}\n");
+    let mut server = start_with_file_renames();
+    let fix_ci = open_file(&mut server, &root, "steps/fix_ci.rein");
+
+    let part = "move it to `flow/merge/fix_ci.rein`";
+    let diags = server.wait_diagnostics(&fix_ci, |d| has_message(d, part));
+    let diag = diags.iter().find(|d| d["message"].as_str().unwrap().contains(part)).unwrap().clone();
+    let params = json!({"textDocument": {"uri": fix_ci}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(2, "textDocument/codeAction", params);
+    let action = &actions["result"][0];
+    assert_eq!(action["title"], "Move to flow/merge/fix_ci.rein", "{actions}");
+    // The reference from `steps/fix_ci` into its own folder stays as it is.
+    assert_eq!(
+        edits_of(&root, &action["edit"]),
+        (
+            vec![
+                (spot("flow/merge.rein", 2, 9, 2, 25), "@./merge/fix_ci".to_string()),
+                (spot("steps/fix_ci/retry.rein", 2, 9, 2, 22), "@../../../target".to_string()),
+            ],
+            vec![
+                ("steps/fix_ci.rein".to_string(), "flow/merge/fix_ci.rein".to_string()),
+                ("steps/fix_ci/retry.rein".to_string(), "flow/merge/fix_ci/retry.rein".to_string()),
+            ]
+        ),
+        "{actions}"
+    );
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
@@ -1159,4 +1878,196 @@ fn structs_hover_define_reference_rename_and_list() {
 
     server.shutdown();
     fs::remove_dir_all(&root).unwrap();
+}
+
+/// A program installed in the user scope. Its entry takes the PR link and asks whether it is a draft.
+const PR_HANDLING: &str = "interface Input {\n  /** The PR link. */\n  pr: string;\n  /** Is it a draft? */\n  draft: boolean;\n}\n/** Handle a PR. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Skip ${pr}.`;\n  }\n  return @./review(pr=pr);\n}\n";
+
+/// Hands off to the installed program. Line 5 holds the reference: `@` at column 9, `(` at column 26.
+const HANDOFF: &str = "/** Hand off. */\nexport default function handoff(\n  /** The PR link. */\n  pr: string,\n) {\n  return @pr-handling/main(pr=pr);\n}\n";
+
+#[test]
+fn program_references_resolve_through_the_scopes() {
+    let root = temp_project("progref");
+    let home = root.with_extension("home");
+    let program = home.join("pr-handling");
+    fs::create_dir_all(&program).unwrap();
+    fs::write(program.join("main.rein"), PR_HANDLING).unwrap();
+    fs::write(program.join("review.rein"), "/** Review. */\nexport default function review(\n  /** The PR link. */\n  pr: string,\n) {\n  return `Review ${pr}.`;\n}\n").unwrap();
+    fs::write(program.join("rein.json"), r#"{"entry":"main.rein"}"#).unwrap();
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    // Definition goes to the entry of the installed program, at its function name.
+    let def = server.request(2, "textDocument/definition", at(&handoff, 5, 12));
+    assert!(def["result"]["uri"].as_str().unwrap().ends_with("/pr-handling/main.rein"), "{def}");
+    assert_eq!(def["result"]["range"]["start"], json!({"line": 7, "character": 24}), "{def}");
+
+    // Hover names the program and its scope, then the function's doc and inputs.
+    let hover = server.request(3, "textDocument/hover", at(&handoff, 5, 12));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    for part in ["program `pr-handling`", "user scope", "**@pr-handling/main**", "Handle a PR.", "`pr: string`", "`draft: boolean`"] {
+        assert!(text.contains(part), "{part} not in {text}");
+    }
+
+    // After `@`, the installed programs. After `@pr-handling/`, its functions.
+    let items = server.request(4, "textDocument/completion", at(&handoff, 5, 10));
+    assert!(labels(&items).contains(&"@pr-handling".to_string()), "{items}");
+    let items = server.request(5, "textDocument/completion", at(&handoff, 5, 22));
+    assert_eq!(labels(&items), ["@pr-handling/main", "@pr-handling/review"], "{items}");
+
+    // Signature help shows the string inputs the hand-off passes.
+    let help = server.request(6, "textDocument/signatureHelp", at(&handoff, 5, 27));
+    assert_eq!(help["result"]["signatures"][0]["label"], "@pr-handling/main(pr: string)", "{help}");
+
+    // References to the program function in this program.
+    let mut params = at(&handoff, 5, 12);
+    params["context"] = json!({"includeDeclaration": false});
+    let refs = server.request(7, "textDocument/references", params);
+    assert_eq!(spots(&root, &refs["result"]), [spot("handoff.rein", 5, 9, 5, 26)], "{refs}");
+
+    // Rename does not cross programs.
+    let mut params = at(&handoff, 5, 12);
+    params["newName"] = json!("start");
+    let rename = server.request(8, "textDocument/rename", params);
+    assert!(rename["error"]["message"].as_str().unwrap().contains("another program"), "{rename}");
+
+    // A program that is not installed is an error, as `rein check` reports it.
+    let lost = uri_of(&root, "lost.rein");
+    server.open(&lost, "/** Lost. */\nexport default function lost() {\n  return @no-such-program;\n}\n");
+    server.wait_diagnostics(&lost, |diags| has_message(diags, "unknown program `no-such-program`"));
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+}
+
+/// Installs `pr-handling` in the user scope of `home`, as `program_references_resolve_through_the_scopes` does.
+fn install_pr_handling(home: &Path) -> PathBuf {
+    let program = home.join("pr-handling");
+    fs::create_dir_all(&program).unwrap();
+    fs::write(program.join("main.rein"), PR_HANDLING).unwrap();
+    fs::write(program.join("review.rein"), "/** Review. */\nexport default function review(\n  /** The PR link. */\n  pr: string,\n) {\n  return `Review ${pr}.`;\n}\n").unwrap();
+    fs::write(program.join("rein.json"), r#"{"entry":"main.rein"}"#).unwrap();
+    program
+}
+
+#[test]
+fn a_project_without_program_refs_checks_and_completes_without_programs() {
+    let root = temp_project("norefs");
+    let home = root.with_extension("home");
+    install_pr_handling(&home);
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+
+    // The file references only a local function, so the checker finds nothing wrong.
+    let main = uri_of(&root, "main.rein");
+    server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
+    let diags = server.wait_diagnostics(&main, |d| d.is_empty());
+    assert!(diags.is_empty(), "{diags:?}");
+
+    // After `@./` the local functions only. The installed program is not offered.
+    let items = server.request(2, "textDocument/completion", at(&main, 2, 12));
+    let names = labels(&items);
+    assert_eq!(names, ["@./target"], "{items}");
+
+    // After a bare `@` the installed programs are still offered next to the local ones.
+    let items = server.request(3, "textDocument/completion", at(&main, 2, 10));
+    assert!(labels(&items).contains(&"@pr-handling".to_string()), "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn an_unsaved_buffer_of_an_installed_program_shows_in_the_hand_off() {
+    let root = temp_project("overlay");
+    let home = root.with_extension("home");
+    let program = install_pr_handling(&home);
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    // Open in the editor, the installed program's entry has an edit that is not saved.
+    let edited = PR_HANDLING.replace("Handle a PR.", "Handle a PR, unsaved.");
+    server.open(&uri_of(&program, "main.rein"), &edited);
+
+    // The hand-off's hover shows the buffer's doc comment, not the file on disk.
+    let hover = server.request(2, "textDocument/hover", at(&handoff, 5, 12));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("Handle a PR, unsaved."), "{text}");
+    assert!(text.contains("program `pr-handling`"), "{text}");
+
+    // Completion after `@pr-handling/` still lists the program's functions.
+    let items = server.request(3, "textDocument/completion", at(&handoff, 5, 22));
+    assert_eq!(labels(&items), ["@pr-handling/main", "@pr-handling/review"], "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unsaved_buffer_of_a_program_reached_through_a_symlink_shows_in_the_hand_off() {
+    let root = temp_project("overlay-link");
+    let home = root.with_extension("home");
+    let store = root.with_extension("store");
+    // pnpm links `node_modules/<name>` to the package folder, so the program's folder is reached through a symlink.
+    let program = install_pr_handling(&store);
+    fs::create_dir_all(&home).unwrap();
+    std::os::unix::fs::symlink(&program, home.join("pr-handling")).unwrap();
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    let edited = PR_HANDLING.replace("Handle a PR.", "Handle a PR, unsaved.");
+    server.open(&uri_of(&home.join("pr-handling"), "main.rein"), &edited);
+
+    // The hand-off shows the unsaved buffer, not the copy on disk.
+    let hover = server.request(2, "textDocument/hover", at(&handoff, 5, 12));
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("Handle a PR, unsaved."), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
+    fs::remove_dir_all(&store).unwrap();
+}
+
+#[test]
+fn an_unsaved_buffer_the_loader_skips_is_not_a_function_of_the_program() {
+    let root = temp_project("overlay-skip");
+    let home = root.with_extension("home");
+    let program = install_pr_handling(&home);
+    // `sub` is a nested flow, as it has its own main.rein. `.cache` is hidden, and `target` is build output.
+    fs::create_dir_all(program.join("sub")).unwrap();
+    fs::write(program.join("sub/main.rein"), PR_HANDLING).unwrap();
+    fs::create_dir_all(program.join(".cache")).unwrap();
+    fs::create_dir_all(program.join("target")).unwrap();
+    fs::create_dir_all(program.join("helpers")).unwrap();
+    let mut server = Server::start_with(&[("REIN_HOME", &home), ("REIN_SYSTEM_DIRS", &home.join("none"))]);
+    initialize(&mut server);
+    let handoff = uri_of(&root, "handoff.rein");
+    server.open(&handoff, HANDOFF);
+
+    let stray = "/** Stray. */\nexport default function stray() {\n  return `stray`;\n}\n";
+    for file in ["sub/extra.rein", ".cache/extra.rein", "target/extra.rein"] {
+        server.open(&uri_of(&program, file), stray);
+    }
+    // A folder the loader does load still shows its open buffer as a function.
+    server.open(&uri_of(&program, "helpers/extra.rein"), stray);
+
+    // Completion after `@pr-handling/` lists what the loader finds on disk, plus the open buffer that it would load.
+    let items = server.request(3, "textDocument/completion", at(&handoff, 5, 22));
+    assert_eq!(labels(&items), ["@pr-handling/helpers/extra", "@pr-handling/main", "@pr-handling/review"], "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+    fs::remove_dir_all(&home).unwrap();
 }

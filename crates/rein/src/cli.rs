@@ -10,6 +10,7 @@ use rein_core::diagnostic::{line_col, Severity};
 use rein_core::eval::{self, Outcome};
 use rein_core::project::{Project, ENTRY};
 
+use crate::run_log;
 use crate::scopes;
 use rein_core::step::{invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
@@ -97,6 +98,10 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
         }
         Ok(Outcome::Ref { target, .. }) => show_ref(&project, &target, json),
         Ok(Outcome::NeedInput(name)) => need_input(&sf.function, &name, json),
+        Ok(Outcome::Call { target, response, .. }) => {
+            let instruction = format!("Run `{target}` to its end. Its final instruction is the result.");
+            request(&sf.function, &instruction, &response, json)
+        }
     }
 }
 
@@ -104,41 +109,53 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
 /// `rein_core::step::step` decides everything. A flow name, from `--flow` or the stdin `flow` field, is
 /// resolved through the scoped `rein/` folders.
 pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool, json: bool) -> u8 {
-    let response = match build_request(entry, answers, inputs, from_stdin) {
-        Err(message) => invalid_request(message),
-        Ok(request) => {
-            let flow = flow.or_else(|| request.flow.clone());
-            match load_flow(root, flow) {
+    let built = build_request(entry, answers, inputs, from_stdin);
+    let flow = flow.or_else(|| built.as_ref().ok().and_then(|r| r.flow.clone()));
+    let program = flow.clone().or_else(|| root.as_ref().map(|r| r.display().to_string()));
+    let (request, response) = match built {
+        Err(message) => (empty_request(), invalid_request(message)),
+        Ok(mut request) => {
+            let response = match load_flow(root, flow) {
                 Ok((mut project, entry)) => {
                     // A callback input such as `then=@program` may name a program the source does not name.
                     let named = request.inputs.values().filter_map(|v| v.strip_prefix('@')).filter(|v| !v.starts_with('.'));
                     let names = named.map(|v| v.split('/').next().unwrap_or_default().to_string()).collect();
-                    project.link_program_names(names, &|name| scopes::find(name).map(|f| (f.root, f.entry)));
-                    let mut request = request;
+                    project.link_program_names(names, &scopes::find, &[]);
                     if request.entry == ENTRY {
                         request.entry = entry;
                     }
                     step_flow(&project, &request)
                 }
                 Err(message) => invalid_request(message),
-            }
+            };
+            (request, response)
         }
     };
+    run_log::step(&request, program.as_deref(), &response);
     print_step(&response, json || from_stdin);
     exit_code(&response)
 }
 
+/// The request that a failed `rein step` logs, when the request itself could not be read.
+fn empty_request() -> StepRequest {
+    StepRequest { version: PROTOCOL_VERSION, entry: ENTRY.to_string(), answers: Default::default(), flow: None, inputs: Default::default() }
+}
+
 /// The project and its entry function for `--root DIR`, a program name or `.rein` path, or the nearest root from
-/// here. A name's entry comes from the program manifest, else `main`. A file's entry is its name.
+/// here. A root's entry is `entry` in `rein.json`, else `main`, as `rein check` uses it. A name's entry comes from
+/// the program manifest. A file's entry is its name.
 pub(crate) fn load_flow(root: Option<PathBuf>, flow: Option<String>) -> Result<(Project, String), String> {
     match (root, flow) {
         (Some(_), Some(_)) => Err("--flow and --root are mutually exclusive".to_string()),
-        (Some(root), None) => Ok((load(Some(root))?, ENTRY.to_string())),
         (None, Some(name)) => {
             let (root, entry) = scopes::locate(&name)?;
             Ok((load(Some(root))?, entry))
         }
-        (None, None) => Ok((load(None)?, ENTRY.to_string())),
+        (root, None) => {
+            let project = load(root)?;
+            let entry = project.entry().to_string();
+            Ok((project, entry))
+        }
     }
 }
 
@@ -153,7 +170,7 @@ pub(crate) fn exit_code(response: &StepResponse) -> u8 {
 }
 
 /// The request from stdin (JSON, all of it) or from `--entry` and `--answer key=value` flags.
-fn build_request(entry: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool) -> Result<StepRequest, String> {
+pub(crate) fn build_request(entry: Option<String>, answers: &[String], inputs: &[String], from_stdin: bool) -> Result<StepRequest, String> {
     if from_stdin {
         if entry.is_some() || !answers.is_empty() || !inputs.is_empty() {
             return Err("--stdin reads the whole request; do not combine it with --entry, --answer or --input".into());

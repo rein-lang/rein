@@ -7,6 +7,7 @@ use std::process::{Command, Output, Stdio};
 
 fn rein(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(args)
         .env("REIN_HOME", home)
         .env("REIN_SYSTEM_DIRS", home.join("none"))
@@ -92,6 +93,7 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     // On stdin the answer is a real JSON object.
     let request = r#"{"entry":"main","answers":{"main.pick":{"pr":"https://x/pr/2","task":"review"},"@pr-handling/main.draft":"false"}}"#;
     let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(["step", "picker", "--stdin"])
         .env("REIN_HOME", &home)
         .env("REIN_SYSTEM_DIRS", home.join("none"))
@@ -103,5 +105,121 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     let out = child.wait_with_output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("Handle https://x/pr/2.") && text.contains("\"main.pick\":{\"pr\""), "{text}");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+/// Installs `a`, which asks one question and hands off to `b`, and `b`, which asks one question and returns
+/// `b_call`, and `c`, which is done at once. Returns the REIN_HOME.
+fn chain(tag: &str, b_call: &str) -> PathBuf {
+    let home = std::env::temp_dir().join(format!("rein-handoff-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&home);
+    let ask = |name: &str, call: &str| {
+        format!("/** {name}. */\nexport default function main(\n  /** Go on? */\n  go: boolean,\n) {{\n  if (go) {{\n    return {call};\n  }}\n  return `stop`;\n}}\n")
+    };
+    program(&home, "a", &ask("A", "@b/main"));
+    program(&home, "b", &ask("B", b_call));
+    program(&home, "c", "/** C. */\nexport default function main() {\n  return `done c`;\n}\n");
+    home
+}
+
+/// The first step of `a` is an error that names `missing`, and `rein check` and `rein run` report the same.
+fn assert_first_step_names(home: &Path, missing: &str) {
+    let out = rein(home, &["step", "a", "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"kind\":\"error\"") && text.contains(missing), "{text}");
+    let out = rein(home, &["check", home.join("a").to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains(missing), "{out:?}");
+    let out = rein(home, &["run", "a"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(missing), "{out:?}");
+}
+
+#[test]
+fn a_chain_of_hand_offs_with_every_program_installed_runs() {
+    let home = chain("present", "@c/main");
+    let out = rein(&home, &["check", home.join("a").to_str().unwrap()]);
+    assert!(out.status.success(), "{out:?}");
+    let out = rein(&home, &["step", "a", "--json"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let out = rein(&home, &["step", "a", "--answer", "main.go=true", "--answer", "@b/main.go=true", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("done c") && text.contains("@c/main"), "{text}");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_program_missing_behind_another_program() {
+    let home = chain("transitive", "@d/main");
+    assert_first_step_names(&home, "`@b/main` hands off to `@d/main`: unknown program `d`; run `rein list` to list programs, or `rein install -g d` to install it");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_function_missing_in_an_installed_program() {
+    let home = chain("nofn", "@c/other");
+    assert_first_step_names(&home, "`@b/main` hands off to `@c/other`: cannot find function `other` in program `c`");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_program_missing_from_the_entry() {
+    let home = chain("direct", "@c/main");
+    fs::remove_dir_all(home.join("b")).unwrap();
+    assert_first_step_names(&home, "unknown program `b`; run `rein list` to list programs, or `rein install -g b` to install it");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn a_package_reaches_only_the_programs_its_package_json_declares() {
+    let home = sandbox("deps", "@pr-handling/main(pr=pr)");
+    let handler = home.join("handler");
+    fs::write(handler.join("package.json"), r#"{"name": "handler"}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("program `pr-handling` is not a dependency of `handler`"), "{text}");
+
+    let out = rein(&home, &["step", "handler", "--input", "pr=u/1", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("is not a dependency of `handler`"), "{text}");
+
+    fs::write(handler.join("package.json"), r#"{"name": "handler", "dependencies": {"pr-handling": "1"}}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+const AWAITER: &str = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR handled? */\n  const handled: boolean = await @pr-handling/main(pr=pr);\n\n  if (handled) {\n    return `Report ${pr} as handled.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
+
+#[test]
+fn await_of_a_program_follows_the_dependency_rule_and_returns_its_result() {
+    let home = std::env::temp_dir().join(format!("rein-handoff-await-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&home);
+    program(&home, "pr-handling", TARGET);
+    program(&home, "handler", AWAITER);
+    let handler = home.join("handler");
+    fs::write(handler.join("package.json"), r#"{"name": "handler"}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("program `pr-handling` is not a dependency of `handler`"), "{text}");
+
+    fs::write(handler.join("package.json"), r#"{"name": "handler", "peerDependencies": {"pr-handling": "*"}}"#).unwrap();
+    let out = rein(&home, &["check", handler.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+
+    let draft = "main.handled>@pr-handling/main.draft=false";
+    let out = rein(&home, &["step", "handler", "--input", "pr=u/1", "--answer", draft, "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((v["kind"].as_str(), v["key"].as_str()), (Some("request"), Some("main.handled")), "{v}");
+    assert_eq!(v["instruction"], "Handle u/1.\n\nThen answer `main.handled` with the result.");
+
+    let out = rein(&home, &["step", "handler", "--input", "pr=u/1", "--answer", draft, "--answer", "main.handled=yes", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((v["kind"].as_str(), v["instruction"].as_str()), (Some("done"), Some("Report u/1 as handled.")), "{v}");
+
+    let out = rein(&home, &["graph", "handler", "--format", "json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"call\"") && text.contains("\"kind\": \"program\""), "{text}");
     fs::remove_dir_all(&home).unwrap();
 }

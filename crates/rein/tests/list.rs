@@ -63,6 +63,7 @@ impl Sandbox {
     /// `rein list ...` run from a folder under the repo. Its stdout is a pipe, so it is not a terminal.
     fn rein(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_rein"))
+            .env("REIN_RUNS_DIR", "")
             .args(args)
             .current_dir(self.repo().join("sub"))
             .env("HOME", self.base.join("home"))

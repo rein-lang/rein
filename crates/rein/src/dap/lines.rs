@@ -3,7 +3,7 @@
 //! gives its text, and where a function hands off. Each falls back to the function's first line when no
 //! statement matches.
 
-use rein_core::ast::{walk_stmts, walk_vars, Binding, Expr, Piece, ReturnValue, Stmt};
+use rein_core::ast::{walk_stmts, walk_vars, Awaited, Binding, Expr, Piece, ReturnValue, Stmt};
 use rein_core::diagnostic::line_col;
 use rein_core::project::{Project, SourceFile};
 
@@ -107,14 +107,18 @@ pub fn handoff(project: &Project, caller: &str, callee: &str) -> usize {
     };
     let bindings = project.bindings(caller);
     let passed = first(sf, |s| {
-        let Stmt::Return(r) = s else { return None };
-        let key = match &r.value {
+        let (value, at) = match s {
+            Stmt::Return(r) => (&r.value, r.span.start),
+            Stmt::Request { awaited: Awaited::Call(value), span, .. } => (value, span.start),
+            _ => return None,
+        };
+        let key = match value {
             ReturnValue::Ref(target) => target.value.as_str(),
             ReturnValue::Call(call) => call.callee.key(),
             _ => return None,
         };
         match bindings.get(key) {
-            Some(Binding::Function(path)) if path == callee => Some(r.span.start),
+            Some(Binding::Function(path)) if path == callee => Some(at),
             _ => None,
         }
     });

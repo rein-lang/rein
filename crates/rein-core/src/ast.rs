@@ -154,6 +154,10 @@ impl Function {
         self.input_struct = Some(found);
     }
 
+    pub fn text_inputs(&self) -> impl Iterator<Item = &Input> {
+        self.inputs.iter().filter(|i| i.ty == InputType::Text)
+    }
+
     /// The `string` and callback (`@`) parameters, in declaration order. Their values come from the caller.
     pub fn passed_inputs(&self) -> impl Iterator<Item = &Input> {
         self.inputs.iter().filter(|i| matches!(i.ty, InputType::Text | InputType::Callback))
@@ -319,12 +323,11 @@ pub enum Stmt {
         cases: Vec<Case>,
         span: Span,
     },
-    /// `/** question */ const name: type = await request(arg);`. The answer is a parameter for the rest of its block.
+    /// `/** question */ const name: type = await request(arg);`, or `= await @program(args);`. The answer is a
+    /// parameter for the rest of its block.
     Request {
         response: Box<Input>,
-        /// The `request` name.
-        callee: Spanned<String>,
-        arg: Value,
+        awaited: Awaited,
         span: Span,
     },
     Return(Spanned<ReturnValue>),
@@ -337,6 +340,16 @@ impl Stmt {
             Stmt::Return(r) => r.span,
         }
     }
+}
+
+/// What an answer awaits.
+#[derive(Debug, Clone)]
+pub enum Awaited {
+    /// `await request(arg)`. `callee` is the `request` name.
+    Request { callee: Spanned<String>, arg: Value },
+    /// `await @./fn`, `await @program(args)`: a call with return. The callee runs as a hand-off does. Its final
+    /// text becomes a request whose answer is this `const`. Only `ReturnValue::Ref` or `ReturnValue::Call`.
+    Call(ReturnValue),
 }
 
 /// One group of `case` labels that share a body, such as `case "a": case "b": return x;`.

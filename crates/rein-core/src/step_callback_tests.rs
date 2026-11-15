@@ -2,7 +2,9 @@
 
 use super::*;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::flows::{Flow, Scope};
 
 /// `pr` and a callback `then`, as an inline struct.
 const INPUT: &str = "interface Input {\n  /** The PR link. */\n  pr: string;\n  /** Where to go when done. */\n  then: @;\n}\n";
@@ -97,13 +99,13 @@ fn programs() -> Project {
     let handler = write("handler", &[("main.rein", handler)]);
     let pr = write("pr-handling", &[("main.rein", pr_handling), ("merge.rein", merge())]);
     let mut project = Project::load(&handler).unwrap();
-    let find = move |name: &str| -> Result<(PathBuf, String), String> {
-        let dir: &Path = match name {
-            "handler" => &handler,
-            "pr-handling" => &pr,
+    let find = move |name: &str| -> Result<Flow, String> {
+        let root: PathBuf = match name {
+            "handler" => handler.clone(),
+            "pr-handling" => pr.clone(),
             _ => return Err(format!("unknown program `{name}`")),
         };
-        Ok((dir.to_path_buf(), "main".into()))
+        Ok(Flow { name: name.into(), scope: Scope::User, root, description: String::new(), entry: "main".into(), shadowed_by: None, version: None, engines_rein: None })
     };
     project.link_programs(&find);
     project

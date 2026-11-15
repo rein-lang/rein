@@ -896,6 +896,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "clap-markdown",
+ "form_urlencoded",
  "glob",
  "insta",
  "lsp-server",

@@ -58,9 +58,9 @@ fn done_is_the_return_that_gives_the_text() {
 #[test]
 fn request_is_the_line_of_the_await() {
     let p = project("support-ticket");
-    let faq = p.get("answer/faq").unwrap();
+    let faq = p.get("faq").unwrap();
     assert_eq!(
         request(faq, "solved"),
-        line_with("support-ticket", "answer/faq.rein", "await request")
+        line_with("support-ticket", "faq.rein", "await request")
     );
 }

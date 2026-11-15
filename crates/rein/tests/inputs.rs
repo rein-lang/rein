@@ -53,6 +53,7 @@ impl Drop for Flow {
 /// Runs `rein` with `args`, and `stdin` as its standard input when given.
 fn rein(args: &[&str], stdin: Option<&str>) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_rein"))
+        .env("REIN_RUNS_DIR", "")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -142,8 +143,8 @@ fn pr_handling_review_walk_passes_the_link_to_the_review_template() {
     let (last, codes) = walk_pr_handling(|key| match key {
         "main.draft" => "no",
         "main.task" => "review",
-        "review.ownPr" => "no",
-        "review.securitySensitive" => "no",
+        "review.own_pr" => "no",
+        "review.security_sensitive" => "no",
         "review.verdict" => "clean",
         other => panic!("the walk asked an unexpected key `{other}`"),
     });
@@ -393,7 +394,7 @@ fn argument_that_is_not_a_string_input_is_a_check_error() {
 #[test]
 fn string_input_is_a_template_argument_and_the_check_is_clean() {
     let flow = Flow::new(&[
-        ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return @./tpl(a=pr, b=`b`);\n  }\n  return `n`;\n}\n"),
+        ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return @./tpl(a=pr, b=`b`);\n  }\n\n  return `n`;\n}\n"),
         ("tpl.rein", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** Template. */\nexport default function tpl({ a, b }: Input) {\n  return `${a} then ${b}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
