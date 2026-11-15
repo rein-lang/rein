@@ -87,7 +87,7 @@ pub fn call_at(text: &str, off: usize) -> Option<CallContext> {
 pub fn callee_params<'a>(project: &'a Project, from: &str, callee: &str) -> Option<Vec<&'a Input>> {
     match project.binding_for(from, callee).ok()? {
         Binding::Template { function, .. } => Some(function.inputs.iter().collect()),
-        Binding::Function(path) => Some(project.get(&path)?.function.text_inputs().collect()),
+        Binding::Function(path) => Some(project.get(&path)?.function.passed_inputs().collect()),
         Binding::Request => None,
     }
 }

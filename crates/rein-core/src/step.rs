@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{walk_stmts, Awaited, Binding, Function, Input, InputType, ReturnValue, Stmt, Struct};
+use crate::ast::{walk_stmts, Awaited, Binding, Function, Input, InputType, ReturnValue, Stmt, Struct, Value};
 use crate::diagnostic::{line_col, Severity};
 use crate::eval::{self, Outcome};
 use crate::project::{Project, ENTRY};
@@ -189,7 +189,8 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
         );
         return failure(message, None, errors, answers, Vec::new());
     }
-    if let Err((key, message)) = check_answers(project, &req.entry, &req.answers) {
+    let starts = entry_starts(project, req);
+    if let Err((key, message)) = check_answers(project, &starts, &req.answers) {
         return failure(message, Some(key), Vec::new(), answers, Vec::new());
     }
     let Some(entry) = project.get(&req.entry) else {
@@ -211,12 +212,17 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
 
     let mut trace = Vec::new();
     let mut current = req.entry.clone();
-    // The `string` values of the function being run. The entry gets them from the request; a hand-off
-    // passes them on, bound to the target's `string` parameters by name.
-    let mut strings: BTreeMap<String, String> = req.inputs.clone();
+    // The `string` values of the function being run, and the qualified path of each callback. The entry gets them
+    // from the request; a hand-off passes them on, bound to the target's parameters by name.
+    let mut strings = match entry_values(project, &entry.function, &req.inputs) {
+        Ok(values) => values,
+        Err(message) => return failure(message, None, Vec::new(), answers, Vec::new()),
+    };
+    // How often each function was entered in each call scope in this call. A later visit has its own answers.
+    let mut visits: HashMap<String, usize> = HashMap::new();
     // The key prefix of the call being walked: empty at the top, else the caller's answer key, such as `main.b`.
     let mut scope = String::new();
-    // The callers that wait in an `await`, innermost last: the function, its scope, and the answer the callee's
+    // The callers that wait in an `await`, innermost last: the function, its owner key, and the answer the callee's
     // text fills.
     let mut callers: Vec<(String, String, String)> = Vec::new();
     for _ in 0..HOP_LIMIT {
@@ -230,8 +236,9 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
                 trace,
             );
         };
-        // The owner of this visit's answer keys: `fn`, or `main.b>fn` inside the call `main.b`.
-        let owner = scoped(&scope, &current);
+        // The owner of this visit's answer keys: `fn`, `fn#2` on a later visit, or `main.b>fn` inside the call `main.b`.
+        let visit = visits.entry(scoped(&scope, &current)).or_insert(0);
+        let owner = scoped(&scope, &visit_key(&current, visit));
         owners.push(owner.clone());
         let mut inputs = inputs_of(&owner, &req.answers);
         inputs.extend(strings.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -241,25 +248,24 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
         };
         match outcome {
             // Auto-follow: the agent does not need to see a hop that asks nothing.
-            Outcome::Ref { target, args } => match bind(project, &current, &target, args) {
+            Outcome::Ref { target, args } => match bind(project, &target, args) {
                 Ok((target, bound)) => (current, strings) = (target, bound),
                 Err(message) => return failure(message, None, Vec::new(), answers, trace),
             },
             // A call with return: walk the callee as a hand-off, and remember who waits for its text.
-            Outcome::Call { target, args, response } => match bind(project, &current, &target, args) {
+            Outcome::Call { target, args, response } => match bind(project, &target, args) {
                 Ok((target, bound)) => {
                     // Each call gets its own keys, so a second call of `fn`, or a recursive call, asks again.
                     let caller = std::mem::replace(&mut current, target);
-                    let caller_scope = std::mem::replace(&mut scope, format!("{owner}.{response}"));
-                    callers.push((caller, caller_scope, response));
+                    scope = format!("{owner}.{response}");
+                    callers.push((caller, owner, response));
                     strings = bound;
                 }
                 Err(message) => return failure(message, None, Vec::new(), answers, trace),
             },
             Outcome::Text(text) => {
                 // The callee of an `await` ended. Its text is a request whose answer is the caller's `const`.
-                if let Some((caller, caller_scope, response)) = callers.pop() {
-                    let caller_owner = scoped(&caller_scope, &caller);
+                if let Some((caller, caller_owner, response)) = callers.pop() {
                     let instruction = format!("{text}\n\nThen answer `{caller_owner}.{response}` with the result.");
                     return request(project, &caller, &caller_owner, &response, instruction, answers, trace);
                 }
@@ -308,20 +314,15 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
     failure(message, None, Vec::new(), answers, trace)
 }
 
-/// The function a hand-off or a call from `from` goes to, and its `string` values, bound by name from `args`.
-fn bind(
-    project: &Project,
-    from: &str,
-    target: &str,
-    args: Vec<(String, String)>,
-) -> Result<(String, BTreeMap<String, String>), String> {
-    let target = project.qualify(from, target);
-    let Some(next) = project.get(&target) else {
+/// The function a hand-off or a call goes to, and its `string` values, bound by name from `args`. `target` is already
+/// qualified: a binding of a linked program gives `@program/path`, and a callback value is the path its caller gave.
+fn bind(project: &Project, target: &str, args: Vec<(String, String)>) -> Result<(String, BTreeMap<String, String>), String> {
+    let Some(next) = project.get(target) else {
         return Err(format!("unknown function `{target}`"));
     };
     let mut given: BTreeMap<String, String> = args.into_iter().collect();
     let mut bound = BTreeMap::new();
-    for input in next.function.text_inputs() {
+    for input in next.function.passed_inputs() {
         let name = &input.name.value;
         let Some(value) = given.remove(name) else {
             return Err(format!("`{target}` is missing argument `{name}`"));
@@ -331,7 +332,7 @@ fn bind(
     if let Some(extra) = given.keys().next() {
         return Err(format!("`{target}` has no parameter `{extra}`"));
     }
-    Ok((target, bound))
+    Ok((target.to_string(), bound))
 }
 
 /// A request for the `const` answer `response` of `function`, after the agent does `instruction`. `owner` is the
@@ -397,6 +398,7 @@ pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
+        InputType::Callback => "callback",
         InputType::Struct(_) => "struct",
     };
     (name.to_string(), options)
@@ -445,9 +447,9 @@ fn error_diagnostics(project: &Project, entry: &str) -> Vec<StepDiagnostic> {
 }
 
 /// The `(key, message)` of the first answer that names no parameter or answer, or has a bad value.
-fn check_answers(project: &Project, entry: &str, answers: &Answers) -> Result<(), (String, String)> {
+fn check_answers(project: &Project, starts: &[String], answers: &Answers) -> Result<(), (String, String)> {
     for (key, raw) in answers {
-        let Some((function, input)) = declared(project, entry, key) else {
+        let Some((function, input)) = declared(project, starts, key) else {
             return Err((key.clone(), format!("unknown key `{key}`")));
         };
         if input.ty == InputType::Text {
@@ -456,6 +458,9 @@ fn check_answers(project: &Project, entry: &str, answers: &Answers) -> Result<()
                 format!("`{key}` is a string parameter; only a template takes one"),
             ));
         }
+        if input.ty == InputType::Callback {
+            return Err((key.clone(), format!("`{key}` is a callback; the caller passes it")));
+        }
         eval::check_value(function, input, raw).map_err(|message| (key.clone(), message))?;
     }
     Ok(())
@@ -463,52 +468,88 @@ fn check_answers(project: &Project, entry: &str, answers: &Answers) -> Result<()
 
 /// The parameter or `const` answer that `key` names. Names have no dots, so the last dot splits the key. A key
 /// inside a call, such as `main.b>fn.ok`, names `fn.ok`, and each part before a `>` must name a `const` answer.
-fn declared<'a>(project: &'a Project, entry: &str, key: &str) -> Option<(&'a Function, &'a Input)> {
+fn declared<'a>(project: &'a Project, starts: &[String], key: &str) -> Option<(&'a Function, &'a Input)> {
     let (owner, name) = key.rsplit_once('.')?;
-    let f = &project.get(owner_function(project, entry, owner)?)?.function;
+    let f = &project.get(owner_function(project, starts, owner)?)?.function;
     f.input(name).or_else(|| f.response(name)).map(|i| (f, i))
 }
 
-/// The function that `owner` names, such as `fn` for `main.a>fn`, when each call in it is one a walk from `entry`
-/// can make: the first part is a function that `entry` reaches through hand-offs, outside any call, and each part
+/// Where a walk from the request's entry starts: the entry, then the target of each callback input the request gives.
+fn entry_starts(project: &Project, req: &StepRequest) -> Vec<String> {
+    let mut starts = vec![req.entry.clone()];
+    let callbacks = project.get(&req.entry).into_iter().flat_map(|sf| sf.function.inputs.iter()).filter(|i| i.ty == InputType::Callback);
+    starts.extend(callbacks.filter_map(|i| project.callback_target(req.inputs.get(&i.name.value)?).ok()));
+    starts
+}
+
+/// The function that `owner` names, such as `fn` for `main.a>fn`, when each call in it is one a walk from `starts`
+/// can make: the first part is a function that the walk reaches through hand-offs, outside any call, and each part
 /// before a `>` is `<function>.<const>`, an `await` whose target reaches the next part's function through
 /// hand-offs. `None` for any other owner, so its keys are unknown. An owner with no `>` is any function, as before.
-fn owner_function<'a>(project: &Project, entry: &str, owner: &'a str) -> Option<&'a str> {
-    let mut reach: Option<BTreeSet<String>> = owner.contains(CALL).then(|| handoff_reach(project, entry.to_string()));
+fn owner_function<'a>(project: &Project, starts: &[String], owner: &'a str) -> Option<&'a str> {
+    let mut reach: Option<BTreeSet<String>> = None;
+    // The callbacks the walk holds: the entry's callback inputs, and the `@` arguments on its way.
+    let mut held = BTreeSet::new();
+    if owner.contains(CALL) {
+        let (seen, passed) = handoff_reach(project, starts.to_vec());
+        held.extend(starts.iter().skip(1).cloned());
+        held.extend(passed);
+        reach = Some(seen);
+    }
     let mut parts = owner.split(CALL).peekable();
     while let Some(part) = parts.next() {
         let last = parts.peek().is_none();
-        let function = if last { part } else { part.rsplit_once('.')?.0 };
+        let function = bare_function(if last { part } else { part.rsplit_once('.')?.0 });
         if reach.as_ref().is_some_and(|r| !r.contains(function)) {
             return None;
         }
         if last {
             return Some(function);
         }
-        reach = Some(call_reach(project, function, part.rsplit_once('.')?.1)?);
+        let (next, next_held) = call_reach(project, function, part.rsplit_once('.')?.1, &held)?;
+        reach = Some(next);
+        held = next_held;
     }
     None
 }
 
-/// The functions a walk can be in during the call `<function>.<name>`: the target of that `await`, and each
-/// function the target reaches through hand-offs. `None` when `name` is not an `await` of a function.
-fn call_reach(project: &Project, function: &str, name: &str) -> Option<BTreeSet<String>> {
+/// The functions a walk can be in during the call `<function>.<name>`, and the callbacks it holds there. The walk is in
+/// the target of that `await`, in the `@` arguments it passes, and in each function these reach through hand-offs. A
+/// callback passed by name, such as `then=then`, is one the caller `held`, so each held callback is reached too.
+/// `None` when `name` is not an `await` of a function.
+fn call_reach(
+    project: &Project,
+    function: &str,
+    name: &str,
+    held: &BTreeSet<String>,
+) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
     let f = &project.get(function)?.function;
-    let mut target = None;
+    let mut awaited = None;
     walk_stmts(&f.body, &mut |s| {
         if let Stmt::Request { response, awaited: Awaited::Call(value), .. } = s {
             if response.name.value == name {
-                target = target.or(ref_key(value));
+                awaited = awaited.or(Some(value));
             }
         }
     });
-    Some(handoff_reach(project, follow(project, function, target?)?))
+    let value = awaited?;
+    let args: Vec<String> = arg_keys(value).into_iter().filter_map(|k| follow(project, function, k)).collect();
+    let mut starts = vec![follow(project, function, ref_key(value)?)?];
+    starts.extend(args.iter().cloned());
+    starts.extend(held.iter().cloned());
+    let (reach, passed) = handoff_reach(project, starts);
+    let mut callbacks = held.clone();
+    callbacks.extend(args);
+    callbacks.extend(passed);
+    Some((reach, callbacks))
 }
 
-/// `start`, and each function it reaches through hand-offs (returns, not awaits).
-fn handoff_reach(project: &Project, start: String) -> BTreeSet<String> {
-    let mut queue = vec![start];
+/// `starts`, and each function they reach through hand-offs (returns, not awaits), and the `@` arguments those
+/// returned calls pass on. A returned call passes its `@` arguments on, so a callback the caller gave is reached too.
+fn handoff_reach(project: &Project, starts: Vec<String>) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut queue = starts;
     let mut seen = BTreeSet::new();
+    let mut passed = BTreeSet::new();
     while let Some(g) = queue.pop() {
         if !seen.insert(g.clone()) {
             continue;
@@ -516,13 +557,14 @@ fn handoff_reach(project: &Project, start: String) -> BTreeSet<String> {
         let Some(sf) = project.get(&g) else { continue };
         walk_stmts(&sf.function.body, &mut |s| {
             if let Stmt::Return(r) = s {
-                if let Some(next) = ref_key(&r.value).and_then(|k| follow(project, &g, k)) {
-                    queue.push(next);
-                }
+                let args: Vec<String> = arg_keys(&r.value).into_iter().filter_map(|k| follow(project, &g, k)).collect();
+                queue.extend(ref_key(&r.value).into_iter().filter_map(|k| follow(project, &g, k)));
+                queue.extend(args.iter().cloned());
+                passed.extend(args);
             }
         });
     }
-    seen
+    (seen, passed)
 }
 
 /// The reference key a returned or awaited value names, such as `./x` or `program/fn`. `None` for text.
@@ -530,8 +572,14 @@ fn ref_key(v: &ReturnValue) -> Option<&str> {
     match v {
         ReturnValue::Ref(r) => Some(&r.value),
         ReturnValue::Call(c) => Some(c.callee.key()),
-        ReturnValue::Text(_) | ReturnValue::Template(_) => None,
+        ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => None,
     }
+}
+
+/// The reference keys passed as `@` arguments of a call, such as `./after` in `then=@./after`. Empty for other values.
+fn arg_keys(v: &ReturnValue) -> Vec<&str> {
+    let ReturnValue::Call(c) = v else { return Vec::new() };
+    c.args.iter().filter_map(|a| if let Value::Ref(r) = &a.value { Some(r.value.as_str()) } else { None }).collect()
 }
 
 /// The function that the reference `key`, written in `from`, runs, named as the walk names it. `None` for a
@@ -558,7 +606,36 @@ fn scoped(scope: &str, function: &str) -> String {
 /// The function and the name an answer key names, without its call scope: `main.b>fn.ok` gives `("fn", "ok")`.
 pub fn key_parts(key: &str) -> Option<(&str, &str)> {
     let (owner, name) = key.rsplit_once('.')?;
-    Some((owner.rsplit_once(CALL).map_or(owner, |(_, f)| f), name))
+    Some((bare_function(owner.rsplit_once(CALL).map_or(owner, |(_, f)| f)), name))
+}
+
+/// The function part of an owner: `fn` for `fn#2`, the visit that a later entry of `fn` in one call gets.
+fn bare_function(owner: &str) -> &str {
+    owner.rsplit_once('#').filter(|(_, n)| n.parse::<usize>().is_ok()).map_or(owner, |(f, _)| f)
+}
+
+/// The owner part of an answer key for one visit of `function` in a call: `fn` on the first visit, then `fn#2`,
+/// `fn#3`, and so on. So a cycle, such as a callback back into its caller, asks its questions again.
+fn visit_key(function: &str, count: &mut usize) -> String {
+    *count += 1;
+    match *count {
+        1 => function.to_string(),
+        n => format!("{function}#{n}"),
+    }
+}
+
+/// The entry callbacks, each replaced by the qualified path of the function it names.
+fn entry_values(project: &Project, entry: &Function, given: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>, String> {
+    let mut values = given.clone();
+    for input in entry.inputs.iter().filter(|i| i.ty == InputType::Callback) {
+        let name = input.name.value.clone();
+        let raw = values.get(&name).cloned().unwrap_or_default();
+        match project.callback_target(&raw) {
+            Ok(target) => values.insert(name, target),
+            Err(m) => return Err(format!("input `{name}` is not valid; {m}")),
+        };
+    }
+    Ok(values)
 }
 
 /// The error for a `string` input that was not given.
@@ -568,10 +645,10 @@ fn missing_input(name: &str) -> String {
 
 /// The entry's `string` inputs must all be given, and no other name may be. Checked before the flow runs.
 fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>) -> Result<(), String> {
-    if let Some(name) = given.keys().find(|k| !entry.text_inputs().any(|i| i.name.value == **k)) {
+    if let Some(name) = given.keys().find(|k| !entry.passed_inputs().any(|i| i.name.value == **k)) {
         return Err(format!("unknown input `{name}`"));
     }
-    match entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
+    match entry.passed_inputs().find(|i| !given.contains_key(&i.name.value)) {
         Some(input) => Err(missing_input(&input.name.value)),
         None => Ok(()),
     }
@@ -603,3 +680,7 @@ pub fn invalid_request(message: impl Into<String>) -> StepResponse {
 #[cfg(test)]
 #[path = "step_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "step_callback_tests.rs"]
+mod callback_tests;

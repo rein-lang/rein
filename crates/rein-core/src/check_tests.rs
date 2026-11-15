@@ -40,7 +40,7 @@ fn a_quoted_string_as_text_is_an_error() {
 }
 
 /// Test resolver: `./tpl` is a template with parameters `a` and `b`, paths with `missing` do not resolve,
-/// `./merge` is a function with one `string` parameter `pr`, and every other path is a function with none.
+/// `./merge` is a function with one `string` parameter `pr`, `./handle` takes `pr` and a callback `then`, and every other path is a function with none.
 fn resolves(path: &str) -> Result<Kind, String> {
     if path == "./tpl" {
         return Ok(Kind::Template {
@@ -51,13 +51,13 @@ fn resolves(path: &str) -> Result<Kind, String> {
         return Err(format!("cannot find function `@{path}`"));
     }
     if path == "./merge" {
-        return Ok(Kind::Function {
-            strings: vec!["pr".into()],
-        });
+        return Ok(Kind::Function { strings: vec!["pr".into()], callbacks: Vec::new() });
     }
-    Ok(Kind::Function {
-        strings: Vec::new(),
-    })
+    // `./handle` takes `pr` and a callback `then`.
+    if path == "./handle" {
+        return Ok(Kind::Function { strings: vec!["pr".into(), "then".into()], callbacks: vec!["then".into()] });
+    }
+    Ok(Kind::Function { strings: Vec::new(), callbacks: Vec::new() })
 }
 
 fn check_src(src: &str) -> Vec<Diagnostic> {
@@ -1183,6 +1183,65 @@ fn all_string_body_that_is_a_hand_off_is_a_normal_function() {
         Severity::Warning,
         "unused parameter `b`",
     );
+}
+
+/// A function that takes a callback `then` with a `string` `pr`, and runs `body`.
+fn with_callback(body: &str) -> String {
+    format!(
+        "interface Input {{\n  /** The PR. */\n  pr: string;\n  /** Where to go when done. */\n  then: @;\n}}\n/** F. */\nexport default function f({{ pr, then }}: Input) {{\n{body}\n}}\n"
+    )
+}
+
+fn errors_of(src: &str) -> Vec<String> {
+    check_src(src).into_iter().filter(|d| d.severity == Severity::Error).map(|d| d.message).collect()
+}
+
+#[test]
+fn a_callback_is_returned_and_passed_on() {
+    let src = with_callback("  return @./handle(pr=pr, then=then);");
+    assert!(check_src(&src).is_empty(), "{:?}", check_src(&src));
+    let src = with_callback("  return then;");
+    assert!(errors_of(&src).is_empty(), "{:?}", check_src(&src));
+}
+
+#[test]
+fn a_reference_is_passed_to_a_callback_parameter() {
+    let src = "/** F. */\nexport default function f() {\n  return @./handle(pr=`p`, then=@./after);\n}\n";
+    assert!(check_src(src).is_empty(), "{:?}", check_src(src));
+    let src = "/** F. */\nexport default function f() {\n  return @./handle(pr=`p`, then=@./missing);\n}\n";
+    assert_eq!(errors_of(src), vec!["cannot find function `@./missing`".to_string()]);
+    let src = "/** F. */\nexport default function f() {\n  return @./handle(pr=`p`, then=@./merge);\n}\n";
+    assert_eq!(errors_of(src), vec!["`@./merge` takes 1 argument, got 0".to_string()]);
+    let src = "/** F. */\nexport default function f() {\n  return @./handle(pr=`p`, then=`text`);\n}\n";
+    assert_eq!(errors_of(src), vec!["`then` is a callback; pass a reference like `then=@./name`".to_string()]);
+    let src = "/** F. */\nexport default function f() {\n  return @./handle(pr=@./after, then=@./after);\n}\n";
+    assert_eq!(errors_of(src), vec!["`@./after` is a reference; only a callback (`@`) parameter takes one".to_string()]);
+}
+
+#[test]
+fn a_missing_callback_argument_is_an_error() {
+    let src = "/** F. */\nexport default function f() {\n  return @./handle(pr=`p`);\n}\n";
+    assert_eq!(errors_of(src), vec!["missing argument `then` in call to `@./handle`; write `then=value`".to_string()]);
+}
+
+#[test]
+fn an_unused_callback_warns() {
+    let src = with_callback("  return `Merge ${pr}.`;");
+    expect_diag(&src, Severity::Warning, "unused parameter `then`");
+}
+
+#[test]
+fn a_callback_is_not_a_value() {
+    let used = "`then` is a callback; return it (`return then;`) or pass it to a callback parameter";
+    for body in [
+        "  if (then) {\n    return `a`;\n  }\n  return `b ${pr}`;",
+        "  return `Merge ${pr}, then ${then}.`;",
+        "  return @./merge(pr=then);",
+    ] {
+        assert_eq!(errors_of(&with_callback(body)), vec![used.to_string()], "{body}");
+    }
+    let src = with_callback("  return pr;");
+    assert_eq!(errors_of(&src), vec!["`pr` is not a callback; only a callback (`@`) parameter is returned by name".to_string()]);
 }
 
 /// The blank-line warnings of one function source: each message, with the text it points at.

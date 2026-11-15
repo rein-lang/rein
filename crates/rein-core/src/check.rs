@@ -14,7 +14,8 @@ use crate::stdlib;
 /// A function needs the names of its `string` parameters, which a hand-off must pass as named arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
-    Function { strings: Vec<String> },
+    /// `strings` names every parameter a hand-off passes: `string` and callback ones. `callbacks` names the callback ones.
+    Function { strings: Vec<String>, callbacks: Vec<String> },
     Template { params: Vec<String> },
     Request,
 }
@@ -95,7 +96,7 @@ fn quoted_text(stmts: &[Stmt]) -> Vec<Diagnostic> {
         Stmt::Return(r) => match &r.value {
             ReturnValue::Text(s) => out.push(Diagnostic::error(s.span, TEXT_QUOTES)),
             ReturnValue::Call(call) => call_quoted_text(call, &mut out),
-            ReturnValue::Ref(_) | ReturnValue::Template(_) => {}
+            ReturnValue::Ref(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => {}
         },
         Stmt::Request { awaited: Awaited::Request { arg, .. }, .. } => value_quoted_text(arg, &mut out),
         Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)), .. } => call_quoted_text(call, &mut out),
@@ -108,7 +109,7 @@ fn value_quoted_text(v: &Value, out: &mut Vec<Diagnostic>) {
     match v {
         Value::Str(s) => out.push(Diagnostic::error(s.span, TEXT_QUOTES)),
         Value::Call(call) => call_quoted_text(call, out),
-        Value::Template(_) | Value::Name(_) => {}
+        Value::Template(_) | Value::Name(_) | Value::Ref(_) => {}
     }
 }
 
@@ -262,6 +263,14 @@ pub fn struct_in_use(name: &str) -> String {
 }
 
 /// A `string` input cannot decide a branch. A condition and a switch subject both give this error.
+/// The error for a callback used as a value: in a condition, a switch, a template literal, or a text argument.
+pub fn callback_in_use(name: &str) -> String {
+    format!("`{name}` is a callback; return it (`return {name};`) or pass it to a callback parameter")
+}
+
+/// The error for a callback as a `request` answer, or as a field of one.
+const CALLBACK_ANSWER: &str = "a callback is not an answer; the caller passes it";
+
 pub fn string_in_condition(name: &str) -> String {
     format!("`{name}` is a string input; a condition cannot read it")
 }
@@ -347,6 +356,24 @@ impl<'a> Checker<'a> {
             Value::Template(lit) => self.template_names(lit),
             Value::Name(name) => self.string_arg(name),
             Value::Call(call) => self.call(call, false),
+            Value::Ref(r) => self.error(r.span, format!("`@{}` is a reference; only a callback (`@`) parameter takes one", r.value)),
+        }
+    }
+
+    /// The value of a callback argument: a reference to a function that takes no arguments, or the name of a
+    /// callback parameter of this function.
+    fn callback_arg(&mut self, v: &Value, param: &str) {
+        match v {
+            Value::Ref(r) => self.returned_ref(r),
+            Value::Name(name) => {
+                self.used.insert(name.value.clone());
+                match self.lookup(&name.value) {
+                    Some(InputType::Callback) => {}
+                    None => self.unknown(name),
+                    _ => self.error(name.span, format!("`{}` is not a callback; `{param}` takes a reference like `@./name`", name.value)),
+                }
+            }
+            other => self.error(other.span(), format!("`{param}` is a callback; pass a reference like `{param}=@./name`")),
         }
     }
 
@@ -355,6 +382,7 @@ impl<'a> Checker<'a> {
         self.used.insert(name.value.clone());
         match self.lookup(&name.value) {
             Some(InputType::Text) => {}
+            Some(InputType::Callback) => self.error(name.span, callback_in_use(&name.value)),
             None if name.value.contains('.') => self.unknown(name),
             _ => self.error(name.span, format!("`{}` is not a string input", name.value)),
         }
@@ -614,11 +642,14 @@ impl<'a> Checker<'a> {
                         response.name.span,
                         "a `string` answer is not allowed; answer a struct with a `string` field",
                     ),
-                    InputType::Struct(r) => {
-                        if let Some(Err(msg)) = self.f.answer_struct(name) {
-                            self.error(r.name().span, msg.clone());
+                    InputType::Struct(r) => match self.f.answer_struct(name) {
+                        Some(Err(msg)) => self.error(r.name().span, msg.clone()),
+                        Some(Ok(st)) if st.fields.iter().any(|f| f.ty == InputType::Callback) => {
+                            self.error(r.name().span, CALLBACK_ANSWER);
                         }
-                    }
+                        _ => {}
+                    },
+                    InputType::Callback => self.error(response.name.span, CALLBACK_ANSWER),
                     InputType::Bool | InputType::Choice(_) => {}
                 }
                 if self.f.input(name).is_some() || self.names.contains(name) {
@@ -636,6 +667,17 @@ impl<'a> Checker<'a> {
                 ReturnValue::Ref(reference) => self.returned_ref(reference),
                 ReturnValue::Template(lit) => self.template_names(lit),
                 ReturnValue::Call(call) => self.call(call, true),
+                ReturnValue::Callback(name) => {
+                    self.used.insert(name.value.clone());
+                    match self.lookup(&name.value) {
+                        Some(InputType::Callback) => {}
+                        None => self.unknown(name),
+                        Some(_) => self.error(
+                            name.span,
+                            format!("`{}` is not a callback; only a callback (`@`) parameter is returned by name", name.value),
+                        ),
+                    }
+                }
             },
         }
     }
@@ -646,7 +688,7 @@ impl<'a> Checker<'a> {
         let (key, span) = match target {
             ReturnValue::Ref(r) => (r.value.as_str(), r.span),
             ReturnValue::Call(call) => (call.callee.key(), call.callee.span()),
-            ReturnValue::Text(_) | ReturnValue::Template(_) => return,
+            ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => return,
         };
         if let Ok(Kind::Template { .. }) = (self.resolve)(key) {
             self.error(span, format!("`@{key}` is a template; only a function can be awaited"));
@@ -655,7 +697,7 @@ impl<'a> Checker<'a> {
         match target {
             ReturnValue::Ref(r) => self.returned_ref(r),
             ReturnValue::Call(call) => self.call(call, true),
-            ReturnValue::Text(_) | ReturnValue::Template(_) => {}
+            ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => {}
         }
     }
 
@@ -669,7 +711,7 @@ impl<'a> Checker<'a> {
                 reference.span,
                 format!("`@{path}` is a template; call it with arguments, like `@{path}(...)`"),
             ),
-            Ok(Kind::Function { strings }) if !strings.is_empty() => self.error(
+            Ok(Kind::Function { strings, .. }) if !strings.is_empty() => self.error(
                 reference.span,
                 format!("`@{path}` takes {}, got 0", count_args(strings.len())),
             ),
@@ -686,10 +728,19 @@ impl<'a> Checker<'a> {
                 Ok(Kind::Function { .. }) if !hand_off => {
                     self.error(path.span, "A hand-off cannot be an argument of a call.");
                 }
-                Ok(Kind::Function { strings }) if strings.is_empty() => {
+                Ok(Kind::Function { strings, .. }) if strings.is_empty() => {
                     self.error(call.span, format!("`@{}` takes no arguments; return it without a call", path.value));
                 }
-                Ok(Kind::Function { strings }) => self.arguments(call, &strings, &format!("@{}", path.value)),
+                Ok(Kind::Function { strings, callbacks }) => {
+                    self.arguments(call, &strings, &format!("@{}", path.value));
+                    for arg in &call.args {
+                        match &arg.name {
+                            Some(n) if callbacks.contains(&n.value) => self.callback_arg(&arg.value, &n.value),
+                            _ => self.value(&arg.value),
+                        }
+                    }
+                    return;
+                }
                 Ok(Kind::Template { params }) => self.arguments(call, &params, &format!("@{}", path.value)),
                 Ok(Kind::Request) => {}
             },
@@ -750,6 +801,7 @@ impl<'a> Checker<'a> {
                         format!("boolean parameter `{}` cannot be interpolated; only union parameters can go in a template", n.value),
                     ),
                     Some(InputType::Struct(_)) => self.error(n.span, struct_in_use(&n.value)),
+                    Some(InputType::Callback) => self.error(n.span, callback_in_use(&n.value)),
                     Some(_) => {}
                 }
             }
@@ -771,6 +823,7 @@ impl<'a> Checker<'a> {
                     }
                     Some(InputType::Text) => self.error(v.span, string_in_condition(&v.value)),
                     Some(InputType::Struct(_)) => self.error(v.span, struct_in_use(&v.value)),
+                    Some(InputType::Callback) => self.error(v.span, callback_in_use(&v.value)),
                     Some(InputType::Bool) => {}
                 }
             }
@@ -786,6 +839,7 @@ impl<'a> Checker<'a> {
                     Some(InputType::Choice(members)) => self.check_member(n, value, &members),
                     Some(InputType::Text) => self.error(var.span, string_in_condition(n)),
                     Some(InputType::Struct(_)) => self.error(var.span, struct_in_use(n)),
+                    Some(InputType::Callback) => self.error(var.span, callback_in_use(n)),
                 }
             }
             Expr::Not(inner, _) => self.expr(inner),
@@ -817,6 +871,7 @@ impl<'a> Checker<'a> {
             ),
             Some(InputType::Text) => self.error(subject.span, string_in_condition(n)),
             Some(InputType::Struct(_)) => self.error(subject.span, struct_in_use(n)),
+            Some(InputType::Callback) => self.error(subject.span, callback_in_use(n)),
             Some(InputType::Choice(members)) => {
                 let mut seen: Vec<&str> = Vec::new();
                 for c in cases {

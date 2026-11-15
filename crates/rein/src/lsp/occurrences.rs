@@ -95,6 +95,7 @@ pub fn name_uses(f: &Function) -> Vec<&Spanned<String>> {
         Stmt::Return(r) => match &r.value {
             ReturnValue::Template(lit) => template_names(lit, &mut out),
             ReturnValue::Call(call) => call.args.iter().for_each(|a| value_names(&a.value, &mut out)),
+            ReturnValue::Callback(n) => out.push(n),
             ReturnValue::Text(_) | ReturnValue::Ref(_) => {}
         },
     });
@@ -107,7 +108,7 @@ fn value_names<'a>(v: &'a Value, out: &mut Vec<&'a Spanned<String>>) {
         Value::Name(n) => out.push(n),
         Value::Template(lit) => template_names(lit, out),
         Value::Call(call) => call.args.iter().for_each(|a| value_names(&a.value, out)),
-        Value::Str(_) => {}
+        Value::Str(_) | Value::Ref(_) => {}
     }
 }
 

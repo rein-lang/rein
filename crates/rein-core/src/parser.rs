@@ -326,8 +326,12 @@ impl Parser {
         }
     }
 
-    /// `boolean`, or a union of strings with an optional leading `|`.
+    /// `boolean`, `string`, `@` (a callback), or a union of strings with an optional leading `|`.
     fn param_type(&mut self) -> Result<InputType, Diagnostic> {
+        if *self.peek() == Tok::At {
+            self.bump();
+            return Ok(InputType::Callback);
+        }
         if *self.peek() == Tok::Boolean {
             self.bump();
             return Ok(InputType::Bool);
@@ -468,6 +472,10 @@ impl Parser {
                 let span = call.span;
                 (ReturnValue::Call(call), span)
             }
+            Tok::Ident(value) => {
+                let span = self.bump();
+                (ReturnValue::Callback(Spanned { value, span }), span)
+            }
             _ => return Err(self.unexpected("a string, a template literal, or a reference like `@./path`")),
         };
         if *self.peek() == Tok::Semi {
@@ -592,8 +600,15 @@ impl Parser {
         Ok(Arg { name, value, span })
     }
 
-    /// The value of an argument: a string, a template literal, a bare name of a `string` parameter, or a call.
+    /// The value of an argument: a string, a template literal, a bare name of a `string` or callback parameter,
+    /// a call, or a reference to pass to a callback parameter.
     fn arg_value(&mut self) -> Result<Value, Diagnostic> {
+        if let Tok::Ref(value) = self.peek().clone() {
+            if *self.next_tok() != Tok::LParen {
+                let span = self.bump();
+                return Ok(Value::Ref(Spanned { value, span }));
+            }
+        }
         if let Tok::Ident(name) = self.peek().clone() {
             if *self.next_tok() != Tok::LParen {
                 let span = self.bump();

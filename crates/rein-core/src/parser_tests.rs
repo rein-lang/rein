@@ -182,12 +182,21 @@ fn imports_are_not_in_rein() {
 }
 
 #[test]
-fn bare_name_is_not_a_return_value() {
-    let msg = one_error("/** d */\nexport default function f() { return nope; }");
-    assert!(
-        msg.contains("expected a string, a template literal, or a reference"),
-        "{msg}"
-    );
+fn bare_name_return_is_a_callback() {
+    let (f, diags) = parse("/** d */\nexport default function f() { return then; }");
+    assert!(diags.is_empty(), "{diags:?}");
+    assert!(matches!(&f.body[0], Stmt::Return(r) if matches!(&r.value, ReturnValue::Callback(n) if n.value == "then")));
+}
+
+#[test]
+fn callback_parameter_and_reference_argument_parse() {
+    let src = "/** d */\nexport default function f(\n  /** Next. */\n  then: @,\n) {\n  return @./g(then=@./h);\n}";
+    let (f, diags) = parse(src);
+    assert!(diags.is_empty(), "{diags:?}");
+    assert_eq!(f.inputs[0].ty, InputType::Callback);
+    let Stmt::Return(r) = &f.body[0] else { panic!() };
+    let ReturnValue::Call(call) = &r.value else { panic!() };
+    assert!(matches!(&call.args[0].value, Value::Ref(p) if p.value == "./h"));
 }
 
 #[test]

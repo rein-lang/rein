@@ -132,7 +132,7 @@ fn bare_at_name_is_a_program_reference() {
 
 #[test]
 fn bad_program_reference_is_an_error() {
-    for src in ["@", "@-x", "@x/", "@x//y", "@x/a-b"] {
+    for src in ["@-x", "@x/", "@x//y", "@x/a-b"] {
         let err = lex(src).unwrap_err();
         assert!(err.message.contains("@program/function"), "{src}: {}", err.message);
     }
@@ -233,4 +233,11 @@ fn unclosed_template_literal_is_an_error() {
         "{}",
         err.message
     );
+}
+
+#[test]
+fn bare_at_is_the_callback_type() {
+    let toks = lex("then: @;").unwrap();
+    assert_eq!(toks[2].0, Tok::At);
+    assert_eq!(toks[3].0, Tok::Semi);
 }

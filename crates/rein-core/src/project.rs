@@ -266,17 +266,10 @@ impl Project {
         self.programs.get(program)?.as_ref().ok()
     }
 
-    /// Loads each program that a `@program` or `@program/function` names, and the programs those name, and so on.
-    /// All of them sit here, at the top, so a hand-off from one program to the next resolves. `find` gives the root
-    /// and entry of a program by name, as the scopes resolve it. The CLI passes it, because scopes live on the
-    /// machine, not here.
-    pub fn link_programs(&mut self, find: &FindProgram) {
-        self.link_programs_with(find, &[]);
-    }
-
-    /// [`Project::link_programs`], with `open` texts replacing the files of each linked program on disk.
-    pub fn link_programs_with(&mut self, find: &FindProgram, open: &[(PathBuf, String)]) {
-        let mut queue: VecDeque<String> = program_names(&self.files).into_iter().collect();
+    /// Links the programs called `names`, then every program that those name, until none is new.
+    /// `open` texts replace the files of each linked program on disk, as in [`Project::link_programs_with`].
+    pub fn link_program_names(&mut self, names: BTreeSet<String>, find: &FindProgram, open: &[(PathBuf, String)]) {
+        let mut queue: VecDeque<String> = names.into_iter().collect();
         while let Some(name) = queue.pop_front() {
             if self.programs.contains_key(&name) {
                 continue;
@@ -289,6 +282,36 @@ impl Project {
                 queue.extend(program_names(&linked.project.files));
             }
             self.programs.insert(name, loaded);
+        }
+    }
+
+    /// Loads each program that a `@program` or `@program/function` names, and the programs those name, and so on.
+    /// All of them sit here, at the top, so a hand-off from one program to the next resolves. `find` gives the root
+    /// and entry of a program by name, as the scopes resolve it. The CLI passes it, because scopes live on the
+    /// machine, not here.
+    pub fn link_programs(&mut self, find: &FindProgram) {
+        self.link_programs_with(find, &[]);
+    }
+
+    /// [`Project::link_programs`], with `open` texts replacing the files of each linked program on disk.
+    pub fn link_programs_with(&mut self, find: &FindProgram, open: &[(PathBuf, String)]) {
+        self.link_program_names(program_names(&self.files), find, open);
+    }
+
+    /// The qualified path of a callback value as a caller gives it: `@./after` (a function of this project),
+    /// `@program` (its entry), or `@program/function`. The function must exist.
+    pub fn callback_target(&self, value: &str) -> Result<String, String> {
+        let target = match value.strip_prefix("@./") {
+            Some(local) => local.to_string(),
+            None => match value.strip_prefix('@').map(|k| self.program_binding(k)) {
+                Some(Ok(Binding::Function(path) | Binding::Template { path: Some(path), .. })) => path,
+                Some(Err(reason)) => return Err(reason),
+                _ => return Err(format!("`{value}` is not a reference; write `@./name`, `@program` or `@program/function`")),
+            },
+        };
+        match self.get(&target) {
+            Some(_) => Ok(target),
+            None => Err(format!("cannot find function `{value}`")),
         }
     }
 
@@ -369,25 +392,41 @@ impl Project {
     /// What each callee and reference of `name` refers to, keyed by [`Callee::key`]. Unresolved ones are left out.
     pub fn bindings(&self, name: &str) -> BTreeMap<String, Binding<'_>> {
         if let Some((program, path)) = name.strip_prefix('@').and_then(|n| n.split_once('/')) {
-            let Some(linked) = self.linked(program) else { return BTreeMap::new() };
-            let mut out = linked.project.bindings(path);
-            // The programs a linked program names are linked here, at the top, so they resolve here.
-            let program_keys = linked.project.files.get(path).map(|sf| keys(&sf.function)).unwrap_or_default();
-            for key in program_keys.into_iter().filter(|k| is_program_key(k)) {
-                if self.undeclared(name, &key).is_some() {
-                    continue;
-                }
-                if let Ok(b) = self.program_binding(&key) {
-                    out.insert(key, b);
-                }
-            }
-            return out;
+            return self.linked_bindings(name, program, path);
         }
         let Some(sf) = self.files.get(name) else { return BTreeMap::new() };
         keys(&sf.function)
             .into_iter()
             .filter_map(|key| Some((key.clone(), self.binding_for(name, &key).ok()?)))
             .collect()
+    }
+
+    /// The bindings of `path` in the linked `program`, for the walk from `name` (`@program/path`). Every path is
+    /// qualified: a local one gets the `@program/` prefix, and a program reference resolves in this project's flat
+    /// table. So a callback or a hand-off value from any program names its function the same way.
+    fn linked_bindings(&self, name: &str, program: &str, path: &str) -> BTreeMap<String, Binding<'_>> {
+        let Some(linked) = self.linked(program) else { return BTreeMap::new() };
+        let Some(sf) = linked.project.files.get(path) else { return BTreeMap::new() };
+        let qualify = |p: String| match p.starts_with('@') {
+            true => p,
+            false => format!("@{program}/{p}"),
+        };
+        let mut out = BTreeMap::new();
+        for key in keys(&sf.function) {
+            let found = match is_program_key(&key) {
+                true if self.undeclared(name, &key).is_some() => continue,
+                true => self.program_binding(&key),
+                false => linked.project.binding_for(path, &key),
+            };
+            let binding = match found {
+                Ok(Binding::Function(p)) => Binding::Function(qualify(p)),
+                Ok(Binding::Template { path, function }) => Binding::Template { path: path.map(qualify), function },
+                Ok(Binding::Request) => Binding::Request,
+                Err(_) => continue,
+            };
+            out.insert(key, binding);
+        }
+        out
     }
 
     /// What a callee or reference written in function `from` refers to, or why it does not resolve.
@@ -434,9 +473,14 @@ impl Project {
     /// `string` parameters, and a template the names of all its parameters, so a call can bind them by name.
     fn kind_for(&self, from: &str, key: &str) -> Result<Kind, String> {
         Ok(match self.binding_for(from, key)? {
-            Binding::Function(path) => Kind::Function {
-                strings: self.get(&path).map_or_else(Vec::new, |sf| param_names(sf.function.text_inputs())),
-            },
+            Binding::Function(path) => {
+                let function = self.get(&path).map(|sf| &sf.function);
+                let callbacks = function.map(|f| f.inputs.iter().filter(|i| i.ty == InputType::Callback));
+                Kind::Function {
+                    strings: function.map_or_else(Vec::new, |f| param_names(f.passed_inputs())),
+                    callbacks: callbacks.map_or_else(Vec::new, param_names),
+                }
+            }
             Binding::Template { function, .. } => Kind::Template { params: param_names(function.inputs.iter()) },
             Binding::Request => Kind::Request,
         })
@@ -810,7 +854,14 @@ fn keys(f: &Function) -> BTreeSet<String> {
         }
         Stmt::Return(Spanned { value: ReturnValue::Call(call), .. })
         | Stmt::Request { awaited: Awaited::Call(ReturnValue::Call(call)), .. } => {
-            out.extend(call.calls().into_iter().map(|c| c.callee.key().to_string()));
+            for c in call.calls() {
+                out.insert(c.callee.key().to_string());
+                // A reference passed as an argument, such as a callback `then=@./after`, is a key too.
+                out.extend(c.args.iter().filter_map(|a| match &a.value {
+                    Value::Ref(r) => Some(r.value.clone()),
+                    _ => None,
+                }));
+            }
         }
         Stmt::Request { awaited: Awaited::Request { callee, arg }, .. } => {
             out.insert(callee.value.clone());

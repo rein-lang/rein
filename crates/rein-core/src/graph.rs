@@ -57,6 +57,8 @@ pub enum NodeKind {
     Delegate,
     /// A function of another program (`@program/function`). The graph does not draw that program.
     Program,
+    /// The flow goes on to the callback the caller passed (`return then;`). The label is the parameter name.
+    Callback,
     /// A reference that does not resolve. `rein check` reports it.
     Unresolved,
 }
@@ -257,7 +259,7 @@ impl<'a> Builder<'a> {
 
     fn function_node(&mut self, name: &str, sf: &SourceFile) -> String {
         let id = self.id_of(name);
-        let strings: Vec<&str> = sf.function.text_inputs().map(|i| i.name.value.as_str()).collect();
+        let strings: Vec<&str> = sf.function.passed_inputs().map(|i| i.name.value.as_str()).collect();
         let label = if strings.is_empty() { name.to_string() } else { format!("{name}({})", strings.join(", ")) };
         let entry = name == self.graph.entry;
         let function = name.to_string();
@@ -385,6 +387,9 @@ impl<'a> Builder<'a> {
                     self.step_to(from, NodeKind::Unresolved, format!("@{}", r.value));
                 }
             },
+            ReturnValue::Callback(name) => {
+                self.step_to(from, NodeKind::Callback, name.value.clone());
+            }
             ReturnValue::Call(call) => match self.project.binding_for(self.function, call.callee.key()) {
                 Ok(Binding::Function(target)) => {
                     let to = self.target_node(&target);
@@ -416,7 +421,7 @@ impl<'a> Builder<'a> {
                 let args = call.args.iter().map(|a| Arg { name: arg_name(a), value: value_text(&a.value) }).collect();
                 (call.callee.key(), args)
             }
-            ReturnValue::Text(_) | ReturnValue::Template(_) => return,
+            ReturnValue::Text(_) | ReturnValue::Template(_) | ReturnValue::Callback(_) => return,
         };
         if let Ok(Binding::Function(path)) = self.project.binding_for(self.function, key) {
             let to = self.target_node(&path);
@@ -460,6 +465,7 @@ fn value_text(v: &Value) -> String {
         Value::Template(lit) => format!("`{}`", template_text(&lit.pieces)),
         Value::Name(n) => n.value.clone(),
         Value::Call(c) => call_text(c),
+        Value::Ref(r) => format!("@{}", r.value),
     }
 }
 
@@ -470,6 +476,7 @@ fn return_text(v: &ReturnValue) -> String {
         ReturnValue::Call(c) => format!("@{}", c.callee.key()),
         ReturnValue::Text(t) => t.value.clone(),
         ReturnValue::Template(lit) => template_text(&lit.pieces),
+        ReturnValue::Callback(name) => name.value.clone(),
     }
 }
 
@@ -540,7 +547,7 @@ pub fn mermaid(g: &Graph) -> String {
             NodeKind::Request => format!("{id}[/\"{l}\"/]"),
             NodeKind::Done => format!("{id}(\"{l}\")"),
             NodeKind::Delegate => format!("{id}>\"{l}\"]"),
-            NodeKind::Program => format!("{id}[[\"{l}\"]]:::program"),
+            NodeKind::Program | NodeKind::Callback => format!("{id}[[\"{l}\"]]:::program"),
             NodeKind::Unresolved => format!("{id}[\"{l}\"]:::unresolved"),
         }
     };
@@ -567,7 +574,7 @@ pub fn mermaid(g: &Graph) -> String {
             out.push(format!("    {} {arrow}|\"{}\"| {}", e.from, esc(&lines.join("\n")), e.to));
         }
     }
-    if g.nodes.iter().any(|n| n.kind == NodeKind::Program) {
+    if g.nodes.iter().any(|n| matches!(n.kind, NodeKind::Program | NodeKind::Callback)) {
         out.push("    classDef program stroke-dasharray:4 2".to_string());
     }
     if g.nodes.iter().any(|n| n.kind == NodeKind::Unresolved) {
@@ -605,7 +612,7 @@ pub fn dot(g: &Graph) -> String {
             NodeKind::Request => "shape=parallelogram",
             NodeKind::Done => "shape=box, style=rounded",
             NodeKind::Delegate => "shape=cds",
-            NodeKind::Program => "shape=box, style=dashed",
+            NodeKind::Program | NodeKind::Callback => "shape=box, style=dashed",
             NodeKind::Unresolved => "shape=octagon, color=red",
         };
         let walk = match node_mark(g, &n.id) {
