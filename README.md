@@ -4,7 +4,7 @@
 
 Status: proof of concept. Syntax can still change.
 
-Rein is a language for agent flows. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It returns the next step as text, as a reference to another function, or as a template call. When it needs a fact, it asks the agent. When it needs a step done, it sends the agent a request and waits for the answer.
+Rein is a language for agent processes. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It returns the next step as text, as a reference to another function, or as a template call. When it needs a fact, it asks the agent. When it needs a step done, it sends the agent a request and waits for the answer.
 
 Rein mimics TypeScript syntax and types, except `@` references. There are no imports, no `else`, and no `default`. Every function returns on every path. A function takes one parameter: a scalar or a struct, and a shared struct is a `<name>.struct.rein` file.
 
@@ -55,7 +55,7 @@ flowchart TD
 
 ## How an agent uses it
 
-The agent steps the flow with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/rein/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
+The agent steps the process with `rein step`. The runtime keeps no state, so each call takes every answer so far. Each call returns one of four kinds: `question`, `request`, `done`, or `error`. The walk below runs `examples/rein/support-ticket`. Each line after `$` is one call. `# exit` is its exit code:
 
 ```text
 $ cd examples/rein/support-ticket
@@ -90,7 +90,7 @@ cargo install --git https://github.com/rein-lang/rein --tag v0.1.0 --locked rein
 cd examples
 rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin
-rein graph support-ticket               # its decision flow as Mermaid (--format dot|json, -o graph.svg)
+rein graph support-ticket               # its decision graph as Mermaid (--format dot|json, -o graph.svg)
 rein serve --mcp                        # the MCP host for agents (see https://github.com/rein-lang/rein-lang.com/blob/main/language/interface.md)
 rein watch                              # a page of the agents that use rein now
 ```
@@ -126,7 +126,7 @@ The docs site and the landing page live in [rein-lang/rein-lang.com](https://git
 - [Language reference](https://github.com/rein-lang/rein-lang.com/blob/main/language/spec.md): syntax, rules, evaluation, CLI.
 - [Decisions](https://github.com/rein-lang/rein-lang.com/blob/main/language/decisions.md): owner facts, PoC choices, open questions.
 - [Agent interface](https://github.com/rein-lang/rein-lang.com/blob/main/language/interface.md): programs as named apps, the MCP host, and `rein run`.
-- [Rein and skills](https://rein-lang.com/docs/rein-vs-skills): the use cases for a skill and for a Rein flow.
+- [Rein and skills](https://rein-lang.com/docs/rein-vs-skills): the use cases for a skill and for a Rein process.
 - [Progressive disclosure](https://rein-lang.com/docs/progressive-disclosure): how a skill and a Rein program give the agent its text.
 - [Why not an existing language](https://rein-lang.com/docs/why-not-a-programming-language): why Rein handles decision trees, not logic.
 
