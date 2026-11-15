@@ -63,7 +63,8 @@ fn rein(args: &[&str], stdin: Option<&str>) -> Output {
     {
         let mut pipe = child.stdin.take().unwrap();
         if let Some(text) = stdin {
-            pipe.write_all(text.as_bytes()).unwrap();
+            // A child that refuses its flags exits before it reads stdin; the broken pipe is not a failure.
+            let _ = pipe.write_all(text.as_bytes());
         }
     }
     child.wait_with_output().unwrap()
