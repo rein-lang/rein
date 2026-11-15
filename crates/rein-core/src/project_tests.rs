@@ -837,7 +837,10 @@ fn program_hand_off_checks_argument_names_and_function() {
     let missing = crate::program_fixture::with_program("return @pr-handling/main;");
     assert_eq!(errors(&missing), ["`@pr-handling/main` takes 3 arguments, got 0; pass `pr`, `draft` and `task`"]);
     let nofn = crate::program_fixture::with_program("return @pr-handling/other(pr=pr);");
-    assert_eq!(errors(&nofn), ["cannot find function `other` in program `pr-handling`"]);
+    assert_eq!(
+        errors(&nofn),
+        ["`@pr-handling/other` reaches inside program `pr-handling`; call its entry `@pr-handling` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry"]
+    );
 }
 
 #[test]
