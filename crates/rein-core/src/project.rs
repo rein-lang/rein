@@ -37,8 +37,8 @@ pub struct Linked {
 
 pub struct Project {
     pub root: PathBuf,
-    /// The programs named by `@program/function`, by name. Filled by [`Project::link_programs`]. A name that did
-    /// not load holds the reason. Their functions are reached as `name:function`, such as `pr-handling:main`.
+    /// The programs named by `@program` references, by name. Filled by [`Project::link_programs`]. A name that did
+    /// not load holds the reason. A reference reaches only a program's entry: `@name` or `@name/<entry>`.
     pub programs: BTreeMap<String, Result<Linked, String>>,
     /// The programs this package declares in its `package.json`, or `None` when it has none. A `@program` hand-off
     /// resolves only when the program that writes it declares that program.
@@ -411,7 +411,8 @@ impl Project {
         })
     }
 
-    /// What `@program` or `@program/function` names: the function in the linked program, entry when bare.
+    /// What `@program` or `@program/<entry>` names: the entry function of the linked program.
+    /// Any other `@program/path` reaches inside the program and does not resolve.
     fn program_binding(&self, key: &str) -> Result<Binding<'_>, String> {
         let (program, path) = key.split_once('/').map_or((key, None), |(p, f)| (p, Some(f)));
         let linked = match self.programs.get(program) {
@@ -419,6 +420,12 @@ impl Project {
             Some(Err(reason)) => return Err(reason.clone()),
             None => return Err(unknown_program(program)),
         };
+        if let Some(path) = path.filter(|p| *p != linked.entry) {
+            return Err(format!(
+                "`@{program}/{path}` reaches inside program `{program}`; call its entry `@{program}` instead. \
+                 If `{path}` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry"
+            ));
+        }
         let path = path.unwrap_or(&linked.entry);
         let function = &linked
             .project
