@@ -43,7 +43,7 @@ pub fn exchange<R: BufRead, W: Write>(
     let mut words = line.split_whitespace();
     let method = words.next().unwrap_or_default().to_string();
     let path = words.next().unwrap_or_default().to_string();
-    let (mut length, mut host) = (0usize, String::new());
+    let (mut length, mut host, mut bad_length) = (0usize, String::new(), false);
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header)? == 0 || header.trim().is_empty() {
@@ -53,22 +53,32 @@ pub fn exchange<R: BufRead, W: Write>(
             continue;
         };
         if name.eq_ignore_ascii_case("content-length") {
-            // A number too large for usize is above MAX_BODY, not 0.
+            // Digits only. A number too large for usize is above MAX_BODY. Anything else (a sign, a space) is 400.
             let digits = value.trim();
-            let number = !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit());
-            length = digits.parse().unwrap_or(if number { usize::MAX } else { 0 });
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                length = digits.parse().unwrap_or(usize::MAX);
+            } else {
+                bad_length = true;
+            }
         }
         if name.eq_ignore_ascii_case("host") {
             host = value.trim().to_string();
         }
     }
     // A body above MAX_BODY is not read: the client gets 413 at once instead of waiting on a body never read.
+    // A Content-Length that is not a number has no body length to read, so it is not read either.
     let too_large = length > MAX_BODY;
-    let mut body = vec![0; if too_large { 0 } else { length }];
+    let mut body = vec![0; if too_large || bad_length { 0 } else { length }];
     reader.read_exact(&mut body)?;
     // The query string is for the page's own state. The routes do not read it.
     let route = path.split_once('?').map_or(path.as_str(), |(route, _)| route);
-    let (status, kind, text) = if local_host(&host, port) && too_large {
+    let (status, kind, text) = if local_host(&host, port) && bad_length {
+        (
+            "400 Bad Request",
+            "text/plain",
+            "the Content-Length header is not a number\n".to_string(),
+        )
+    } else if local_host(&host, port) && too_large {
         (
             "413 Content Too Large",
             "text/plain",
@@ -139,6 +149,18 @@ mod tests {
             exchange(request.as_bytes(), &mut reply, 1, |_, _, _| panic!("respond must not run")).unwrap();
             let reply = String::from_utf8(reply).unwrap();
             assert!(reply.starts_with("HTTP/1.1 413 Content Too Large"), "{length}: {reply}");
+        }
+    }
+
+    /// A Content-Length that is not digits only gets 400 at once, with no body read and no call to `respond`.
+    #[test]
+    fn a_content_length_that_is_not_a_number_gets_400() {
+        for length in ["+99999999999999999999999999", "+5", "-1", "abc", "", "1 2"] {
+            let request = format!("POST /answer HTTP/1.1\r\nHost: 127.0.0.1:1\r\nContent-Length: {length}\r\n\r\n");
+            let mut reply = Vec::new();
+            exchange(request.as_bytes(), &mut reply, 1, |_, _, _| panic!("respond must not run")).unwrap();
+            let reply = String::from_utf8(reply).unwrap();
+            assert!(reply.starts_with("HTTP/1.1 400 Bad Request"), "{length:?}: {reply}");
         }
     }
 }
