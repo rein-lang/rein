@@ -383,7 +383,8 @@ pub struct TemplateLit {
 pub enum Value {
     Str(Spanned<String>),
     Template(TemplateLit),
-    /// A bare name of a `string` parameter of the caller. Only a call argument can be one.
+    /// A bare name of a parameter or an answer of the caller, or a `true`/`false` literal. Only a call argument can
+    /// be one.
     Name(Spanned<String>),
     Call(Call),
 }
@@ -409,9 +410,9 @@ pub struct Arg {
     pub span: Span,
 }
 
-/// `callee(args)`: a template call, or a hand-off to a function that has `string` parameters.
-/// Each arg is `name=value`, where the value is a string, a template literal, or a bare name of the caller's
-/// `string` parameter. The order of the args does not matter.
+/// `callee(args)`: a template call, or a hand-off to a function that has parameters.
+/// Each arg is `name=value`, where the value is a string, a template literal, or a bare name of a parameter or an
+/// answer of the caller (or `true`/`false` for a `boolean`). The order of the args does not matter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub callee: Callee,
