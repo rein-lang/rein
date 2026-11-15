@@ -12,10 +12,20 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # The one pin of the Rust version. rustup uses it for each cargo and rustc call
+      # in this job. A new stable release cannot add a clippy lint here: bump it by hand.
+      # The pin is here and not in rust-toolchain.toml: that file makes rustup download
+      # this toolchain for each user who installs from inside a clone.
+      RUSTUP_TOOLCHAIN: "1.100.0"
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true # the tests read the examples submodule
+
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
+
+      - run: rustc -V && cargo clippy -V
 
       - uses: Swatinem/rust-cache@v2
 
