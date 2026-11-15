@@ -159,17 +159,10 @@ fn html(g: &Graph, request: Option<&StepRequest>) -> String {
         .replace("__DIAGRAM__", &esc(&graph::mermaid(g)))
 }
 
-/// Opens `path` in the default browser: `open` on macOS, `xdg-open` on Linux, nothing elsewhere.
+/// Opens `path` in the default browser, without waiting for it: the servers start to answer right after this call.
 pub(crate) fn open(path: impl AsRef<std::ffi::OsStr>) {
-    let tool = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "linux") {
-        "xdg-open"
-    } else {
-        return;
-    };
     // ponytail: a browser that does not start is not an error; the path is on stderr.
-    let _ = Command::new(tool).arg(path).status();
+    let _ = ::open::that_detached(path);
 }
 
 /// Renders DOT source to an image with Graphviz `dot`.
