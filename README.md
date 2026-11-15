@@ -2,7 +2,7 @@
 
 # Rein
 
-Status: proof of concept. Private.
+Status: proof of concept. Syntax can still change.
 
 Rein is a language for agent flows. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It returns the next step as text, as a reference to another function, or as a template call. When it needs a fact, it asks the agent. When it needs a step done, it sends the agent a request and waits for the answer.
 
@@ -31,6 +31,7 @@ export default function mergePr({ docs_only, ci }: Input) {
   if (docs_only) {
     return `approved`;
   }
+
   switch (ci) {
     case "green":
       return @./merge_pr/review_code;
@@ -129,7 +130,7 @@ The docs site and the landing page live in [rein-lang/rein-lang.com](https://git
 - [Progressive disclosure](https://rein-lang.com/docs/progressive-disclosure): how a skill and a Rein program give the agent its text.
 - [Why not an existing language](https://rein-lang.com/docs/why-not-a-programming-language): why Rein handles decision trees, not logic.
 
-Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook needs `linecheck` and runs it. It builds `rein` from the branch and runs `rein check` on every installed program (`scripts/check-installed-programs.sh`). A checker change that breaks an installed program blocks the push. The site's CLI and example pages are generated from this repo in rein-lang/rein-lang.com. Its CI fails when they drift from the pinned rein commit.
+Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook needs `linecheck` and runs it. It builds `rein` from the branch and runs `rein check` on every installed program (`scripts/check-installed-programs.sh`). A checker change that breaks an installed program blocks the push. The CLI pages of the site are the output of `rein docs-cli`, copied into rein-lang/rein-lang.com.
 
 ## License
 
