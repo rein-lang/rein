@@ -8,6 +8,8 @@ Rein is a language for agent flows. Other tools manage the harness or a graph th
 
 Rein mimics TypeScript syntax and types, except `@` references. There are no imports, no `else`, and no `default`. Every function returns on every path. A function takes one parameter: a scalar or a struct, and a shared struct is a `<name>.struct.rein` file.
 
+Rein is not TypeScript, and it does not handle logic. See [Why not an existing language](https://rein-lang.com/docs/why-not-a-programming-language).
+
 ## Sample
 
 `examples/rein/merge-pr/merge_pr.rein`:
@@ -123,6 +125,9 @@ The docs site and the landing page live in [rein-lang/rein-lang.com](https://git
 - [Language reference](https://github.com/rein-lang/rein-lang.com/blob/main/language/spec.md): syntax, rules, evaluation, CLI.
 - [Decisions](https://github.com/rein-lang/rein-lang.com/blob/main/language/decisions.md): owner facts, PoC choices, open questions.
 - [Agent interface](https://github.com/rein-lang/rein-lang.com/blob/main/language/interface.md): programs as named apps, the MCP host, and `rein run`.
+- [Rein and skills](https://rein-lang.com/docs/rein-vs-skills): the use cases for a skill and for a Rein flow.
+- [Progressive disclosure](https://rein-lang.com/docs/progressive-disclosure): how a skill and a Rein program give the agent its text.
+- [Why not an existing language](https://rein-lang.com/docs/why-not-a-programming-language): why Rein handles decision trees, not logic.
 
 Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook needs `linecheck` and runs it. It builds `rein` from the branch and runs `rein check` on every installed program (`scripts/check-installed-programs.sh`). A checker change that breaks an installed program blocks the push. The site's CLI and example pages are generated from this repo in rein-lang/rein-lang.com. Its CI fails when they drift from the pinned rein commit.
 
