@@ -104,6 +104,8 @@ pub fn name_uses(f: &Function) -> Vec<&Spanned<String>> {
 
 fn value_names<'a>(v: &'a Value, out: &mut Vec<&'a Spanned<String>>) {
     match v {
+        // `true` and `false` are boolean literals, not names.
+        Value::Name(n) if matches!(n.value.as_str(), "true" | "false") => {}
         Value::Name(n) => out.push(n),
         Value::Template(lit) => template_names(lit, out),
         Value::Call(call) => call.args.iter().for_each(|a| value_names(&a.value, out)),
