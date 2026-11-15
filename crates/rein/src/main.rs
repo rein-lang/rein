@@ -32,7 +32,7 @@ enum Format {
 }
 
 #[derive(Parser)]
-#[command(name = "rein", version, about = "A small language for agent decision flows")]
+#[command(name = "rein", version, about = "A small language for agent decision processes")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -46,10 +46,10 @@ enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Run a flow as a live process. Writes one step per line, reads one answer per line on stdin.
+    /// Run a process live. Writes one step per line, reads one answer per line on stdin.
     Run {
         /// Program to run: a `.rein` file, or a name (see `rein list`).
-        #[arg(conflicts_with = "root")]
+        #[arg(conflicts_with = "root", value_name = "PROGRAM")]
         flow: Option<String>,
         /// Project root. Default: the nearest directory with main.rein.
         #[arg(long)]
@@ -76,7 +76,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Step the whole flow from `main`. This is the agent-facing interface: answer one key per call.
+    /// Step the whole process from `main`. This is the agent-facing interface: answer one key per call.
     Step {
         /// Program to step: a `.rein` file (its folder is the project root), or a name (see `rein list`).
         #[arg(conflicts_with_all = ["flow", "root", "entry"])]
@@ -88,7 +88,7 @@ enum Command {
         #[arg(long, conflicts_with = "flow")]
         root: Option<PathBuf>,
         /// Program to step, by name (see `rein list`). Same as the positional program.
-        #[arg(long, conflicts_with = "root")]
+        #[arg(long, conflicts_with = "root", value_name = "NAME")]
         flow: Option<String>,
         /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
         #[arg(long = "answer", value_name = "KEY=VALUE")]
@@ -113,19 +113,19 @@ enum Command {
         root: Option<PathBuf>,
     },
     /// Print the program graph: functions, questions, branches, outcomes, and hand-offs. With answers, mark the
-    /// path the flow takes. The graph shows functions, not calls: a function called several times with `await` is
+    /// path the process takes. The graph shows functions, not calls: a function called several times with `await` is
     /// marked with the answers of its first call.
     Graph {
         #[command(flatten)]
         args: graph::GraphArgs,
     },
-    /// Debug a program in the browser: set inputs and answers, step through, and watch the path the flow takes.
+    /// Debug a program in the browser: set inputs and answers, step through, and watch the path the process takes.
     Debug {
         #[command(flatten)]
         args: debug::DebugArgs,
     },
     /// Show the agents that use rein now: their programs, answers and the step each run waits on, in a browser page.
-    /// The flow graph shows functions, not calls: a function called several times with `await` is marked with the
+    /// The process graph shows functions, not calls: a function called several times with `await` is marked with the
     /// answers of its first call.
     Watch {
         #[command(flatten)]
@@ -148,7 +148,7 @@ enum Command {
         #[arg(long)]
         mcp: bool,
     },
-    /// Print the block an agent needs to use the visible flows.
+    /// Print the block an agent needs to use the visible processes.
     AgentContext {
         /// Output format.
         #[arg(long, value_enum, default_value = "text")]

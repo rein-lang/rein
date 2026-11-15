@@ -344,7 +344,7 @@ fn reference_cycle_hits_the_hop_limit() {
     };
     assert_eq!(
         message,
-        "flow did not finish in 64 steps (reference cycle?)"
+        "process did not finish in 64 steps (reference cycle?)"
     );
     assert_eq!(t.len(), HOP_LIMIT);
 }
@@ -944,7 +944,7 @@ fn self_await_without_a_question_fails_at_the_hop_limit() {
     let StepResponse::Error { message, .. } = step(&project, &req("main", &[])) else {
         panic!("expected the hop limit error")
     };
-    assert_eq!(message, "flow did not finish in 64 steps (reference cycle?)");
+    assert_eq!(message, "process did not finish in 64 steps (reference cycle?)");
 }
 
 #[test]
