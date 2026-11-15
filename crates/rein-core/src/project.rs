@@ -699,7 +699,7 @@ impl Placement {
         let Placement { caller, home, clash } = self;
         if clash.is_empty() {
             return format!(
-                "`{name}` is only called by `{caller}`; move it to `{home}.rein` so the folders show the flow. \
+                "`{name}` is only called by `{caller}`; move it to `{home}.rein` so the folders show the process. \
                  The move changes its answer keys and breaks `@<program>/{name}` references from other programs"
             );
         }

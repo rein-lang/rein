@@ -140,7 +140,7 @@ impl Host {
 #[tool_handler(
     name = "rein",
     version = "0.1.0",
-    instructions = "Rein programs are step-by-step flows. Find one with rein_programs, start it with rein_start, and answer each step with rein_answer until kind is done. Follow the program instead of guessing."
+    instructions = "Rein programs are step-by-step processes. Find one with rein_programs, start it with rein_start, and answer each step with rein_answer until kind is done. Follow the program instead of guessing."
 )]
 impl ServerHandler for Host {}
 
