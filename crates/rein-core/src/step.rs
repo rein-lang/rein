@@ -211,8 +211,8 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
 
     let mut trace = Vec::new();
     let mut current = req.entry.clone();
-    // The `string` values of the function being run. The entry gets them from the request; a hand-off
-    // passes them on, bound to the target's `string` parameters by name.
+    // The passed values of the function being run. The entry gets its `string` values from the request; a
+    // hand-off passes a value for every parameter of the target, bound by name.
     let mut strings: BTreeMap<String, String> = req.inputs.clone();
     // The key prefix of the call being walked: empty at the top, else the caller's answer key, such as `main.b`.
     let mut scope = String::new();
@@ -308,7 +308,9 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
     failure(message, None, Vec::new(), answers, trace)
 }
 
-/// The function a hand-off or a call from `from` goes to, and its `string` values, bound by name from `args`.
+/// The function a hand-off or a call from `from` goes to, and the values of all its parameters, bound by name
+/// from `args`. Every `string` parameter is given. A `boolean` or union parameter that the caller did not pass is
+/// asked as a question, until the checker makes passing it required (see `check::MISSING_TYPED_ARG`).
 fn bind(
     project: &Project,
     from: &str,
@@ -321,12 +323,13 @@ fn bind(
     };
     let mut given: BTreeMap<String, String> = args.into_iter().collect();
     let mut bound = BTreeMap::new();
-    for input in next.function.text_inputs() {
+    for input in &next.function.inputs {
         let name = &input.name.value;
-        let Some(value) = given.remove(name) else {
-            return Err(format!("`{target}` is missing argument `{name}`"));
-        };
-        bound.insert(name.clone(), value);
+        match given.remove(name) {
+            Some(value) => _ = bound.insert(name.clone(), value),
+            None if input.ty == InputType::Text => return Err(format!("`{target}` is missing argument `{name}`")),
+            None => {}
+        }
     }
     if let Some(extra) = given.keys().next() {
         return Err(format!("`{target}` has no parameter `{extra}`"));

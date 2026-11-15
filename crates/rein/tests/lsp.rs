@@ -1918,9 +1918,9 @@ fn program_references_resolve_through_the_scopes() {
     let items = server.request(5, "textDocument/completion", at(&handoff, 5, 22));
     assert_eq!(labels(&items), ["@pr-handling/main", "@pr-handling/review"], "{items}");
 
-    // Signature help shows the string inputs the hand-off passes.
+    // Signature help shows every parameter the hand-off passes.
     let help = server.request(6, "textDocument/signatureHelp", at(&handoff, 5, 27));
-    assert_eq!(help["result"]["signatures"][0]["label"], "@pr-handling/main(pr: string)", "{help}");
+    assert_eq!(help["result"]["signatures"][0]["label"], "@pr-handling/main(pr: string, draft: boolean)", "{help}");
 
     // References to the program function in this program.
     let mut params = at(&handoff, 5, 12);

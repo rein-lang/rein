@@ -430,12 +430,14 @@ impl Project {
         Ok(if function.is_template() { Binding::Template { path: Some(target), function } } else { Binding::Function(target) })
     }
 
-    /// What a reference written in function `from` names, for the checker. A function reports the names of its
-    /// `string` parameters, and a template the names of all its parameters, so a call can bind them by name.
+    /// What a reference written in function `from` names, for the checker. A function reports the name and type of
+    /// every parameter, and a template the names of all its parameters, so a call can bind them by name.
     fn kind_for(&self, from: &str, key: &str) -> Result<Kind, String> {
         Ok(match self.binding_for(from, key)? {
             Binding::Function(path) => Kind::Function {
-                strings: self.get(&path).map_or_else(Vec::new, |sf| param_names(sf.function.text_inputs())),
+                params: self.get(&path).map_or_else(Vec::new, |sf| {
+                    sf.function.inputs.iter().map(|i| (i.name.value.clone(), i.ty.clone())).collect()
+                }),
             },
             Binding::Template { function, .. } => Kind::Template { params: param_names(function.inputs.iter()) },
             Binding::Request => Kind::Request,

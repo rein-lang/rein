@@ -10,8 +10,8 @@ use crate::check::{string_in_condition, struct_in_use};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Text(String),
-    /// The function to run next, by project path such as `ci/fix`. `args` are the values of its `string`
-    /// parameters, by name, as written in `return @./target(name=value);`. They are empty for a plain return.
+    /// The function to run next, by project path such as `ci/fix`. `args` are the values of its parameters,
+    /// by name, as written in `return @./target(name=value);`. They are empty for a plain return.
     Ref { target: String, args: Vec<(String, String)> },
     NeedInput(String),
     /// The agent must answer `response`, after doing `instruction`.
@@ -185,11 +185,22 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
     Ok(out)
 }
 
-/// The value of a `string` parameter of this function, for a bare name argument.
-fn string_input(env: &Env, name: &str) -> Eval<String> {
-    match declared(env, name)?.ty {
-        InputType::Text => Ok(provided(env, name)?.to_string()),
-        _ => Err(Stop::Error(format!("`{name}` is not a string input"))),
+/// The value of a parameter or an answer of this function, or a `true`/`false` literal, for a bare name
+/// argument. A `boolean` is passed as `true` or `false`, a union as its member.
+fn arg_value(env: &Env, name: &str) -> Eval<String> {
+    let input = match declared(env, name) {
+        // A `true` or `false` literal. The checker allows it only for a `boolean` parameter, and no name is one.
+        Err(_) if matches!(name, "true" | "false") => return Ok(name.to_string()),
+        found => found?,
+    };
+    if let InputType::Struct(_) = input.ty {
+        return Err(Stop::Error(struct_in_use(name)));
+    }
+    let raw = provided(env, name)?;
+    match &input.ty {
+        InputType::Bool => Ok(parse_bool(name, raw)?.to_string()),
+        InputType::Choice(members) => check_member(name, members, raw).map(|()| raw.to_string()),
+        InputType::Text | InputType::Struct(_) => Ok(raw.to_string()),
     }
 }
 
@@ -232,7 +243,7 @@ fn expand_value(env: &Env, v: &Value) -> Eval<String> {
     match v {
         Value::Str(s) => Ok(s.value.clone()),
         Value::Template(lit) => expand_template(env, lit),
-        Value::Name(n) => string_input(env, &n.value),
+        Value::Name(n) => arg_value(env, &n.value),
         Value::Call(call) => expand_call(env, call),
     }
 }
