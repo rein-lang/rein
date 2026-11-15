@@ -596,3 +596,22 @@ fn setup_without_a_local_struct_is_the_std_setup() {
     let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
     assert_eq!(names, ["harness", "model", "effort"]);
 }
+
+#[test]
+fn agent_setup_sugar_binds_std_setup_even_with_a_local_setup() {
+    let f = ok("interface Setup {\n  /** Only one row. */\n  ready: boolean;\n}\n/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await agentSetup(harness=`any`, model=`cheap`, effort=`any`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["harness", "model", "effort"]);
+}
+
+#[test]
+fn local_setup_still_wins_for_request_next_to_agent_setup_sugar() {
+    let f = ok("interface Setup {\n  /** Only one row. */\n  ready: boolean;\n}\n/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await agentSetup(harness=`any`, model=`cheap`, effort=`any`);\n  /** T. */\n  const t: Setup = await request(`x`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["harness", "model", "effort"]);
+    let Some(Ok(t)) = f.answer_struct("t") else { panic!("no struct bound") };
+    let names: Vec<&str> = t.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["ready"]);
+}
