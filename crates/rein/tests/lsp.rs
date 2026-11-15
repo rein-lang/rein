@@ -2071,3 +2071,30 @@ fn an_unsaved_buffer_the_loader_skips_is_not_a_function_of_the_program() {
     fs::remove_dir_all(&root).unwrap();
     fs::remove_dir_all(&home).unwrap();
 }
+
+#[test]
+fn rename_skips_boolean_literals_and_refuses_them_as_a_new_name() {
+    let root = temp_project("bool-literal");
+    fs::write(
+        root.join("target.rein"),
+        "/** Target. */\nexport default function target(\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n",
+    )
+    .unwrap();
+    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./target(ok=true);\n}\n").unwrap();
+    let mut server = start_with_file_renames();
+    let main = open_file(&mut server, &root, "main.rein");
+
+    // The `true` literal is not a symbol, so there is nothing to rename.
+    let prepared = server.request(2, "textDocument/prepareRename", at(&main, 2, 23));
+    assert!(prepared["result"].is_null(), "{prepared}");
+
+    // A parameter cannot take a boolean literal as its new name.
+    let target = open_file(&mut server, &root, "target.rein");
+    let mut params = at(&target, 3, 3);
+    params["newName"] = json!("false");
+    let failed = server.request(3, "textDocument/rename", params);
+    assert!(failed["error"]["message"].as_str().unwrap().contains("boolean literal"), "{failed}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}

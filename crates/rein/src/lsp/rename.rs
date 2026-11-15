@@ -60,6 +60,10 @@ pub fn rename(state: &State, p: &RenameParams) -> Result<Option<WorkspaceEdit>, 
     if !is_identifier(new) || KEYWORDS.contains(&new) {
         return Err(format!("`{new}` is not a valid name: use letters, digits and `_`, and start with a letter"));
     }
+    // The checker refuses `true` and `false` as a parameter, field or answer name.
+    if matches!(symbol, Symbol::Param { .. } | Symbol::Field { .. }) && matches!(new, "true" | "false") {
+        return Err(format!("`{new}` is a boolean literal; pick another name"));
+    }
     match symbol {
         Symbol::Std(n) => Err(std_error(&n)),
         Symbol::Param { function, name: old } => rename_param(&state.docs, &project, &function, &old, new).map(Some),
