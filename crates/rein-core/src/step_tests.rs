@@ -1022,3 +1022,18 @@ fn a_hand_off_back_passes_the_value_and_it_beats_the_stored_answer() {
     let diags: Vec<_> = bare.check().into_values().flatten().filter(|d| d.severity == crate::check::MISSING_TYPED_ARG).collect();
     assert!(diags.iter().any(|d| d.message.contains("`@./main` takes 1 argument, got 0; pass `ready`")), "{diags:?}");
 }
+
+/// A hand-off passes a caller union into a wider union of the target. The target switches on it and does not
+/// ask for it; a union it was not passed is still a question.
+#[test]
+fn a_passed_union_is_not_a_question_and_an_unpassed_one_is() {
+    let main = "/** Entry. */\nexport default function main(\n  /** Which account? */\n  account: \"work\" | \"home\",\n) {\n  return @./go(account=account);\n}\n";
+    let go = "interface Job {\n  /** Which account? */\n  account: \"work\" | \"home\" | \"shared\";\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n/** Go. */\nexport default function go({ account, ci }: Job) {\n  switch (account) {\n    case \"work\":\n      return `work`;\n    case \"home\":\n    case \"shared\":\n      return @./merge(ci=ci);\n  }\n}\n";
+    let project = project(&[("main.rein", main), ("go.rein", go), ("merge.rein", MERGE_CI)]);
+    let res = step(&project, &req("main", &[("main.account", "work")]));
+    let StepResponse::Done { instruction, answers, .. } = res else { panic!("{res:?}") };
+    assert_eq!((instruction.as_str(), answers.len()), ("work", 1));
+    let res = step(&project, &req("main", &[("main.account", "home")]));
+    let StepResponse::Question { key, .. } = res else { panic!("{res:?}") };
+    assert_eq!(key, "go.ci");
+}

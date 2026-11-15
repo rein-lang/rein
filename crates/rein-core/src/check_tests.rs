@@ -100,7 +100,8 @@ fn a_typed_argument_is_a_name_of_the_same_type() {
     expect_diag(&review_caller("pr=pr, big=ci, ci=ci"), Severity::Error, msg);
     expect_diag(&review_caller("pr=pr, big=big, ci=nope"), Severity::Error, "unknown parameter `nope`");
     let wider = review_caller("pr=pr, big=big, ci=ci").replace("\"red\" =", "\"red\" | \"pending\" =");
-    expect_diag(&wider, Severity::Error, "but `ci` of `@./review` is `\"green\" | \"red\"`");
+    let msg = "`ci` can be `pending`, which `ci` of `@./review` does not have; its members are `green`, `red`";
+    expect_diag(&wider, Severity::Error, msg);
 }
 
 fn check_src(src: &str) -> Vec<Diagnostic> {
@@ -1343,8 +1344,10 @@ fn await_reports_each_error_of_a_call_with_return() {
 #[test]
 fn a_literal_of_the_right_type_is_a_typed_argument() {
     clean(&review_caller("pr=pr, big=true, ci=\"green\"").replace("  return", "  if (big || ci === \"red\") {\n    return `x`;\n  }\n\n  return"));
-    let msg = "`ci` of `@./review` is `\"green\" | \"red\"`; pass a parameter or an answer";
-    expect_diag(&review_caller("pr=pr, big=big, ci=\"blue\""), Severity::Error, msg);
+    let blue = check_src(&review_caller("pr=pr, big=big, ci=\"blue\""));
+    let msg = "`blue` is not a member of `ci` of `@./review`; members are `green`, `red`";
+    assert!(blue.iter().any(|d| d.severity == Severity::Error && d.message == msg), "{blue:?}");
+    assert!(!blue.iter().any(|d| d.message.contains("backticks")), "{blue:?}");
     expect_diag(&review_caller("pr=pr, big=big, ci=true"), Severity::Error, "unknown parameter `true`");
     expect_diag(&review_caller("pr=pr, big=\"green\", ci=ci"), Severity::Error, "`big` of `@./review` is `boolean`");
 }
