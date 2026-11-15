@@ -487,7 +487,15 @@ fn entry_starts(project: &Project, req: &StepRequest) -> Vec<String> {
 /// before a `>` is `<function>.<const>`, an `await` whose target reaches the next part's function through
 /// hand-offs. `None` for any other owner, so its keys are unknown. An owner with no `>` is any function, as before.
 fn owner_function<'a>(project: &Project, starts: &[String], owner: &'a str) -> Option<&'a str> {
-    let mut reach: Option<BTreeSet<String>> = owner.contains(CALL).then(|| handoff_reach(project, starts.to_vec()));
+    let mut reach: Option<BTreeSet<String>> = None;
+    // The callbacks the walk holds: the entry's callback inputs, and the `@` arguments on its way.
+    let mut held = BTreeSet::new();
+    if owner.contains(CALL) {
+        let (seen, passed) = handoff_reach(project, starts.to_vec());
+        held.extend(starts.iter().skip(1).cloned());
+        held.extend(passed);
+        reach = Some(seen);
+    }
     let mut parts = owner.split(CALL).peekable();
     while let Some(part) = parts.next() {
         let last = parts.peek().is_none();
@@ -498,14 +506,23 @@ fn owner_function<'a>(project: &Project, starts: &[String], owner: &'a str) -> O
         if last {
             return Some(function);
         }
-        reach = Some(call_reach(project, function, part.rsplit_once('.')?.1)?);
+        let (next, next_held) = call_reach(project, function, part.rsplit_once('.')?.1, &held)?;
+        reach = Some(next);
+        held = next_held;
     }
     None
 }
 
-/// The functions a walk can be in during the call `<function>.<name>`: the target of that `await`, the `@` arguments
-/// it passes, and each function these reach through hand-offs. `None` when `name` is not an `await` of a function.
-fn call_reach(project: &Project, function: &str, name: &str) -> Option<BTreeSet<String>> {
+/// The functions a walk can be in during the call `<function>.<name>`, and the callbacks it holds there. The walk is in
+/// the target of that `await`, in the `@` arguments it passes, and in each function these reach through hand-offs. A
+/// callback passed by name, such as `then=then`, is one the caller `held`, so each held callback is reached too.
+/// `None` when `name` is not an `await` of a function.
+fn call_reach(
+    project: &Project,
+    function: &str,
+    name: &str,
+    held: &BTreeSet<String>,
+) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
     let f = &project.get(function)?.function;
     let mut awaited = None;
     walk_stmts(&f.body, &mut |s| {
@@ -516,16 +533,23 @@ fn call_reach(project: &Project, function: &str, name: &str) -> Option<BTreeSet<
         }
     });
     let value = awaited?;
+    let args: Vec<String> = arg_keys(value).into_iter().filter_map(|k| follow(project, function, k)).collect();
     let mut starts = vec![follow(project, function, ref_key(value)?)?];
-    starts.extend(arg_keys(value).into_iter().filter_map(|k| follow(project, function, k)));
-    Some(handoff_reach(project, starts))
+    starts.extend(args.iter().cloned());
+    starts.extend(held.iter().cloned());
+    let (reach, passed) = handoff_reach(project, starts);
+    let mut callbacks = held.clone();
+    callbacks.extend(args);
+    callbacks.extend(passed);
+    Some((reach, callbacks))
 }
 
-/// `starts`, and each function they reach through hand-offs (returns, not awaits). A returned call passes its `@`
-/// arguments on, so a callback the caller gave is reached too.
-fn handoff_reach(project: &Project, starts: Vec<String>) -> BTreeSet<String> {
+/// `starts`, and each function they reach through hand-offs (returns, not awaits), and the `@` arguments those
+/// returned calls pass on. A returned call passes its `@` arguments on, so a callback the caller gave is reached too.
+fn handoff_reach(project: &Project, starts: Vec<String>) -> (BTreeSet<String>, BTreeSet<String>) {
     let mut queue = starts;
     let mut seen = BTreeSet::new();
+    let mut passed = BTreeSet::new();
     while let Some(g) = queue.pop() {
         if !seen.insert(g.clone()) {
             continue;
@@ -533,12 +557,14 @@ fn handoff_reach(project: &Project, starts: Vec<String>) -> BTreeSet<String> {
         let Some(sf) = project.get(&g) else { continue };
         walk_stmts(&sf.function.body, &mut |s| {
             if let Stmt::Return(r) = s {
-                let keys = ref_key(&r.value).into_iter().chain(arg_keys(&r.value));
-                queue.extend(keys.filter_map(|k| follow(project, &g, k)));
+                let args: Vec<String> = arg_keys(&r.value).into_iter().filter_map(|k| follow(project, &g, k)).collect();
+                queue.extend(ref_key(&r.value).into_iter().filter_map(|k| follow(project, &g, k)));
+                queue.extend(args.iter().cloned());
+                passed.extend(args);
             }
         });
     }
-    seen
+    (seen, passed)
 }
 
 /// The reference key a returned or awaited value names, such as `./x` or `program/fn`. `None` for text.

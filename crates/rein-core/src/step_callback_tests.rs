@@ -182,3 +182,86 @@ fn an_await_reached_through_an_entry_callback_takes_answers() {
     req.answers.insert("after.ok>ask.sure".into(), "yes".into());
     assert_eq!(request_key(&step(&p, &req)), "after.ok");
 }
+
+/// The key of the answer the step asks for, whether it is a question or a request.
+fn asked_key(res: &StepResponse) -> &str {
+    match res {
+        StepResponse::Question { key, .. } | StepResponse::Request { key, .. } => key,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A project of `files`, each `(file, text)`, in a fresh folder for `name`.
+fn project_of(name: &str, files: &[(&str, &str)]) -> Project {
+    let owned: Vec<(&str, String)> = files.iter().map(|(f, t)| (*f, t.to_string())).collect();
+    Project::load(&write(name, &owned)).unwrap()
+}
+
+/// Returns its `then` by name.
+const WORKER: &str = r#"interface Input {
+  /** Where to go when done. */
+  then: @;
+}
+/** Worker. */
+export default function worker({ then }: Input) {
+  return then;
+}
+"#;
+
+/// Asks one question, then returns.
+const ASKS_OK: &str = r#"/** After. */
+export default async function after() {
+  /** Is it ok? */
+  const ok: boolean = await request(`Ask if ok.`);
+  return `After done.`;
+}
+"#;
+
+/// Awaits `worker`, and passes its `then` to it by name.
+const HANDLE_BY_NAME: &str = r#"interface Input {
+  /** Where to go when done. */
+  then: @;
+}
+/** Handle. */
+export default async function handle({ then }: Input) {
+  /** Did the worker finish? */
+  const r: boolean = await @./worker(then=then);
+  if (!r) {
+    return `Stop.`;
+  }
+  return `CONTINUED`;
+}
+"#;
+
+/// `main` gives `after` to `handle`. The callback is awaited inside `worker`, one call below `handle`.
+#[test]
+fn an_await_passing_a_callback_by_name_takes_answers() {
+    let main = "/** Entry. */\nexport default function main() {\n  return @./handle(then=@./after);\n}\n";
+    let p = project_of("by-name", &[("main.rein", main), ("handle.rein", HANDLE_BY_NAME), ("worker.rein", WORKER), ("after.rein", ASKS_OK)]);
+    assert_eq!(asked_key(&step(&p, &with(&[]))), "handle.r>after.ok");
+    let res = step(&p, &with(&[("handle.r>after.ok", "yes")]));
+    assert_eq!(request_key(&res), "handle.r");
+    assert_eq!(traced(&res), ["main", "handle", "worker", "after"]);
+}
+
+/// The same when the entry is `handle`, and the callback comes in as an input.
+#[test]
+fn an_entry_awaiting_a_callback_passed_by_name_takes_answers() {
+    let p = project_of("by-name-entry", &[("handle.rein", HANDLE_BY_NAME), ("worker.rein", WORKER), ("after.rein", ASKS_OK)]);
+    let mut req = with(&[]);
+    req.entry = "handle".into();
+    req.inputs = BTreeMap::from([("then".into(), "@./after".into())]);
+    assert_eq!(asked_key(&step(&p, &req)), "handle.r>after.ok");
+    req.answers.insert("handle.r>after.ok".into(), "yes".into());
+    assert_eq!(request_key(&step(&p, &req)), "handle.r");
+}
+
+/// Two awaits deep: `main` awaits `mid(then=@./after)`, and `mid` awaits `worker(then=then)`.
+#[test]
+fn a_callback_passed_by_name_two_awaits_deep_takes_answers() {
+    let main = "/** Entry. */\nexport default async function main() {\n  /** Done? */\n  const r: boolean = await @./mid(then=@./after);\n  return `END`;\n}\n";
+    let mid = "interface Input {\n  /** Where to go when done. */\n  then: @;\n}\n/** Mid. */\nexport default async function mid({ then }: Input) {\n  /** Inner done? */\n  const q: boolean = await @./worker(then=then);\n  return then;\n}\n";
+    let p = project_of("by-name-deep", &[("main.rein", main), ("mid.rein", mid), ("worker.rein", WORKER), ("after.rein", ASKS_OK)]);
+    assert_eq!(asked_key(&step(&p, &with(&[]))), "main.r>mid.q>after.ok");
+    assert_eq!(request_key(&step(&p, &with(&[("main.r>mid.q>after.ok", "yes")]))), "main.r>mid.q");
+}
