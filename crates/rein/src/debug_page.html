@@ -207,7 +207,7 @@ function drawControls() {
   if (inputs.length) box.append(el("h2", {}, "Inputs"));
   for (const i of inputs) {
     const unset = state.placeholders.includes(i.name);
-    const note = unset ? " (unset: the flow shows <" + i.name + ">)" : "";
+    const note = unset ? " (unset: the process shows <" + i.name + ">)" : "";
     const c = control({ key: i.name, type: "string", description: i.description + note }, state.inputs[i.name], (v) => setInput(i.name, v));
     if (unset) c.classList.add("needed");
     box.append(c);

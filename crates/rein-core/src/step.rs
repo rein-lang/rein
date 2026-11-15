@@ -304,7 +304,7 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
             }
         }
     }
-    let message = format!("flow did not finish in {HOP_LIMIT} steps (reference cycle?)");
+    let message = format!("process did not finish in {HOP_LIMIT} steps (reference cycle?)");
     failure(message, None, Vec::new(), answers, trace)
 }
 

@@ -189,7 +189,7 @@ fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
         let label = |id: &str| g.nodes.iter().find(|n| n.id == id).unwrap().label.clone();
         let current = label(&g.current.as_ref().expect("current").node);
         // The last outcome on the path is the text the callee ended with.
-        let ended = g.path.iter().map(|id| label(id)).filter(|l| l.starts_with("Leaf")).last().unwrap_or_default();
+        let ended = g.path.iter().map(|id| label(id)).rfind(|l| l.starts_with("Leaf")).unwrap_or_default();
         assert_eq!(current, "await @./leaf\nok: boolean", "the request is asked at the caller's await");
         (text, ended)
     };
