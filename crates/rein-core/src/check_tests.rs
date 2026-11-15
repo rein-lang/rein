@@ -1348,7 +1348,9 @@ fn a_literal_of_the_right_type_is_a_typed_argument() {
     let msg = "`blue` is not a member of `ci` of `@./review`; members are `green`, `red`";
     assert!(blue.iter().any(|d| d.severity == Severity::Error && d.message == msg), "{blue:?}");
     assert!(!blue.iter().any(|d| d.message.contains("backticks")), "{blue:?}");
-    expect_diag(&review_caller("pr=pr, big=big, ci=true"), Severity::Error, "unknown parameter `true`");
+    let tru = check_src(&review_caller("pr=pr, big=big, ci=true"));
+    assert!(tru.iter().any(|d| d.severity == Severity::Error && d.message.starts_with("`ci` of `@./review` is `\"green\" | \"red\"`; pass")), "{tru:?}");
+    assert!(!tru.iter().any(|d| d.message.contains("unknown parameter")), "{tru:?}");
     expect_diag(&review_caller("pr=pr, big=\"green\", ci=ci"), Severity::Error, "`big` of `@./review` is `boolean`");
 }
 
