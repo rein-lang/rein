@@ -108,15 +108,15 @@ pub fn agent_context(flows: &[Flow]) -> String {
         return String::new();
     }
     let mut lines = vec![
-        "Rein flows are step-by-step agent flows. Each flow decides the next step for you; follow it instead of guessing.".to_string(),
-        "Flows:".to_string(),
+        "Rein processes are step-by-step agent processes. Each process decides the next step for you; follow it instead of guessing.".to_string(),
+        "Processes:".to_string(),
     ];
     for f in visible {
         lines.push(format!("- {} ({}): {}", f.name, f.scope.label(), f.description));
     }
-    lines.push("How to use a flow:".to_string());
+    lines.push("How to use a process:".to_string());
     lines.push(
-        "When a task matches a flow, start it with the rein MCP tools (rein_start, then rein_answer until kind=done). Without them, run `rein step --flow <name> --json` and follow it until kind=done: answer each question with --answer <key>=<value> (or send the returned `answers` back via --stdin, with \"flow\" set and your new answer added); for kind=request, do the instruction first, then answer.".to_string(),
+        "When a task matches a process, start it with the rein MCP tools (rein_start, then rein_answer until kind=done). Without them, run `rein step --flow <name> --json` and follow it until kind=done: answer each question with --answer <key>=<value> (or send the returned `answers` back via --stdin, with \"flow\" set and your new answer added); for kind=request, do the instruction first, then answer.".to_string(),
     );
     lines.join("\n")
 }

@@ -48,7 +48,7 @@ pub fn code_actions(state: &State, p: &CodeActionParams) -> Option<CodeActionRes
 /// Moves function `name` into the folder of its only caller, as the warning says: the file moves and every
 /// reference follows. None when the editor cannot rename files.
 fn move_fix(state: &State, project: &Project, name: &str, d: &Diagnostic) -> Option<(String, WorkspaceEdit)> {
-    if !d.message.contains("so the folders show the flow") {
+    if !d.message.contains("so the folders show the process") {
         return None;
     }
     let home = project.nest_target(name)?;

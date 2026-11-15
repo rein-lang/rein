@@ -37,13 +37,13 @@ pub struct GraphArgs {
     /// Draw only the references: one node per function, one edge per reference.
     #[arg(long)]
     refs: bool,
-    /// Walk the flow from this function, as its path under the root without `.rein`. Default: the program's entry.
+    /// Walk the process from this function, as its path under the root without `.rein`. Default: the program's entry.
     #[arg(long, conflicts_with = "refs")]
     entry: Option<String>,
-    /// Walk the flow with this answer, as key=value, such as `main.task=merge`. Repeat for each answer.
+    /// Walk the process with this answer, as key=value, such as `main.task=merge`. Repeat for each answer.
     #[arg(long = "answer", value_name = "KEY=VALUE", conflicts_with = "refs")]
     answer: Vec<String>,
-    /// Walk the flow with this value of a `string` parameter of the entry, as name=value. Repeat for each input.
+    /// Walk the process with this value of a `string` parameter of the entry, as name=value. Repeat for each input.
     #[arg(long = "input", value_name = "NAME=VALUE", conflicts_with = "refs")]
     input: Vec<String>,
     /// Output format. Default: `html` for a `.html` FILE or with --open, else `mermaid`.
