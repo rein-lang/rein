@@ -1,6 +1,0 @@
-/**
- * Tell the customer what happens next, in one sentence.
- */
-export default function tellCustomer({ opening, next_step }: @../message) {
-  return `${opening} ${next_step}`;
-}

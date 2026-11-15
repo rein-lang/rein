@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo.svg" width="128" alt="Rein logo"></p>
+<p align="center"><img src="https://github.com/rein-lang/assets/raw/main/logo.svg" width="128" alt="Rein logo"></p>
 
 # Rein
 
@@ -82,7 +82,8 @@ A call follows each reference in the same call. The `trace` lists the functions 
 ## Quickstart
 
 ```sh
-cargo install --path crates/rein        # puts `rein` on PATH
+git submodule update --init             # fetch examples/
+cargo install --git https://github.com/rein-lang/rein --tag v0.1.0 --locked rein  # puts `rein` on PATH
 cd examples
 rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin
@@ -112,7 +113,9 @@ The docs site and the landing page live in [rein-lang/rein-lang.com](https://git
 | `crates/rein-core` | Lexer, parser, checker, evaluator, and the std library (`std/`). |
 | `crates/rein` | CLI and language server. |
 | [rein-lang/vscode-rein](https://github.com/rein-lang/vscode-rein) | VS Code extension, in its own repo. A thin JS client for the language server, a Rein grammar, snippets, and tests. |
-| `examples` | Example projects. |
+| `examples` | [rein-lang/examples](https://github.com/rein-lang/examples) as a git submodule. Example programs; the tests use them as fixtures. |
+| [rein-lang/assets](https://github.com/rein-lang/assets) | Logo and brand files, in its own repo. |
+| [rein-lang/videos](https://github.com/rein-lang/videos) | Videos about Rein, such as the concept explainer, in their own repo. |
 | [rein-lang/rein-lang.com](https://github.com/rein-lang/rein-lang.com) | Language reference, decisions and the docs site, in its own repo. |
 
 ## Docs
