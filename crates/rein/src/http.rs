@@ -53,7 +53,10 @@ pub fn exchange<R: BufRead, W: Write>(
             continue;
         };
         if name.eq_ignore_ascii_case("content-length") {
-            length = value.trim().parse().unwrap_or(0);
+            // A number too large for usize is above MAX_BODY, not 0.
+            let digits = value.trim();
+            let number = !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit());
+            length = digits.parse().unwrap_or(if number { usize::MAX } else { 0 });
         }
         if name.eq_ignore_ascii_case("host") {
             host = value.trim().to_string();
@@ -127,12 +130,15 @@ mod tests {
     }
 
     /// A Content-Length above MAX_BODY gets 413 at once, with no body read and no call to `respond`.
+    /// This includes a number too large for usize.
     #[test]
     fn an_oversized_body_gets_413_at_once() {
-        let request = format!("POST /answer HTTP/1.1\r\nHost: 127.0.0.1:1\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1);
-        let mut reply = Vec::new();
-        exchange(request.as_bytes(), &mut reply, 1, |_, _, _| panic!("respond must not run")).unwrap();
-        let reply = String::from_utf8(reply).unwrap();
-        assert!(reply.starts_with("HTTP/1.1 413 Content Too Large"), "{reply}");
+        for length in [(MAX_BODY + 1).to_string(), "99999999999999999999999999".to_string()] {
+            let request = format!("POST /answer HTTP/1.1\r\nHost: 127.0.0.1:1\r\nContent-Length: {length}\r\n\r\n");
+            let mut reply = Vec::new();
+            exchange(request.as_bytes(), &mut reply, 1, |_, _, _| panic!("respond must not run")).unwrap();
+            let reply = String::from_utf8(reply).unwrap();
+            assert!(reply.starts_with("HTTP/1.1 413 Content Too Large"), "{length}: {reply}");
+        }
     }
 }
