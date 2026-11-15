@@ -758,6 +758,9 @@ impl<'a> Checker<'a> {
     fn typed_arg(&mut self, v: &Value, param: &str, ty: &InputType, target: &str) {
         let want = ty.ts_type();
         let members = |m: &[Spanned<String>], value: &str| m.iter().any(|w| w.value == value);
+        let wrong = format!(
+            "`{param}` of `@{target}` is `{want}`; pass a parameter or an answer of that type, like `{param}={param}`, or a literal: `true`/`false` for a boolean, a quoted member for a union"
+        );
         let name = match (v, ty) {
             (Value::Str(s), InputType::Choice(m)) if members(m, &s.value) => return self.literals.push(s.span),
             (Value::Str(s), InputType::Choice(m)) => {
@@ -766,16 +769,13 @@ impl<'a> Checker<'a> {
                 return self.error(s.span, msg);
             }
             (Value::Name(name), _) => name,
-            _ => {
-                let msg = format!(
-                    "`{param}` of `@{target}` is `{want}`; pass a parameter or an answer of that type, like `{param}={param}`, or a literal: `true`/`false` for a boolean, a quoted member for a union"
-                );
-                return self.error(v.span(), msg);
-            }
+            _ => return self.error(v.span(), wrong),
         };
         self.used.insert(name.value.clone());
         let have = match (self.lookup(&name.value), ty) {
             (None, InputType::Bool) if matches!(name.value.as_str(), "true" | "false") => return,
+            // A boolean literal for a union is the wrong type, not an unknown name.
+            (None, _) if matches!(name.value.as_str(), "true" | "false") => return self.error(name.span, wrong),
             (None, _) => return self.unknown(name),
             (Some(InputType::Bool), InputType::Bool) => return,
             (Some(InputType::Choice(have)), InputType::Choice(m)) => {
