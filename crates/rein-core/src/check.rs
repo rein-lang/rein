@@ -735,10 +735,16 @@ impl<'a> Checker<'a> {
                 Ok(Binding::Function(_)) => {}
             },
         }
-        for arg in &call.args {
-            let param = arg.name.as_ref().and_then(|n| typed.iter().find(|(p, _)| *p == n.value));
+        for (i, arg) in call.args.iter().enumerate() {
+            // A positional argument already has its error; check its value against the parameter at its place.
+            let param = match &arg.name {
+                Some(n) => typed.iter().find(|(p, _)| *p == n.value),
+                None => typed.get(i),
+            };
             match param {
                 Some((p, ty)) if *ty != InputType::Text => self.typed_arg(&arg.value, p, ty, call.callee.key()),
+                // An unknown name already has its error, and its value has no type to check against.
+                None if arg.name.is_some() && !typed.is_empty() => {}
                 _ => self.value(&arg.value),
             }
         }

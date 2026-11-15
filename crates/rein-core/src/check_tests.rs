@@ -1353,6 +1353,18 @@ fn a_literal_of_the_right_type_is_a_typed_argument() {
 }
 
 #[test]
+fn an_unbound_argument_gets_no_wrong_string_error() {
+    // A positional argument takes the type of the parameter at its place.
+    let positional = check_src(&review_caller("pr, big, ci"));
+    assert!(positional.iter().any(|d| d.message.contains("missing argument `big`")), "{positional:?}");
+    assert!(!positional.iter().any(|d| d.message.contains("is not a string input")), "{positional:?}");
+    // An argument with an unknown name gets only the unknown-parameter error.
+    let unknown = check_src(&review_caller("pr=pr, big=big, ci=ci, nope=big"));
+    assert!(unknown.iter().any(|d| d.severity == Severity::Error), "{unknown:?}");
+    assert!(!unknown.iter().any(|d| d.message.contains("is not a string input")), "{unknown:?}");
+}
+
+#[test]
 fn a_bare_hand_off_back_to_a_function_with_a_boolean_is_a_missing_typed_argument() {
     let src = "/** F. */\nexport default function f() {\n  return @./typed;\n}\n";
     let diags = check_src(src);
