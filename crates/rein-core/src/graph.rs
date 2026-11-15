@@ -1,7 +1,7 @@
 //! The program graph behind `rein graph`: the decision flow of every function, or only the references.
 //! Node ids and order come from the function names and the source order, so the output is stable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 
@@ -47,7 +47,8 @@ pub enum NodeKind {
     Function,
     /// A parameter or a request answer that a branch tests. The label is the question, then `name: type`.
     Question,
-    /// A test that is not one parameter, such as `a && b`. The label is the expression.
+    /// A test that is not one parameter, such as `a && b`, labelled with the expression. Or a parameter that every
+    /// caller in this project passes, so a run of this project never asks it, labelled like a question.
     Condition,
     /// `await request(...)`: the agent does the step, then the flow goes on.
     Request,
@@ -141,10 +142,14 @@ pub fn walk<'a>(project: &'a Project, entry: &str, response: &'a StepResponse) -
     // a logged run of a program that changed since, each function on the trace is read through its plain keys.
     let plain = |o: &str| o.rsplit_once(CALL).map_or(o, |(_, f)| f).to_string();
     let stepped = owners(project, entry, answers);
-    let walked = if stepped.iter().map(|o| plain(o)).eq(trace.iter().cloned()) { stepped } else { trace.clone() };
-    let mut first: HashMap<String, String> = HashMap::new();
-    for owner in walked {
-        first.entry(plain(&owner)).or_insert(owner);
+    let walked = if stepped.iter().map(|(o, _)| plain(o)).eq(trace.iter().cloned()) {
+        stepped
+    } else {
+        trace.iter().map(|f| (f.clone(), BTreeMap::new())).collect()
+    };
+    let mut first: HashMap<String, Visit> = HashMap::new();
+    for (owner, passed) in walked {
+        first.entry(plain(&owner)).or_insert((owner, passed));
     }
     b.walk = Some((answers, first));
     b.flow();
@@ -188,14 +193,18 @@ pub fn refs(project: &Project, entry: &str) -> Graph {
 /// Where the next node hangs: the node before it, and the answer that leads on from it.
 type From = (String, Option<String>);
 
+/// The first call of a function in a walk: its owner, as `rein step` keys its answers, and the values passed to it.
+type Visit = (String, BTreeMap<String, String>);
+
 struct Builder<'a> {
     project: &'a Project,
     graph: Graph,
     function: &'a str,
     fid: usize,
     step: usize,
-    /// The answers of a walk, when there is one, and the owner of the first call of each function it walks.
-    walk: Option<(&'a Answers, HashMap<String, String>)>,
+    /// The answers of a walk, when there is one, and the first call of each function it walks: its owner and the
+    /// values passed to it.
+    walk: Option<(&'a Answers, HashMap<String, Visit>)>,
     /// The answers of the function being drawn, for the walk.
     vars: HashMap<String, String>,
     /// The nodes the walk took, per function, in walk order.
@@ -226,8 +235,10 @@ impl<'a> Builder<'a> {
             self.fid = i;
             self.step = 0;
             let walked = self.walk.as_ref().and_then(|(a, first)| first.get(name.as_str()).map(|o| (*a, o.clone())));
-            if let Some((answers, owner)) = &walked {
-                self.vars = eval::with_struct_fields(&sf.function, &inputs_of(owner, answers));
+            if let Some((answers, (owner, passed))) = &walked {
+                let mut inputs = inputs_of(owner, answers);
+                inputs.extend(passed.iter().map(|(k, v)| (k.clone(), v.clone())));
+                self.vars = eval::with_struct_fields(&sf.function, &inputs);
                 self.paths.entry(name.to_string()).or_default().push(id.clone());
             }
             self.block(&sf.function, &sf.function.body, (id, None), walked.is_some());
@@ -278,12 +289,45 @@ impl<'a> Builder<'a> {
         let ty = input.map_or_else(String::new, |i| i.ty.ts_type());
         let text = input.map_or("", |i| i.description.value.as_str());
         let label = if text.is_empty() { format!("{name}: {ty}") } else { format!("{text}\n{name}: {ty}") };
-        let id = self.node(NodeKind::Question, label);
+        // A parameter that every caller passes is a test on a value, not a question the run asks.
+        let kind = if f.input(name).is_some() && self.passed(name) { NodeKind::Condition } else { NodeKind::Question };
+        let id = self.node(kind, label);
         if let Some(n) = self.graph.nodes.last_mut() {
             n.name = Some(name.to_string());
             n.ty = Some(ty);
         }
         id
+    }
+
+    /// True when the function being drawn is not the entry, has a caller, and every hand-off or `await` to it
+    /// in this project passes `param`. It sees only this project's call sites. A call from another program
+    /// (`@program/function`) is not seen here: when that call omits `param`, its run still asks it.
+    // ponytail: scans every function per question; index the call sites if graphs get slow.
+    fn passed(&self, param: &str) -> bool {
+        let (function, project) = (self.function, self.project);
+        if function == self.graph.entry {
+            return false;
+        }
+        let (mut sites, mut all) = (0, true);
+        for (from, sf) in project.functions() {
+            crate::ast::walk_stmts(&sf.function.body, &mut |s| {
+                let target = match s {
+                    Stmt::Return(r) => &r.value,
+                    Stmt::Request { awaited: Awaited::Call(t), .. } => t,
+                    _ => return,
+                };
+                let (key, args) = match target {
+                    ReturnValue::Ref(r) => (r.value.as_str(), None),
+                    ReturnValue::Call(c) => (c.callee.key(), Some(&c.args)),
+                    ReturnValue::Text(_) | ReturnValue::Template(_) => return,
+                };
+                if matches!(project.binding_for(from, key), Ok(Binding::Function(path)) if path == function) {
+                    sites += 1;
+                    all &= args.is_some_and(|a| a.iter().any(|a| a.name.as_ref().is_some_and(|n| n.value == param)));
+                }
+            });
+        }
+        sites > 0 && all
     }
 
     fn edge(&mut self, from: From, to: &str, kind: EdgeKind, args: Vec<Arg>) {
@@ -536,7 +580,8 @@ pub fn mermaid(g: &Graph) -> String {
         match n.kind {
             NodeKind::Function if n.entry => format!("{id}([\"{l}\"])"),
             NodeKind::Function => format!("{id}[[\"{l}\"]]"),
-            NodeKind::Question | NodeKind::Condition => format!("{id}{{\"{l}\"}}"),
+            NodeKind::Question => format!("{id}{{\"{l}\"}}"),
+            NodeKind::Condition => format!("{id}{{{{\"{l}\"}}}}"),
             NodeKind::Request => format!("{id}[/\"{l}\"/]"),
             NodeKind::Done => format!("{id}(\"{l}\")"),
             NodeKind::Delegate => format!("{id}>\"{l}\"]"),
@@ -601,7 +646,8 @@ pub fn dot(g: &Graph) -> String {
         let shape = match n.kind {
             NodeKind::Function if n.entry => "shape=box, style=\"rounded,bold\"",
             NodeKind::Function => "shape=box, style=bold",
-            NodeKind::Question | NodeKind::Condition => "shape=diamond",
+            NodeKind::Question => "shape=diamond",
+            NodeKind::Condition => "shape=hexagon",
             NodeKind::Request => "shape=parallelogram",
             NodeKind::Done => "shape=box, style=rounded",
             NodeKind::Delegate => "shape=cds",

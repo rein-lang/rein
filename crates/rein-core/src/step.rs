@@ -162,7 +162,8 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
 /// The owner of each function a step walks, in walk order, as [`scoped`] gives it: `main`, then `main.b>fn`.
 /// `rein graph` reads a function's answers through the first of its owners. A `string` input of `entry` is walked
 /// as `<name>`: no condition reads an input, so the walk is the same as with the real inputs.
-pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<String> {
+/// Each owner comes with the values passed to that visit, so a walk reads a passed `boolean` as `rein step` does.
+pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<(String, BTreeMap<String, String>)> {
     let inputs = project.get(entry).map_or_else(BTreeMap::new, |sf| {
         sf.function.text_inputs().map(|i| (i.name.value.clone(), format!("<{}>", i.name.value))).collect()
     });
@@ -172,8 +173,8 @@ pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<String> 
     owners
 }
 
-/// [`step`], pushing the owner of each function it walks to `owners`.
-fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepResponse {
+/// [`step`], pushing the owner of each function it walks, and its passed values, to `owners`.
+fn run(project: &Project, req: &StepRequest, owners: &mut Vec<(String, BTreeMap<String, String>)>) -> StepResponse {
     let answers = req.answers.clone();
     if req.version != PROTOCOL_VERSION {
         return invalid_request(format!(
@@ -232,7 +233,7 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<String>) -> StepRe
         };
         // The owner of this visit's answer keys: `fn`, or `main.b>fn` inside the call `main.b`.
         let owner = scoped(&scope, &current);
-        owners.push(owner.clone());
+        owners.push((owner.clone(), strings.clone()));
         let mut inputs = inputs_of(&owner, &req.answers);
         inputs.extend(strings.iter().map(|(k, v)| (k.clone(), v.clone())));
         let outcome = match eval::run(&sf.function, &inputs, &project.bindings(&current)) {
