@@ -592,7 +592,8 @@ impl Parser {
         Ok(Arg { name, value, span })
     }
 
-    /// The value of an argument: a string, a template literal, a bare name of a `string` parameter, or a call.
+    /// The value of an argument: a string, a template literal, a bare name (a parameter, an answer, `true` or
+    /// `false`), or a call.
     fn arg_value(&mut self) -> Result<Value, Diagnostic> {
         if let Tok::Ident(name) = self.peek().clone() {
             if *self.next_tok() != Tok::LParen {
