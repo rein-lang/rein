@@ -16,7 +16,7 @@ pub fn parse(src: &str) -> (Function, Vec<Diagnostic>) {
         Ok(toks) => toks,
         Err(d) => return (f, vec![d]),
     };
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser { toks, pos: 0, sugar_answers: Vec::new() };
     let diags = match p.file(&mut f) {
         Ok(()) => vec![],
         Err(d) => vec![d],
@@ -27,6 +27,8 @@ pub fn parse(src: &str) -> (Function, Vec<Diagnostic>) {
 struct Parser {
     toks: Vec<(Tok, Span)>,
     pos: usize,
+    /// Names of the answers that use the `agentSetup` sugar.
+    sugar_answers: Vec<String>,
 }
 
 const DOC_PLACES: &str =
@@ -196,8 +198,12 @@ impl Parser {
         }
         for (answer, r) in f.answer_struct_refs() {
             if let StructRef::Local(name) = r {
-                // A struct of the file wins; else a std struct, such as `Setup`.
-                let local = f.structs.iter().find(|s| s.name.value == name.value).cloned();
+                // The `agentSetup` sugar always binds the std `Setup`. Else a struct of the file wins; else a std struct.
+                let local = if self.sugar_answers.contains(&answer) {
+                    None
+                } else {
+                    f.structs.iter().find(|s| s.name.value == name.value).cloned()
+                };
                 let found = local.or_else(|| crate::stdlib::std_struct(&name.value)).ok_or_else(|| {
                     format!("cannot find struct `{0}`; declare `interface {0} {{ ... }}` in this file", name.value)
                 });
@@ -503,6 +509,9 @@ impl Parser {
                 ty_span,
                 format!("`agentSetup` gives a `Setup`; write `const {}: Setup`", name.value),
             ));
+        }
+        if sugar {
+            self.sugar_answers.push(name.value.clone());
         }
         if *self.peek() == Tok::Semi {
             self.bump();
