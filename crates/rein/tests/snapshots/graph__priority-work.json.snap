@@ -1,0 +1,165 @@
+---
+source: crates/rein/tests/graph.rs
+expression: text
+---
+{
+  "version": 1,
+  "view": "flow",
+  "entry": "main",
+  "nodes": [
+    {
+      "id": "f0",
+      "kind": "function",
+      "function": "find_projects",
+      "label": "find_projects(workplace)"
+    },
+    {
+      "id": "f0_0",
+      "kind": "question",
+      "function": "find_projects",
+      "label": "Does the workplace have a priority list, such as `Ideas.md`?\nhas_list: boolean",
+      "name": "has_list",
+      "type": "boolean"
+    },
+    {
+      "id": "f0_1",
+      "kind": "done",
+      "function": "find_projects",
+      "label": "Report that ${workplace} has no priority list."
+    },
+    {
+      "id": "f0_2",
+      "kind": "done",
+      "function": "find_projects",
+      "label": "Read the priority list in ${workplace}. Pick the high priority\nrepositories with activity this week."
+    },
+    {
+      "id": "f1",
+      "kind": "function",
+      "function": "main",
+      "label": "main(workplace)",
+      "entry": true
+    },
+    {
+      "id": "f1_0",
+      "kind": "request",
+      "function": "main",
+      "label": "await @./find_projects\nprojects: Projects"
+    },
+    {
+      "id": "f1_1",
+      "kind": "question",
+      "function": "main",
+      "label": "Did find_projects find no repository?\nprojects.none: boolean",
+      "name": "projects.none",
+      "type": "boolean"
+    },
+    {
+      "id": "f1_2",
+      "kind": "done",
+      "function": "main",
+      "label": "No priority project has activity."
+    },
+    {
+      "id": "f2",
+      "kind": "function",
+      "function": "open_prs",
+      "label": "open_prs(repos)"
+    },
+    {
+      "id": "f2_0",
+      "kind": "question",
+      "function": "open_prs",
+      "label": "Does any of these repositories have an open pull request?\nhas_open_prs: boolean",
+      "name": "has_open_prs",
+      "type": "boolean"
+    },
+    {
+      "id": "f2_1",
+      "kind": "done",
+      "function": "open_prs",
+      "label": "Open a pull request for the oldest issue in ${repos}."
+    },
+    {
+      "id": "f2_2",
+      "kind": "done",
+      "function": "open_prs",
+      "label": "Merge the open pull requests in ${repos}, oldest first."
+    }
+  ],
+  "edges": [
+    {
+      "from": "f0",
+      "to": "f0_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f0_0",
+      "to": "f0_1",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f0_0",
+      "to": "f0_2",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f1",
+      "to": "f1_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f1_0",
+      "to": "f0",
+      "kind": "call",
+      "args": [
+        {
+          "name": "workplace",
+          "value": "workplace"
+        }
+      ]
+    },
+    {
+      "from": "f1_0",
+      "to": "f1_1",
+      "kind": "flow"
+    },
+    {
+      "from": "f1_1",
+      "to": "f1_2",
+      "kind": "flow",
+      "label": "yes"
+    },
+    {
+      "from": "f1_1",
+      "to": "f2",
+      "kind": "handoff",
+      "label": "no",
+      "args": [
+        {
+          "name": "repos",
+          "value": "projects.repos"
+        }
+      ]
+    },
+    {
+      "from": "f2",
+      "to": "f2_0",
+      "kind": "flow"
+    },
+    {
+      "from": "f2_0",
+      "to": "f2_1",
+      "kind": "flow",
+      "label": "no"
+    },
+    {
+      "from": "f2_0",
+      "to": "f2_2",
+      "kind": "flow",
+      "label": "yes"
+    }
+  ]
+}

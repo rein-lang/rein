@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::ast::{Arg, Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, Struct, TemplateLit, Value};
+use crate::ast::{Arg, Awaited, Binding, Call, Case, Expr, Function, Input, InputType, Piece, ReturnValue, Spanned, Stmt, Struct, TemplateLit, Value};
 use crate::check::{string_in_condition, struct_in_use};
 
 /// Result of a run.
@@ -16,6 +16,9 @@ pub enum Outcome {
     NeedInput(String),
     /// The agent must answer `response`, after doing `instruction`.
     Request { instruction: String, response: String },
+    /// `await @target(args)` with no answer yet: run `target` as a hand-off. Its final text is the request for
+    /// `response`. `target` and `args` are as in [`Outcome::Ref`].
+    Call { target: String, args: Vec<(String, String)>, response: String },
 }
 
 /// Why evaluation stopped before a return.
@@ -23,6 +26,7 @@ enum Stop {
     Need(String),
     Error(String),
     Request { instruction: String, response: String },
+    Call { target: String, args: Vec<(String, String)>, response: String },
 }
 
 type Eval<T> = Result<T, Stop>;
@@ -57,6 +61,7 @@ pub fn run(
         Err(Stop::Need(name)) => Ok(Outcome::NeedInput(name)),
         Err(Stop::Error(msg)) => Err(msg),
         Err(Stop::Request { instruction, response }) => Ok(Outcome::Request { instruction, response }),
+        Err(Stop::Call { target, args, response }) => Ok(Outcome::Call { target, args, response }),
     }
 }
 
@@ -91,26 +96,23 @@ fn exec<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
 fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
     for s in stmts {
         let out = match s {
-            Stmt::Request { response, arg, .. } => {
-                let instruction = expand_value(env, arg)?;
+            Stmt::Request { response, awaited, .. } => {
                 let name = response.name.value.as_str();
+                let stop = match awaited {
+                    Awaited::Request { arg, .. } => Stop::Request { instruction: expand_value(env, arg)?, response: name.to_string() },
+                    Awaited::Call(value) => match returned(env, value)? {
+                        Outcome::Ref { target, args } => Stop::Call { target, args, response: name.to_string() },
+                        _ => Stop::Error(format!("`{name}` awaits a template; only a function can be awaited")),
+                    },
+                };
                 let Some(raw) = env.inputs.get(name) else {
-                    return Err(Stop::Request { instruction, response: name.to_string() });
+                    return Err(stop);
                 };
                 check_answer(env.f, response, raw)?;
                 env.answers.borrow_mut().push(response);
                 None
             }
-            Stmt::Return(r) => Some(match &r.value {
-                ReturnValue::Text(t) => Outcome::Text(t.value.clone()),
-                ReturnValue::Ref(reference) => Outcome::Ref { target: target(env, &reference.value)?, args: Vec::new() },
-                ReturnValue::Template(lit) => Outcome::Text(expand_template(env, lit)?),
-                ReturnValue::Call(call) => match env.bindings.get(call.callee.key()) {
-                    // A hand-off: the arguments are the values of the target's `string` parameters, by name.
-                    Some(Binding::Function(path)) => Outcome::Ref { target: path.clone(), args: named_values(env, &call.args)? },
-                    _ => Outcome::Text(expand_call(env, call)?),
-                },
-            }),
+            Stmt::Return(r) => Some(returned(env, &r.value)?),
             Stmt::If { cond, then, .. } => {
                 if eval(env, cond)? {
                     exec(env, then)?
@@ -139,6 +141,20 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
         }
     }
     Ok(None)
+}
+
+/// The outcome of a returned value, or of the target of an `await`.
+fn returned(env: &Env, value: &ReturnValue) -> Eval<Outcome> {
+    Ok(match value {
+        ReturnValue::Text(t) => Outcome::Text(t.value.clone()),
+        ReturnValue::Ref(reference) => Outcome::Ref { target: target(env, &reference.value)?, args: Vec::new() },
+        ReturnValue::Template(lit) => Outcome::Text(expand_template(env, lit)?),
+        ReturnValue::Call(call) => match env.bindings.get(call.callee.key()) {
+            // A hand-off: the arguments are the values of the target's `string` parameters, by name.
+            Some(Binding::Function(path)) => Outcome::Ref { target: path.clone(), args: named_values(env, &call.args)? },
+            _ => Outcome::Text(expand_call(env, call)?),
+        },
+    })
 }
 
 /// The case group whose labels include `raw`.

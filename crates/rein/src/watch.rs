@@ -263,7 +263,7 @@ impl Run {
             let answered = self
                 .answers
                 .keys()
-                .filter_map(|k| k.rsplit_once('.').map(|(f, _)| f.to_string()));
+                .filter_map(|k| rein_core::step::key_parts(k).map(|(f, _)| f.to_string()));
             for name in seen.chain(answered) {
                 if !names.contains(&name) {
                     names.push(name);
@@ -279,8 +279,11 @@ impl Run {
                         .answers
                         .iter()
                         .filter_map(|(k, v)| {
-                            let (f, n) = k.rsplit_once('.')?;
-                            (f == name.as_str()).then(|| (n.to_string(), v.clone()))
+                            // An answer inside a call names its call, such as `ok (main.b)`, so two calls stay apart.
+                            let (owner, n) = k.rsplit_once('.')?;
+                            let (scope, f) = owner.rsplit_once(rein_core::step::CALL).unwrap_or(("", owner));
+                            let n = if scope.is_empty() { n.to_string() } else { format!("{n} ({scope})") };
+                            (f == name.as_str()).then(|| (n, v.clone()))
                         })
                         .collect();
                     json!({"name": name, "visited": trace.contains(&name.as_str()), "answers": answers})

@@ -361,6 +361,11 @@ impl Session {
                 trace,
                 ..
             } => {
+                // After an `await` callee ends, the request is the caller's: drop the callee's hops from the stack.
+                let trace = match trace.iter().rposition(|f| *f == function) {
+                    Some(i) => trace[..=i].to_vec(),
+                    None => trace,
+                };
                 let line = project
                     .get(&function)
                     .map_or(1, |sf| lines::request(sf, &response.name));

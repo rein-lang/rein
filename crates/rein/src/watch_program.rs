@@ -81,7 +81,7 @@ pub fn matches_run(loaded: &Loaded, trace: &[String], answers: &Map<String, Valu
     let project = &loaded.project;
     trace.iter().all(|f| project.get(f).is_some())
         && answers.keys().all(|key| {
-            let Some((function, name)) = key.rsplit_once('.') else { return false };
+            let Some((function, name)) = rein_core::step::key_parts(key) else { return false };
             project
                 .get(function)
                 .is_some_and(|sf| sf.function.input(name).or_else(|| sf.function.response(name)).is_some())

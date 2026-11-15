@@ -1,14 +1,14 @@
 //! The program graph behind `rein graph`: the decision flow of every function, or only the references.
 //! Node ids and order come from the function names and the source order, so the output is stable.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::ast::{Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
+use crate::ast::{Awaited, Binding, Call, Callee, Expr, Function, InputType, Piece, ReturnValue, Stmt, Value};
 use crate::eval;
 use crate::project::{Project, SourceFile};
-use crate::step::{inputs_of, Answers, StepResponse};
+use crate::step::{inputs_of, owners, Answers, StepResponse, CALL};
 
 /// Version of the JSON schema. Bump it when a field changes meaning or goes away.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -89,6 +89,8 @@ pub enum EdgeKind {
     Handoff,
     /// A template call: the text comes from that template.
     Template,
+    /// `await @function(...)`: the function runs, and its result is the answer. The flow goes on from the `await`.
+    Call,
 }
 
 #[derive(Debug, Serialize)]
@@ -124,22 +126,38 @@ pub fn flow(project: &Project, entry: &str) -> Graph {
 /// The step engine walks the flow; each function on its trace is walked again here, against the same
 /// answers and with the same evaluator, to find the nodes. An error response gets the plain flow.
 pub fn walk<'a>(project: &'a Project, entry: &str, response: &'a StepResponse) -> Graph {
-    let (answers, trace, kind, key) = match response {
-        StepResponse::Question { answers, trace, key, .. } => (answers, trace, "question", Some(key.clone())),
-        StepResponse::Request { answers, trace, key, .. } => (answers, trace, "request", Some(key.clone())),
-        StepResponse::Done { answers, trace, .. } => (answers, trace, "done", None),
+    let (answers, trace, kind, key, asker) = match response {
+        StepResponse::Question { answers, trace, key, .. } => (answers, trace, "question", Some(key.clone()), None),
+        StepResponse::Request { answers, trace, key, function, .. } => {
+            (answers, trace, "request", Some(key.clone()), Some(function))
+        }
+        StepResponse::Done { answers, trace, .. } => (answers, trace, "done", None, None),
         StepResponse::Error { .. } => return flow(project, entry),
     };
     let mut b = Builder::new(project, entry, "flow");
-    b.walk = Some((answers, trace.iter().map(String::as_str).collect()));
+    // The graph draws functions, not calls. A function that the walk visits in several calls is drawn with the
+    // answers of its first call, in the order `rein step` walks: `main.a>fn` before `main.b>fn`.
+    // The walk is stepped again to learn the call of each hop. When it does not give the response's trace, as for
+    // a logged run of a program that changed since, each function on the trace is read through its plain keys.
+    let plain = |o: &str| o.rsplit_once(CALL).map_or(o, |(_, f)| f).to_string();
+    let stepped = owners(project, entry, answers);
+    let walked = if stepped.iter().map(|o| plain(o)).eq(trace.iter().cloned()) { stepped } else { trace.clone() };
+    let mut first: HashMap<String, String> = HashMap::new();
+    for owner in walked {
+        first.entry(plain(&owner)).or_insert(owner);
+    }
+    b.walk = Some((answers, first));
     b.flow();
+    // A request is asked at the last node its function's walk reaches. After an `await` callee ends, that is the
+    // caller's `await` node, not the callee's outcome.
+    let asked = asker.and_then(|f| b.paths.get(f.as_str())).and_then(|p| p.last().cloned());
     let mut path: Vec<String> = Vec::new();
     for id in trace.iter().filter_map(|f| b.paths.remove(f)).flatten() {
         if !path.contains(&id) {
             path.push(id);
         }
     }
-    b.graph.current = path.last().map(|node| Current { node: node.clone(), kind, key });
+    b.graph.current = asked.or_else(|| path.last().cloned()).map(|node| Current { node, kind, key });
     b.graph.path = path;
     b.graph
 }
@@ -176,8 +194,8 @@ struct Builder<'a> {
     function: &'a str,
     fid: usize,
     step: usize,
-    /// The answers and the trace of a walk, when there is one.
-    walk: Option<(&'a Answers, HashSet<&'a str>)>,
+    /// The answers of a walk, when there is one, and the owner of the first call of each function it walks.
+    walk: Option<(&'a Answers, HashMap<String, String>)>,
     /// The answers of the function being drawn, for the walk.
     vars: HashMap<String, String>,
     /// The nodes the walk took, per function, in walk order.
@@ -207,12 +225,12 @@ impl<'a> Builder<'a> {
             self.function = name;
             self.fid = i;
             self.step = 0;
-            let answers = self.walk.as_ref().filter(|(_, trace)| trace.contains(name.as_str())).map(|(a, _)| *a);
-            if let Some(answers) = answers {
-                self.vars = eval::with_struct_fields(&sf.function, &inputs_of(name, answers));
+            let walked = self.walk.as_ref().and_then(|(a, first)| first.get(name.as_str()).map(|o| (*a, o.clone())));
+            if let Some((answers, owner)) = &walked {
+                self.vars = eval::with_struct_fields(&sf.function, &inputs_of(owner, answers));
                 self.paths.entry(name.to_string()).or_default().push(id.clone());
             }
-            self.block(&sf.function, &sf.function.body, (id, None), answers.is_some());
+            self.block(&sf.function, &sf.function.body, (id, None), walked.is_some());
         }
     }
 
@@ -304,16 +322,21 @@ impl<'a> Builder<'a> {
                     self.block(f, &case.body, (node.clone(), Some(label)), hit);
                 }
             }
-            Stmt::Request { response, arg, .. } => {
-                let mut label = format!("request: {}", value_text(arg));
-                // A struct answer shows its name and struct, like `pick: Pick`.
-                if matches!(response.ty, InputType::Struct(_)) {
+            Stmt::Request { response, awaited, .. } => {
+                let mut label = match awaited {
+                    Awaited::Request { arg, .. } => format!("request: {}", value_text(arg)),
+                    Awaited::Call(target) => format!("await {}", return_text(target)),
+                };
+                // A struct answer, or the answer of a call, shows its name and type, like `pick: Pick`.
+                if matches!(response.ty, InputType::Struct(_)) || matches!(awaited, Awaited::Call(_)) {
                     label.push_str(&format!("\n{}: {}", response.name.value, response.ty.ts_type()));
                 }
                 let node = self.step_to(from, NodeKind::Request, label);
                 self.mark(on);
-                if let Value::Call(call) = arg {
-                    self.template_edges(&node, call);
+                match awaited {
+                    Awaited::Request { arg: Value::Call(call), .. } => self.template_edges(&node, call),
+                    Awaited::Call(target) => self.call_edge(&node, target),
+                    Awaited::Request { .. } => {}
                 }
                 let answered = on && self.vars.contains_key(&response.name.value);
                 self.block(f, rest, (node, None), answered);
@@ -384,6 +407,23 @@ impl<'a> Builder<'a> {
         self.mark(on);
     }
 
+    /// A `call` edge from the node of an `await` to the function it runs, with the named arguments. A target
+    /// that does not resolve gets no edge; `rein check` reports it.
+    fn call_edge(&mut self, node: &str, target: &ReturnValue) {
+        let (key, args) = match target {
+            ReturnValue::Ref(r) => (r.value.as_str(), Vec::new()),
+            ReturnValue::Call(call) => {
+                let args = call.args.iter().map(|a| Arg { name: arg_name(a), value: value_text(&a.value) }).collect();
+                (call.callee.key(), args)
+            }
+            ReturnValue::Text(_) | ReturnValue::Template(_) => return,
+        };
+        if let Ok(Binding::Function(path)) = self.project.binding_for(self.function, key) {
+            let to = self.target_node(&path);
+            self.edge((node.to_string(), None), &to, EdgeKind::Call, args);
+        }
+    }
+
     /// A dashed edge from `node` to each project template that `call` uses, at any depth.
     fn template_edges(&mut self, node: &str, call: &Call) {
         for c in call.calls() {
@@ -420,6 +460,16 @@ fn value_text(v: &Value) -> String {
         Value::Template(lit) => format!("`{}`", template_text(&lit.pieces)),
         Value::Name(n) => n.value.clone(),
         Value::Call(c) => call_text(c),
+    }
+}
+
+/// The target of an `await` as written: `@./x`, or `@program` without its arguments (the edge carries them).
+fn return_text(v: &ReturnValue) -> String {
+    match v {
+        ReturnValue::Ref(r) => format!("@{}", r.value),
+        ReturnValue::Call(c) => format!("@{}", c.callee.key()),
+        ReturnValue::Text(t) => t.value.clone(),
+        ReturnValue::Template(lit) => template_text(&lit.pieces),
     }
 }
 
@@ -505,7 +555,11 @@ pub fn mermaid(g: &Graph) -> String {
         out.push("    end".to_string());
     }
     for e in &g.edges {
-        let arrow = if e.kind == EdgeKind::Template { "-.->" } else { "-->" };
+        let arrow = match e.kind {
+            EdgeKind::Template => "-.->",
+            EdgeKind::Call => "==>",
+            EdgeKind::Flow | EdgeKind::Handoff => "-->",
+        };
         let lines = edge_lines(e);
         if lines.is_empty() {
             out.push(format!("    {} {arrow} {}", e.from, e.to));
@@ -581,6 +635,9 @@ pub fn dot(g: &Graph) -> String {
         }
         if e.kind == EdgeKind::Template {
             a.push("style=dashed".to_string());
+        }
+        if e.kind == EdgeKind::Call {
+            a.push("style=bold".to_string());
         }
         if !g.path.is_empty() {
             let walk = if e.taken { "color=\"#16a34a\", penwidth=2" } else { "color=gray80, fontcolor=gray70" };

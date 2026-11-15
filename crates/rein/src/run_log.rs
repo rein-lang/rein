@@ -1,5 +1,5 @@
 //! The run log. Each rein process that steps a flow appends JSON Lines to a shared folder, so `rein watch` can show
-//! every agent that uses rein. This module only writes. The folder rule and the line format are in docs/interface.md.
+//! every agent that uses rein. This module only writes. The folder rule and the line format are in language/interface.md in rein-lang/rein-lang.com.
 
 use std::env;
 use std::ffi::OsString;
