@@ -415,7 +415,7 @@ fn references(project: &Project, name: &str) -> Vec<(Span, String, &'static str)
     let functions = refs(f).into_iter().map(|(r, _)| (r.span, r.value.clone(), ""));
     let types = f.struct_param().map(|p| p.ty.clone()).into_iter().chain(f.answer_struct_refs().into_iter().map(|(_, t)| t));
     let structs = types.filter_map(|t| match t {
-        StructRef::Ref(r) => Some((r.span, r.value.clone(), STRUCT_SUFFIX)),
+        StructRef::Ref(r) => Some((r.span, r.value, STRUCT_SUFFIX)),
         StructRef::Local(_) => None,
     });
     functions.chain(structs).collect()
