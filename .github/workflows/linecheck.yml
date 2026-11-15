@@ -15,3 +15,9 @@ jobs:
       - uses: tupe12334/linecheck@v1.2.2
         with:
           version: "1.2.1" # latest on crates.io; v1.2.2 tag is not published there
+
+      # The README installs from a release tag; it must match the workspace version.
+      - name: README install tag matches Cargo.toml version
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          grep -q -- "--tag v$v " README.md || { echo "README.md must install with --tag v$v (workspace version $v)"; exit 1; }
