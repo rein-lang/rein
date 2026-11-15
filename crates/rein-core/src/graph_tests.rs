@@ -206,3 +206,79 @@ fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
     let (text, label) = walk_of(&review);
     assert_eq!((text.as_str(), label.as_str()), ("Leaf not ok.", "Leaf not ok."));
 }
+
+#[test]
+fn a_parameter_every_caller_passes_is_a_condition_not_a_question() {
+    let kind_of_ok = |main: &str| {
+        let g = flow(&project(&[("main.rein", main), ("two.rein", TWO_OK)]), "main");
+        g.nodes.iter().find(|n| n.name.as_deref() == Some("ok")).map(|n| n.kind).unwrap()
+    };
+    assert_eq!(kind_of_ok(PASSES_OK), NodeKind::Condition);
+    let bare = "/** M. */\nexport default function main() {\n  return @./two;\n}\n";
+    assert_eq!(kind_of_ok(bare), NodeKind::Question);
+    // Two callers, and only one passes `ok`: the other call asks it.
+    let one_passes = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  if (go) {\n    return @./two(ok=go);\n  }\n\n  return @./two;\n}\n";
+    assert_eq!(kind_of_ok(one_passes), NodeKind::Question);
+    // No caller: a run that starts at `two` asks it.
+    assert_eq!(kind_of_ok("/** M. */\nexport default function main() {\n  return `done`;\n}\n"), NodeKind::Question);
+    // An `await` that passes it is a call site too.
+    let awaits = "/** M. */\nexport default async function main(\n  /** Go? */\n  go: boolean,\n) {\n  /** Done? */\n  const done: boolean = await @./two(ok=go);\n\n  if (done) {\n    return `a`;\n  }\n\n  return `b`;\n}\n";
+    assert_eq!(kind_of_ok(awaits), NodeKind::Condition);
+}
+
+#[test]
+fn a_passed_union_is_a_condition_and_json_names_the_kind() {
+    let main = "/** M. */\nexport default function main(\n  /** Size? */\n  size: \"s\" | \"l\",\n) {\n  return @./two(size=size);\n}\n";
+    let two = "/** Two. */\nexport default function two(\n  /** Size? */\n  size: \"s\" | \"l\",\n) {\n  if (size === \"s\") {\n    return `small`;\n  }\n  return `large`;\n}\n";
+    let g = flow(&project(&[("main.rein", main), ("two.rein", two)]), "main");
+    let size = g.nodes.iter().find(|n| n.function == "two" && n.name.as_deref() == Some("size")).unwrap();
+    assert_eq!(size.kind, NodeKind::Condition);
+    let json = serde_json::to_value(&g).unwrap();
+    let kinds: Vec<_> = json["nodes"].as_array().unwrap().iter().filter_map(|n| n["kind"].as_str()).collect();
+    assert!(kinds.contains(&"condition"), "{kinds:?}");
+}
+
+const TWO_OK: &str = "/** Two. */\nexport default function two(\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
+const PASSES_OK: &str = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  return @./two(ok=go);\n}\n";
+
+#[test]
+fn the_entry_asks_its_parameter_even_when_a_caller_passes_it() {
+    let back = "/** Two. */\nexport default function two() {\n  return @./main(go=true);\n}\n";
+    let main = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  if (go) {\n    return `done`;\n  }\n  return @./two;\n}\n";
+    let g = flow(&project(&[("main.rein", main), ("two.rein", back)]), "main");
+    let go = g.nodes.iter().find(|n| n.name.as_deref() == Some("go")).unwrap();
+    assert_eq!(go.kind, NodeKind::Question);
+}
+
+#[test]
+fn a_condition_has_its_own_shape() {
+    let g = flow(&project(&[("main.rein", PASSES_OK), ("two.rein", TWO_OK)]), "main");
+    assert!(mermaid(&g).contains("{{\"Ok?"), "{}", mermaid(&g));
+    assert!(dot(&g).contains("shape=hexagon"), "{}", dot(&g));
+    // A compound test is a condition too, so it has the same shape.
+    let g = flow(&one("  if (a && b) {\n    return `one`;\n  }\n  return `two`;", "  /** A? */\n  a: boolean,\n  /** B? */\n  b: boolean,\n"), "main");
+    assert!(mermaid(&g).contains("{{\""), "{}", mermaid(&g));
+    assert!(dot(&g).contains("shape=hexagon"), "{}", dot(&g));
+}
+
+#[test]
+fn a_walk_reads_a_passed_value_and_marks_its_branch() {
+    let p = project(&[("main.rein", PASSES_OK), ("two.rein", TWO_OK)]);
+    let mut req = crate::step::StepRequest {
+        version: crate::step::PROTOCOL_VERSION,
+        entry: "main".into(),
+        answers: Default::default(),
+        flow: None,
+        inputs: Default::default(),
+    };
+    for go in ["no", "yes"] {
+        req.answers.insert("main.go".into(), go.into());
+        let g = walk(&p, "main", &crate::step::step(&p, &req));
+        let ok = g.nodes.iter().find(|n| n.name.as_deref() == Some("ok")).unwrap();
+        let taken: Vec<_> = g.edges.iter().filter(|e| e.from == ok.id && e.taken).map(|e| e.label.as_deref()).collect();
+        assert_eq!(taken, [Some(go)]);
+        let current = g.current.expect("current");
+        assert_eq!(current.kind, "done");
+        assert!(g.path.contains(&current.node), "{:?}", g.path);
+    }
+}
