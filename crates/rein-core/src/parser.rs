@@ -16,7 +16,7 @@ pub fn parse(src: &str) -> (Function, Vec<Diagnostic>) {
         Ok(toks) => toks,
         Err(d) => return (f, vec![d]),
     };
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser { toks, pos: 0, sugar_answers: Vec::new() };
     let diags = match p.file(&mut f) {
         Ok(()) => vec![],
         Err(d) => vec![d],
@@ -27,12 +27,14 @@ pub fn parse(src: &str) -> (Function, Vec<Diagnostic>) {
 struct Parser {
     toks: Vec<(Tok, Span)>,
     pos: usize,
+    /// Names of the answers that use the `agentSetup` sugar.
+    sugar_answers: Vec<String>,
 }
 
 const DOC_PLACES: &str =
     "the doc comment must go right before `export default function`, an `interface`, a parameter, a field, or a const answer";
 const NO_VARIABLES: &str = "Rein has no variables, except `/** question */ const x: type = await request(...)`";
-const ONLY_AWAIT: &str = "only `request` or a reference like `@program` can be awaited";
+const ONLY_AWAIT: &str = "only `request`, `agentSetup` or a reference like `@program` can be awaited";
 const AWAIT_NEEDS_CONST: &str =
     "`await` gives an answer; write `/** question */ const name: Type = await @program(...);`, then read `name`";
 const NO_ELSE: &str = "Rein has no `else`: end the `if` block with a return, and handle the other case after it";
@@ -196,7 +198,13 @@ impl Parser {
         }
         for (answer, r) in f.answer_struct_refs() {
             if let StructRef::Local(name) = r {
-                let found = f.structs.iter().find(|s| s.name.value == name.value).cloned().ok_or_else(|| {
+                // The `agentSetup` sugar always binds the std `Setup`. Else a struct of the file wins; else a std struct.
+                let local = if self.sugar_answers.contains(&answer) {
+                    None
+                } else {
+                    f.structs.iter().find(|s| s.name.value == name.value).cloned()
+                };
+                let found = local.or_else(|| crate::stdlib::std_struct(&name.value)).ok_or_else(|| {
                     format!("cannot find struct `{0}`; declare `interface {0} {{ ... }}` in this file", name.value)
                 });
                 f.bind_answer_struct(&answer, found);
@@ -484,7 +492,9 @@ impl Parser {
         };
         let name = self.ident("answer name")?;
         self.expect(Tok::Colon, "`:`")?;
+        let ty_start = self.span();
         let ty = self.answer_type()?;
+        let ty_span = ty_start.to(self.last_span());
         if *self.peek() != Tok::Assign {
             return Err(Diagnostic::error(start, NO_VARIABLES));
         }
@@ -493,7 +503,16 @@ impl Parser {
             return Err(Diagnostic::error(start, NO_VARIABLES));
         }
         self.bump();
-        let (awaited, close) = self.awaited()?;
+        let (awaited, close, sugar) = self.awaited()?;
+        if sugar && !matches!(&ty, InputType::Struct(StructRef::Local(s)) if s.value == "Setup") {
+            return Err(Diagnostic::error(
+                ty_span,
+                format!("`agentSetup` gives a `Setup`; write `const {}: Setup`", name.value),
+            ));
+        }
+        if sugar {
+            self.sugar_answers.push(name.value.clone());
+        }
         if *self.peek() == Tok::Semi {
             self.bump();
         }
@@ -503,19 +522,26 @@ impl Parser {
         Ok(Stmt::Request { response: Box::new(response), awaited, span })
     }
 
-    /// What follows `await`: `request(arg)`, or a reference with optional arguments (a call with return).
-    /// Returns it with the span of its last token.
-    fn awaited(&mut self) -> Result<(Awaited, Span), Diagnostic> {
+    /// What follows `await`: `request(arg)`, `agentSetup(...)`, or a reference with optional arguments (a call with return).
+    /// Returns it with the span of its last token, and whether it is the `agentSetup` sugar.
+    fn awaited(&mut self) -> Result<(Awaited, Span, bool), Diagnostic> {
         if let Tok::Ref(path) = self.peek().clone() {
             if *self.next_tok() == Tok::LParen {
                 let call = self.call()?;
                 let span = call.span;
-                return Ok((Awaited::Call(ReturnValue::Call(call)), span));
+                return Ok((Awaited::Call(ReturnValue::Call(call)), span, false));
             }
             let span = self.bump();
-            return Ok((Awaited::Call(ReturnValue::Ref(Spanned { value: path, span })), span));
+            return Ok((Awaited::Call(ReturnValue::Ref(Spanned { value: path, span })), span, false));
         }
-        let callee = self.ident("`request` or a reference like `@program`")?;
+        let callee = self.ident("`request`, `agentSetup` or a reference like `@program`")?;
+        if callee.value == crate::stdlib::AGENT_SETUP {
+            // `await agentSetup(...)` is `await request(agentSetup(...))`.
+            let call = self.call_rest(Callee::Std(callee.clone()))?;
+            let close = call.span;
+            let request = Spanned { value: "request".to_string(), span: callee.span };
+            return Ok((Awaited::Request { callee: request, arg: Value::Call(call) }, close, true));
+        }
         if callee.value != "request" {
             return Err(Diagnostic::error(callee.span, ONLY_AWAIT));
         }
@@ -525,7 +551,7 @@ impl Parser {
             self.bump();
         }
         let close = self.expect(Tok::RParen, "`)`")?;
-        Ok((Awaited::Request { callee, arg }, close))
+        Ok((Awaited::Request { callee, arg }, close, false))
     }
 
     /// A string, a template literal, or a template call. A call is only allowed here, as the argument of `request`.
@@ -564,6 +590,11 @@ impl Parser {
             }
             _ => return Err(self.unexpected("a reference like `@./path`, or a std name")),
         };
+        self.call_rest(callee)
+    }
+
+    /// The `(args)` of a call whose callee is already read.
+    fn call_rest(&mut self, callee: Callee) -> Result<Call, Diagnostic> {
         self.expect(Tok::LParen, "`(`")?;
         let mut args = Vec::new();
         while *self.peek() != Tok::RParen {

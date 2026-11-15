@@ -1,0 +1,22 @@
+interface Input {
+  /** The target harnesses, such as `claude-code | codex`, or `any`. */
+  harness: string;
+  /** The target model tier, such as `cheap` or `>= standard`, or `any`. */
+  model: string;
+  /** The target effort, such as `high` or `>= medium`, or `any`. */
+  effort: string;
+}
+
+/**
+ * Ask the agent for its setup matrix, compared with the program's targets.
+ */
+export default function agentSetup({ harness, model, effort }: Input) {
+  return `Check your setup against the targets of this program.
+Harness: ${harness}. Model tier: ${model}. Effort: ${effort}.
+Model tiers, lowest first: cheap, standard, frontier.
+Efforts, lowest first: low, medium, high, xhigh, max.
+A bare value or == means exactly that value. >, <, >= and <= compare
+in that order. any matches every value.
+For each row answer ok when you match it, mismatch when you do not,
+or unknown when you cannot tell.`;
+}

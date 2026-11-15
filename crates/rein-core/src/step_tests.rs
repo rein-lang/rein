@@ -959,3 +959,27 @@ fn self_await_after_a_question_asks_at_each_level() {
     };
     assert_eq!(key, "a.more");
 }
+
+const SETUP: &str = "/** Entry. */\nexport default async function main() {\n  /** Your setup. */\n  const setup: Setup = await agentSetup(\n    harness=`any`,\n    model=`cheap`,\n    effort=`>= medium`,\n  );\n\n  switch (setup.effort) {\n    case \"ok\":\n      return `commit`;\n    case \"mismatch\":\n      return `subagent`;\n    case \"unknown\":\n      return `ask`;\n  }\n}\n";
+
+#[test]
+fn agent_setup_asks_for_the_std_setup_matrix_with_the_targets() {
+    let p = crate::program_fixture::with_main(SETUP.to_string());
+    let StepResponse::Request { response, key, instruction, .. } = step(&p, &req("main", &[])) else {
+        panic!("not a request")
+    };
+    assert_eq!((response.r#type.as_str(), key.as_str()), ("struct", "main.setup"));
+    let rows: Vec<String> = response.fields.unwrap().iter().map(|f| f.name.clone()).collect();
+    assert_eq!(rows, ["harness", "model", "effort"]);
+    assert!(instruction.contains("Model tier: cheap. Effort: >= medium."), "{instruction}");
+}
+
+#[test]
+fn agent_setup_rows_drive_the_handlers() {
+    let p = crate::program_fixture::with_main(SETUP.to_string());
+    let low = "{\"harness\":\"ok\",\"model\":\"ok\",\"effort\":\"mismatch\"}";
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.setup", low)])) else {
+        panic!("not done")
+    };
+    assert_eq!(instruction, "subagent");
+}

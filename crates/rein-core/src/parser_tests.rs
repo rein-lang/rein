@@ -420,7 +420,7 @@ fn request_answer_needs_a_doc_comment() {
 #[test]
 fn only_request_can_be_awaited() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q */\n  const x: boolean = await fetch(\"a\");\n  return \"y\"\n}");
-    assert!(msg.contains("only `request` or a reference like `@program` can be awaited"), "{msg}");
+    assert!(msg.contains("only `request`, `agentSetup` or a reference like `@program` can be awaited"), "{msg}");
 }
 
 #[test]
@@ -552,4 +552,66 @@ fn await_outside_a_const_answer_gives_the_fix() {
 fn a_doc_comment_before_a_bare_await_gives_the_await_hint() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q? */\n  await @./x;\n  return `y`\n}");
     assert!(msg.contains("const name: Type = await @program(...)"), "{msg}");
+}
+
+#[test]
+fn await_agent_setup_is_a_request_of_the_std_template() {
+    let src = "/** E. */\nexport default async function main() {\n  /** S. */\n  const setup: Setup = await agentSetup(harness=`any`, model=`any`, effort=`any`);\n  return `x`;\n}\n";
+    let (f, diags) = parse(src);
+    assert!(diags.is_empty(), "{diags:?}");
+    let mut found = false;
+    crate::ast::walk_stmts(&f.body, &mut |s| {
+        if let Stmt::Request { awaited: Awaited::Request { callee, arg: Value::Call(call) }, .. } = s {
+            found = callee.value == "request" && call.callee.key() == "agentSetup";
+        }
+    });
+    assert!(found);
+    assert!(matches!(f.answer_struct("setup"), Some(Ok(s)) if s.name.value == "Setup"));
+}
+
+#[test]
+fn agent_setup_sugar_needs_the_setup_type() {
+    let msg = one_error("/** E. */\nexport default async function main() {\n  /** S. */\n  const ok: boolean = await agentSetup(harness=`any`, model=`any`, effort=`any`);\n  return `x`;\n}\n");
+    assert_eq!(msg, "`agentSetup` gives a `Setup`; write `const ok: Setup`");
+}
+
+#[test]
+fn explicit_request_of_agent_setup_keeps_the_old_rules() {
+    let (_, diags) = parse("/** E. */\nexport default async function main() {\n  /** S. */\n  const ok: boolean = await request(agentSetup(harness=`any`, model=`any`, effort=`any`));\n  return `x`;\n}\n");
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn a_local_setup_struct_wins_over_std() {
+    let f = ok("interface Setup {\n  /** Only one row. */\n  ready: boolean;\n}\n/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await request(`x`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["ready"]);
+}
+
+#[test]
+fn setup_without_a_local_struct_is_the_std_setup() {
+    let f = ok("/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await request(`x`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["harness", "model", "effort"]);
+}
+
+#[test]
+fn agent_setup_sugar_binds_std_setup_even_with_a_local_setup() {
+    let f = ok("interface Setup {\n  /** Only one row. */\n  ready: boolean;\n}\n/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await agentSetup(harness=`any`, model=`cheap`, effort=`any`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["harness", "model", "effort"]);
+}
+
+#[test]
+fn local_setup_still_wins_for_request_next_to_agent_setup_sugar() {
+    let f = ok("interface Setup {\n  /** Only one row. */\n  ready: boolean;\n}\n/** E. */\nexport default async function main() {\n  /** S. */\n  const s: Setup = await agentSetup(harness=`any`, model=`cheap`, effort=`any`);\n  /** T. */\n  const t: Setup = await request(`x`);\n  return `y`;\n}\n");
+    let Some(Ok(s)) = f.answer_struct("s") else { panic!("no struct bound") };
+    let names: Vec<&str> = s.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["harness", "model", "effort"]);
+    let Some(Ok(t)) = f.answer_struct("t") else { panic!("no struct bound") };
+    let names: Vec<&str> = t.fields.iter().map(|x| x.name.value.as_str()).collect();
+    assert_eq!(names, ["ready"]);
 }

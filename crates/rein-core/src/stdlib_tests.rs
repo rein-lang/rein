@@ -4,7 +4,7 @@ use crate::diagnostic::Severity;
 
 #[test]
 fn names_are_sorted_and_include_request() {
-    assert_eq!(names(), vec!["askUser", "delegate", "request"]);
+    assert_eq!(names(), vec!["agentSetup", "askUser", "delegate", "request"]);
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn unknown_name_lists_what_std_has() {
     let err = item("nope").unwrap_err();
     assert_eq!(
         err,
-        "`nope` is not in std; std has: askUser, delegate, request"
+        "`nope` is not in std; std has: agentSetup, askUser, delegate, request"
     );
 }
 
@@ -47,4 +47,12 @@ fn std_template_docs_come_from_the_file() {
         doc("askUser"),
         "Ask the user a question and wait for the answer."
     );
+}
+
+#[test]
+fn setup_is_a_std_struct_with_three_rows() {
+    let s = std_struct("Setup").expect("std has Setup");
+    let rows: Vec<&str> = s.fields.iter().map(|f| f.name.value.as_str()).collect();
+    assert_eq!(rows, vec!["harness", "model", "effort"]);
+    assert!(std_struct("Nope").is_none());
 }

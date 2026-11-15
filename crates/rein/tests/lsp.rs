@@ -624,7 +624,7 @@ fn hover_and_completion_know_the_std_library() {
         json!({"textDocument": {"uri": start}, "position": {"line": 5, "character": 4}}),
     );
     let labels: Vec<&str> = items["result"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
-    for name in ["askUser", "delegate", "request"] {
+    for name in ["agentSetup", "askUser", "delegate", "request"] {
         assert!(labels.contains(&name), "{labels:?}");
     }
 

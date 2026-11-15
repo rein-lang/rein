@@ -1,0 +1,11 @@
+/**
+ * The agent's setup, compared with the program's targets: one row each.
+ */
+export default interface Setup {
+  /** Do you run in one of the target harnesses? */
+  harness: "ok" | "mismatch" | "unknown";
+  /** Does your model tier match the target? */
+  model: "ok" | "mismatch" | "unknown";
+  /** Does your effort match the target? */
+  effort: "ok" | "mismatch" | "unknown";
+}

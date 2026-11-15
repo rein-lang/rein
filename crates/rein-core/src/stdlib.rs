@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use crate::ast::{Binding, Function};
+use crate::ast::{Binding, Function, Struct};
 use crate::parser::parse;
 
 /// The module name in `import { name } from "std"`.
@@ -13,11 +13,35 @@ const REQUEST: &str = "request";
 
 /// The std templates. Each name is the file's function name, and the file is part of the binary.
 const TEMPLATES: &[(&str, &str)] = &[
+    ("agentSetup", include_str!("../std/agentSetup.rein")),
     ("askUser", include_str!("../std/askUser.rein")),
     ("delegate", include_str!("../std/delegate.rein")),
 ];
 
 const REQUEST_DOC: &str = "Ask the agent to do a step, then wait for its answer. Use it in an async function, as ``/** question */ const ok: boolean = await request(`...`);``. The answer is a parameter for the rest of its block.";
+
+/// `await agentSetup(...)` is short for `await request(agentSetup(...))`: the only std template that can be awaited.
+pub const AGENT_SETUP: &str = "agentSetup";
+
+/// The std structs. A struct answer type that the file does not declare can name one of them.
+const STRUCTS: &[(&str, &str)] = &[("Setup", include_str!("../std/Setup.struct.rein"))];
+
+/// The std struct named `name`, such as `Setup`. None when std has no struct by that name.
+pub fn std_struct(name: &str) -> Option<Struct> {
+    static PARSED: OnceLock<Vec<(&'static str, Struct)>> = OnceLock::new();
+    let parsed = PARSED.get_or_init(|| {
+        STRUCTS
+            .iter()
+            .map(|(name, src)| {
+                let (f, diags) = parse(src);
+                assert!(diags.is_empty(), "std struct `{name}` does not parse: {diags:?}");
+                let s = f.exported_struct().cloned();
+                (*name, s.unwrap_or_else(|| panic!("std struct `{name}` has no export")))
+            })
+            .collect()
+    });
+    parsed.iter().find(|(n, _)| *n == name).map(|(_, s)| s.clone())
+}
 
 fn templates() -> &'static [(&'static str, Function)] {
     static PARSED: OnceLock<Vec<(&'static str, Function)>> = OnceLock::new();

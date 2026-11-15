@@ -512,6 +512,15 @@ export default function f() { return @./tpl(a=`only one`) }"#,
 }
 
 #[test]
+fn agent_setup_missing_argument_is_checked() {
+    expect_diag(
+        "/** d */\nexport default async function f() {\n  /** Setup? */\n  const s: Setup = await agentSetup(harness=`any`, model=`any`);\n  return `y`;\n}\n",
+        Severity::Error,
+        "missing argument `effort` in call to `agentSetup`; write `effort=value`",
+    );
+}
+
+#[test]
 fn hand_off_cannot_be_a_request_argument() {
     // A function is handed off by `return`. Inside `request(...)`, a call argument cannot be a hand-off.
     expect_diag(
