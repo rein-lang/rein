@@ -276,7 +276,10 @@ fn stdin_cannot_be_combined_with_input_flags() {
         Some("{}"),
     );
     assert_eq!(code(&out), 1);
-    assert_eq!(json(&out)["kind"], "error");
+    let v = json(&out);
+    assert_eq!(v["kind"], "error");
+    let message = v["message"].as_str().unwrap();
+    assert!(message.contains("--stdin") && message.contains("--input"), "{message}");
 }
 
 #[test]
