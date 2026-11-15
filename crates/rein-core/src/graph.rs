@@ -48,7 +48,7 @@ pub enum NodeKind {
     /// A parameter or a request answer that a branch tests. The label is the question, then `name: type`.
     Question,
     /// A test that is not one parameter, such as `a && b`, labelled with the expression. Or a parameter that every
-    /// caller passes, so the run never asks it, labelled like a question.
+    /// caller in this project passes, so a run of this project never asks it, labelled like a question.
     Condition,
     /// `await request(...)`: the agent does the step, then the flow goes on.
     Request,
@@ -202,7 +202,8 @@ struct Builder<'a> {
     function: &'a str,
     fid: usize,
     step: usize,
-    /// The answers of a walk, when there is one, and the owner of the first call of each function it walks.
+    /// The answers of a walk, when there is one, and the first call of each function it walks: its owner and the
+    /// values passed to it.
     walk: Option<(&'a Answers, HashMap<String, Visit>)>,
     /// The answers of the function being drawn, for the walk.
     vars: HashMap<String, String>,
@@ -299,8 +300,8 @@ impl<'a> Builder<'a> {
     }
 
     /// True when the function being drawn is not the entry, has a caller, and every hand-off or `await` to it
-    /// in this project passes `param`. It sees only this project's call sites: a call from another program
-    /// (`@program/function`) is checked in that program, which must pass every parameter too.
+    /// in this project passes `param`. It sees only this project's call sites. A call from another program
+    /// (`@program/function`) is not seen here: when that call omits `param`, its run still asks it.
     // ponytail: scans every function per question; index the call sites if graphs get slow.
     fn passed(&self, param: &str) -> bool {
         let (function, project) = (self.function, self.project);
