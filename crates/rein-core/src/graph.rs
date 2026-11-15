@@ -47,7 +47,8 @@ pub enum NodeKind {
     Function,
     /// A parameter or a request answer that a branch tests. The label is the question, then `name: type`.
     Question,
-    /// A test that is not one parameter, such as `a && b`. The label is the expression.
+    /// A test that is not one parameter, such as `a && b`, labelled with the expression. Or a parameter that every
+    /// caller passes, so the run never asks it, labelled like a question.
     Condition,
     /// `await request(...)`: the agent does the step, then the flow goes on.
     Request,

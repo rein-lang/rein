@@ -209,9 +209,8 @@ fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
 
 #[test]
 fn a_parameter_every_caller_passes_is_a_condition_not_a_question() {
-    let two = "/** Two. */\nexport default function two(\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
     let kind_of_ok = |main: &str| {
-        let g = flow(&project(&[("main.rein", main), ("two.rein", two)]), "main");
+        let g = flow(&project(&[("main.rein", main), ("two.rein", TWO_OK)]), "main");
         g.nodes.iter().find(|n| n.name.as_deref() == Some("ok")).map(|n| n.kind).unwrap()
     };
     assert_eq!(kind_of_ok(PASSES_OK), NodeKind::Condition);
@@ -224,7 +223,6 @@ fn a_parameter_every_caller_passes_is_a_condition_not_a_question() {
 
 const TWO_OK: &str = "/** Two. */\nexport default function two(\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
 const PASSES_OK: &str = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  return @./two(ok=go);\n}\n";
-
 
 #[test]
 fn the_entry_asks_its_parameter_even_when_a_caller_passes_it() {
