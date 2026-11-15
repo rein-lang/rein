@@ -760,6 +760,11 @@ impl<'a> Checker<'a> {
         let members = |m: &[Spanned<String>], value: &str| m.iter().any(|w| w.value == value);
         let name = match (v, ty) {
             (Value::Str(s), InputType::Choice(m)) if members(m, &s.value) => return self.literals.push(s.span),
+            (Value::Str(s), InputType::Choice(m)) => {
+                self.literals.push(s.span);
+                let msg = format!("`{}` is not a member of `{param}` of `@{target}`; members are {}", s.value, members_text(m));
+                return self.error(s.span, msg);
+            }
             (Value::Name(name), _) => name,
             _ => {
                 let msg = format!(
@@ -773,7 +778,19 @@ impl<'a> Checker<'a> {
             (None, InputType::Bool) if matches!(name.value.as_str(), "true" | "false") => return,
             (None, _) => return self.unknown(name),
             (Some(InputType::Bool), InputType::Bool) => return,
-            (Some(InputType::Choice(have)), InputType::Choice(m)) if have.iter().all(|h| members(m, &h.value)) => return,
+            (Some(InputType::Choice(have)), InputType::Choice(m)) => {
+                let extra: Vec<Spanned<String>> = have.into_iter().filter(|h| !members(m, &h.value)).collect();
+                if extra.is_empty() {
+                    return;
+                }
+                let msg = format!(
+                    "`{}` can be {}, which `{param}` of `@{target}` does not have; its members are {}",
+                    name.value,
+                    members_text(&extra),
+                    members_text(m)
+                );
+                return self.error(name.span, msg);
+            }
             (Some(have), _) => have.ts_type(),
         };
         self.error(name.span, format!("`{}` is `{have}`, but `{param}` of `@{target}` is `{want}`", name.value));

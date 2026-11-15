@@ -150,7 +150,7 @@ fn returned(env: &Env, value: &ReturnValue) -> Eval<Outcome> {
         ReturnValue::Ref(reference) => Outcome::Ref { target: target(env, &reference.value)?, args: Vec::new() },
         ReturnValue::Template(lit) => Outcome::Text(expand_template(env, lit)?),
         ReturnValue::Call(call) => match env.bindings.get(call.callee.key()) {
-            // A hand-off: the arguments are the values of the target's `string` parameters, by name.
+            // A hand-off: the arguments are the values of the target's parameters, by name.
             Some(Binding::Function(path)) => Outcome::Ref { target: path.clone(), args: named_values(env, &call.args)? },
             _ => Outcome::Text(expand_call(env, call)?),
         },
