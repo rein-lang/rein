@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # the tests read the examples submodule
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --workspace
+
+      - run: cargo clippy --workspace --all-targets -- -D warnings
