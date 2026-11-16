@@ -141,4 +141,20 @@ mod tests {
             assert!(reply.starts_with("HTTP/1.1 413 Content Too Large"), "{length}: {reply}");
         }
     }
+
+    /// A Content-Length of exactly MAX_BODY is read in full and routed, not answered with 413.
+    #[test]
+    fn a_body_of_exactly_max_body_is_read_and_routed() {
+        let mut request = format!("POST /answer HTTP/1.1\r\nHost: 127.0.0.1:1\r\nContent-Length: {MAX_BODY}\r\n\r\n");
+        request.push_str(&"a".repeat(MAX_BODY));
+        let mut reply = Vec::new();
+        exchange(request.as_bytes(), &mut reply, 1, |method, path, body| {
+            assert_eq!((method, path, body.len()), ("POST", "/answer", MAX_BODY));
+            ("200 OK", "text/plain", "routed\n".to_string())
+        })
+        .unwrap();
+        let reply = String::from_utf8(reply).unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+        assert!(reply.ends_with("routed\n"), "{reply}");
+    }
 }
