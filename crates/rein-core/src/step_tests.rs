@@ -555,6 +555,24 @@ fn a_boolean_parameter_is_not_an_input() {
 }
 
 #[test]
+fn union_input_is_given_as_a_member() {
+    let res = step(&pr_project(), &req_with("merge", &[], &[("pr", "L"), ("ci", "green")]));
+    let StepResponse::Done { instruction, .. } = res else {
+        panic!("{res:?}")
+    };
+    assert_eq!(instruction, "Merge L.");
+}
+
+#[test]
+fn union_input_that_is_not_a_member_is_an_error() {
+    let res = step(&pr_project(), &req_with("merge", &[], &[("pr", "L"), ("ci", "blue")]));
+    let StepResponse::Error { message, .. } = res else {
+        panic!("{res:?}")
+    };
+    assert_eq!(message, "invalid value `blue` for `ci`; expected one of: `green`, `red`");
+}
+
+#[test]
 fn hand_off_binds_the_input_for_the_target() {
     let res = step(
         &pr_project(),

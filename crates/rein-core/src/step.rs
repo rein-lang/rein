@@ -570,10 +570,15 @@ fn missing_input(name: &str) -> String {
     format!("missing input `{name}`; give it with --input {name}=<value>")
 }
 
-/// The entry's `string` inputs must all be given, and no other name may be. Checked before the flow runs.
+/// The entry's `string` inputs must all be given. A string-literal union input may be given too, as one of its
+/// members; one not given is asked. No other name may be given. Checked before the flow runs.
 fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>) -> Result<(), String> {
-    if let Some(name) = given.keys().find(|k| !entry.text_inputs().any(|i| i.name.value == **k)) {
-        return Err(format!("unknown input `{name}`"));
+    for (name, value) in given {
+        match entry.input(name) {
+            Some(input) if input.ty == InputType::Text => {}
+            Some(input) if matches!(input.ty, InputType::Choice(_)) => eval::check_value(entry, input, value)?,
+            _ => return Err(format!("unknown input `{name}`")),
+        }
     }
     match entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
         Some(input) => Err(missing_input(&input.name.value)),
