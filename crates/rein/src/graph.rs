@@ -159,7 +159,8 @@ fn html(g: &Graph, request: Option<&StepRequest>) -> String {
         .replace("__DIAGRAM__", &esc(&graph::mermaid(g)))
 }
 
-/// Opens `path` in the default browser, without waiting for it: the servers start to answer right after this call.
+/// Opens `path` in the default browser. The call does not wait for the browser, but it waits a short time for the launcher:
+/// on macOS until `/usr/bin/open` exits, elsewhere at most 250 ms per launcher. The servers start to answer after that.
 pub(crate) fn open(path: impl AsRef<std::ffi::OsStr>) {
     // ponytail: a browser that does not start is not an error; the path is on stderr.
     let _ = ::open::that_detached(path);
