@@ -1369,3 +1369,18 @@ fn true_and_false_are_not_names() {
     let answer = "/** F. */\nexport default async function f() {\n  /** Ok? */\n  const false: boolean = await request(`Ask.`);\n  return `b`;\n}\n";
     expect_diag(answer, Severity::Error, "`false` is a boolean literal; pick another name");
 }
+
+#[test]
+fn check_function_warns_on_camel_case_names() {
+    // The hookup in check_function, not only naming::camel_case_names, must emit the warning.
+    let src = "/** Ask. */\nexport default function ask(\n  /** Draft? */\n  isDraft: boolean,\n) {\n  if (isDraft) {\n    return `a`;\n  }\n  return `b`;\n}\n";
+    expect_diag(src, Severity::Warning, "`isDraft` is camelCase; names are snake_case: write `is_draft`");
+    // A `.struct.rein` file returns early, after the hookup.
+    let ticket = "/** A ticket. */\nexport default interface Ticket {\n  /** Title. */\n  ticketTitle: string;\n}\n";
+    let diags = check_struct_file(ticket);
+    assert!(
+        diags.iter().any(|d| d.severity == Severity::Warning
+            && d.message == "`ticketTitle` is camelCase; names are snake_case: write `ticket_title`"),
+        "{diags:?}"
+    );
+}
