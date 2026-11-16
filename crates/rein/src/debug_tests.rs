@@ -105,8 +105,10 @@ fn page_keeps_the_state_in_the_url_and_has_a_copy_button() {
 fn page_has_the_dark_mode_and_the_theme_switch() {
     let html = page(&first(&[]));
     for part in [
-        "@media (prefers-color-scheme: dark)",
-        ":root[data-theme=\"dark\"]",
+        "color-scheme: light dark",
+        "--bg: light-dark(#fff, #0f1115)",
+        ":root[data-theme=\"light\"] { color-scheme: light; }",
+        ":root[data-theme=\"dark\"] { color-scheme: dark; }",
         "id=\"theme\"",
         "localStorage.getItem(\"rein-theme\")",
         "theme: dark ? \"dark\" : \"default\"",
