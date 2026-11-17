@@ -40,9 +40,15 @@ pub fn run(verb: &str, args: &[String]) -> u8 {
     let bin = env::var("REIN_PNPM").unwrap_or_else(|_| "pnpm".to_string());
     let mut moved: Vec<String> = Vec::new();
     if verb == "update" {
-        match move_tag_pins(&bin, &dir, &package_names(&rest), &git_tags) {
-            Ok(done) => moved = done,
-            Err(message) => return fail(&message),
+        for arg in dropped_names(&rest) {
+            eprintln!("warning: {arg} is no package name, so rein update ignores it");
+        }
+        match tag_move_names(&rest) {
+            Some(names) => match move_tag_pins(&bin, &dir, &names, &git_tags) {
+                Ok(done) => moved = done,
+                Err(message) => return fail(&message),
+            },
+            None => eprintln!("warning: no package name is left, so rein update moves no tag pin"),
         }
     }
     let code = match Command::new(&bin).args(&pnpm_args).current_dir(&dir).status() {
@@ -63,6 +69,18 @@ fn is_global(arg: &str) -> bool {
 /// `--depth 0`. A name starts with a letter, a digit or `@`, and has a letter in it.
 fn package_names<'a>(args: &[&'a str]) -> Vec<&'a str> {
     args.iter().copied().filter(|a| is_package_name(a)).collect()
+}
+
+/// The non-flag arguments that `package_names` drops, such as `2048`. A flag is neither kept nor dropped.
+fn dropped_names<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter().copied().filter(|a| !a.starts_with('-') && !is_package_name(a)).collect()
+}
+
+/// The names that `rein update` moves tag pins for, or `None` when it moves none. No names means all, unless a
+/// non-flag argument was dropped: it may have named a program, so it must not mean all.
+fn tag_move_names<'a>(args: &[&'a str]) -> Option<Vec<&'a str>> {
+    let names = package_names(args);
+    (!names.is_empty() || dropped_names(args).is_empty()).then_some(names)
 }
 
 fn is_package_name(arg: &str) -> bool {
@@ -266,15 +284,15 @@ fn unmoved_note(pin: &Pin, ls_remote: &str) -> Option<String> {
     }
 }
 
-/// The `rein install` command that moves a pin to `top`. A pin in `devDependencies` or `optionalDependencies` keeps
-/// its field with `-D` or `-O`, as `rein install` takes them.
+/// The `rein install` command that moves a pin to `top`. The manifest key leads the spec, as in `spec`, so pnpm keeps
+/// that entry. A pin in `devDependencies` or `optionalDependencies` keeps its field with `-D` or `-O`.
 fn install_command(pin: &Pin, top: &str) -> String {
     let flag = match pin.section {
         "devDependencies" => "-D ",
         "optionalDependencies" => "-O ",
         _ => "",
     };
-    format!("rein install {flag}github:{}#{top}", pin.repo)
+    format!("rein install {flag}{}@github:{}#{top}", pin.name, pin.repo)
 }
 
 /// `v<x.y.z>` for numbers.

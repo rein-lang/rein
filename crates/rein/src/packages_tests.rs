@@ -1,7 +1,7 @@
 use super::{
-    add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_notes, move_tag_pins, move_target,
-    newest_tag, output_within, package_names, selected, spawn_error, tag_pin, tag_pins, unknown_names, unmoved_note,
-    Pin, PACKAGE,
+    add_args, after_moves, bare_name, dropped_names, is_range, ls_remote_command, move_error, move_notes, move_tag_pins,
+    move_target, newest_tag, output_within, package_names, selected, spawn_error, tag_move_names, tag_pin, tag_pins,
+    unknown_names, unmoved_note, Pin, PACKAGE,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -64,6 +64,15 @@ fn a_letter_flag_value_is_reported_as_no_dependency() {
 fn a_flag_value_is_no_package_name() {
     assert_eq!(package_names(&["--depth", "0"]), Vec::<&str>::new());
     assert_eq!(package_names(&["a", "--depth", "0", "@s/p@^1", "./dir", "3d-viewer"]), ["a", "@s/p@^1", "3d-viewer"]);
+}
+
+#[test]
+fn a_dropped_name_never_means_all() {
+    assert_eq!(tag_move_names(&["--dry-run"]), Some(Vec::new()), "a flag alone still means all");
+    assert_eq!(tag_move_names(&[]), Some(Vec::new()));
+    assert_eq!(dropped_names(&["2048", "--depth", "0", "a"]), ["2048", "0"]);
+    assert_eq!(tag_move_names(&["2048"]), None, "2048 names no program, so no tag pin moves");
+    assert_eq!(tag_move_names(&["2048", "a"]), Some(vec!["a"]), "the other name still counts");
 }
 
 #[test]
@@ -169,7 +178,7 @@ fn a_pin_left_behind_a_newer_line_gets_a_note() {
     let dev = Pin { name: "a", repo: "o/a", current: [1, 3, 0], section: "devDependencies" };
     assert_eq!(
         unmoved_note(&dev, "c\trefs/tags/v2.0.0\n").as_deref(),
-        Some("note: a stays on v1.3.0; o/a has v2.0.0, a new major. To move, run: rein install -D github:o/a#v2.0.0")
+        Some("note: a stays on v1.3.0; o/a has v2.0.0, a new major. To move, run: rein install -D a@github:o/a#v2.0.0")
     );
     assert_eq!(
         unmoved_note(&pin, "d\trefs/tags/main\n").as_deref(),
@@ -188,7 +197,7 @@ fn a_move_notes_the_program_and_any_newer_line_left_behind() {
         move_notes(&pin, "v1.3.0", tags),
         [
             "note: a moved to v1.3.0",
-            "note: a stays on v1.3.0; o/a has v2.0.0, a new major. To move, run: rein install github:o/a#v2.0.0"
+            "note: a stays on v1.3.0; o/a has v2.0.0, a new major. To move, run: rein install a@github:o/a#v2.0.0"
         ]
     );
     assert_eq!(move_notes(&pin, "v1.2.1", "x\trefs/tags/v1.2.1\n"), ["note: a moved to v1.2.1"]);
