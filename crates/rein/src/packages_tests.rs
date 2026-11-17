@@ -1,5 +1,5 @@
 use super::{
-    add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_target, move_tag_pins, newest_tag,
+    add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_tag_pins, move_target, newest_tag,
     output_within, selected, spawn_error, tag_pin, tag_pins, unmoved_note, Pin, PACKAGE,
 };
 use serde_json::{json, Value};
@@ -102,7 +102,9 @@ fn a_failed_update_names_the_programs_already_moved() {
 #[test]
 fn ls_remote_gives_up_on_a_stalled_transfer_by_itself() {
     let cmd = ls_remote_command("https://github.com/o/r");
-    let env = |key: &str| cmd.get_envs().find(|(k, _)| *k == key).and_then(|(_, v)| v).map(|v| v.to_string_lossy().into_owned());
+    let env = |key: &str| {
+        cmd.get_envs().find(|(k, _)| *k == key).and_then(|(_, v)| v).map(|v| v.to_string_lossy().into_owned())
+    };
     assert_eq!(env("GIT_HTTP_LOW_SPEED_LIMIT").as_deref(), Some("1"));
     assert_eq!(env("GIT_HTTP_LOW_SPEED_TIME").as_deref(), Some("20"));
     assert_eq!(env("GIT_TERMINAL_PROMPT").as_deref(), Some("0"));
@@ -251,10 +253,7 @@ fn move_tag_pins_names_the_programs_already_moved_when_a_move_fails() {
     });
     let (dir, pnpm) = stub_folder("fails", &m);
     let err = move_tag_pins(&pnpm, &dir, &[], &canned_tags).unwrap_err();
-    assert_eq!(
-        err,
-        "pnpm add f@github:o/f#v1.2.0 failed. Already moved: a. pnpm update did not run."
-    );
+    assert_eq!(err, "pnpm add f@github:o/f#v1.2.0 failed. Already moved: a. pnpm update did not run.");
     assert_eq!(log_of(&dir).len(), 2, "the stop is at the first failed add");
     let err = move_tag_pins("/nonexistent/rein-stub-pnpm", &dir, &[], &canned_tags).unwrap_err();
     assert!(err.starts_with("pnpm is not installed or not on PATH"), "{err}");
