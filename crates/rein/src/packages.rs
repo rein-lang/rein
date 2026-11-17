@@ -89,7 +89,7 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
     };
     let mut moved: Vec<&str> = Vec::new();
     for (name, spec) in deps {
-        if !names.is_empty() && !names.contains(&name.as_str()) {
+        if !selected(names, name) {
             continue;
         }
         let Some((repo, current)) = tag_pin(spec.as_str().unwrap_or_default()) else {
@@ -131,6 +131,11 @@ fn tag_pin(spec: &str) -> Option<(&str, [u64; 3])> {
 /// `v<x.y.z>` as numbers. Pre-releases and other tags give `None`.
 fn version(tag: &str) -> Option<[u64; 3]> {
     triple(tag.strip_prefix('v')?)
+}
+
+/// Whether `rein update` moves the program `name`, given the names on the command line. No names means all.
+fn selected(names: &[&str], name: &str) -> bool {
+    names.is_empty() || names.contains(&name)
 }
 
 /// Prints why a pin stays where it is, when that is not simply because it is the newest of its major.
