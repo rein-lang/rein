@@ -282,8 +282,7 @@ const LS_REMOTE_LIMIT: Duration = Duration::from_secs(30);
 /// The tags of a GitHub repo, as `git ls-remote` prints them.
 fn git_tags(repo: &str) -> Result<String, String> {
     let url = format!("https://github.com/{repo}");
-    let mut cmd = Command::new("git");
-    cmd.args(["ls-remote", "--tags", "--refs", &url]).env("GIT_TERMINAL_PROMPT", "0");
+    let mut cmd = ls_remote_command(&url);
     let out = match output_within(&mut cmd, LS_REMOTE_LIMIT) {
         Ok(Some(out)) => out,
         Ok(None) => return Err(format!("git ls-remote {url} timed out after {} s", LS_REMOTE_LIMIT.as_secs())),
@@ -293,6 +292,17 @@ fn git_tags(repo: &str) -> Result<String, String> {
         return Err(format!("git ls-remote {url} failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The `git ls-remote` command for `url`. Prompts are off, so a private repo fails. The HTTP helper of git runs on
+/// after git is killed at the time limit, so git also gives up when a transfer stays under 1 byte a second for 20 s.
+fn ls_remote_command(url: &str) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(["ls-remote", "--tags", "--refs", url])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_HTTP_LOW_SPEED_LIMIT", "1")
+        .env("GIT_HTTP_LOW_SPEED_TIME", "20");
+    cmd
 }
 
 /// Runs `cmd` and collects its output. `Ok(None)` when it runs past `limit`: the child is then killed.

@@ -1,6 +1,6 @@
 use super::{
     add_args, after_moves, bare_name, is_range, move_error, move_target, newest_tag, output_within, selected,
-    spawn_error, tag_pin, tag_pins, unmoved_note, Pin,
+    ls_remote_command, spawn_error, tag_pin, tag_pins, unmoved_note, Pin,
 };
 use serde_json::json;
 use std::io;
@@ -95,6 +95,15 @@ fn a_failed_update_names_the_programs_already_moved() {
         after_moves("pnpm update exited with 1", &["a".to_string(), "b".to_string()]),
         "pnpm update exited with 1. Already moved: a, b. They stay moved."
     );
+}
+
+#[test]
+fn ls_remote_gives_up_on_a_stalled_transfer_by_itself() {
+    let cmd = ls_remote_command("https://github.com/o/r");
+    let env = |key: &str| cmd.get_envs().find(|(k, _)| *k == key).and_then(|(_, v)| v).map(|v| v.to_string_lossy().into_owned());
+    assert_eq!(env("GIT_HTTP_LOW_SPEED_LIMIT").as_deref(), Some("1"));
+    assert_eq!(env("GIT_HTTP_LOW_SPEED_TIME").as_deref(), Some("20"));
+    assert_eq!(env("GIT_TERMINAL_PROMPT").as_deref(), Some("0"));
 }
 
 #[cfg(unix)]
