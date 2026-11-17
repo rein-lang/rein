@@ -82,7 +82,8 @@ fn write_manifest(path: &Path) -> Result<(), String> {
     fs::write(path, PROJECT_MANIFEST).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// `rein update` moves each tag-pinned GitHub program to the newest `v<x.y.z>` tag of its major. `pnpm update`
+/// `rein update` moves each tag-pinned GitHub program to the newest `v<x.y.z>` tag of its line (its major, or under
+/// major 0 its minor). `pnpm update`
 /// keeps a git tag fixed, so it cannot do this. `names` limits the programs, as `pnpm update` does. No names means
 /// all of them. A program whose tags cannot be read is skipped with a warning. Returns the names of the programs
 /// moved. `pnpm update` then runs as before.
@@ -100,7 +101,9 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<Vec<String>, S
             }
         };
         let Some(tag) = move_target(pin.current, &tags) else {
-            explain_unmoved(pin.name, pin.repo, pin.current, &tags);
+            if let Some(note) = unmoved_note(&pin, &tags) {
+                eprintln!("{note}");
+            }
             continue;
         };
         let status = match Command::new(bin).args(add_args(&pin, &tag)).current_dir(dir).status() {
@@ -194,35 +197,53 @@ fn bare_name(arg: &str) -> &str {
     }
 }
 
-/// Prints why a pin stays where it is, when that is not simply because it is the newest of its major.
-fn explain_unmoved(name: &str, repo: &str, current: [u64; 3], ls_remote: &str) {
-    match newest_tag(ls_remote, None) {
-        None => eprintln!("warning: {name} is not moved: {repo} has no v<x.y.z> tag"),
-        Some((top, v)) if v[0] > current[0] => {
-            let major = current[0];
-            eprintln!(
-                "note: {name} stays on major {major}; {repo} has {top}. To move, run: rein install github:{repo}#{top}"
-            );
+/// The note or warning for a pin that stays where it is, when a newer tag exists that `move_target` does not take.
+/// `None` when the pin is the newest of its line, or the note is not needed.
+fn unmoved_note(pin: &Pin, ls_remote: &str) -> Option<String> {
+    match newest_tag(ls_remote, |_| true) {
+        None => Some(format!("warning: {} is not moved: {} has no v<x.y.z> tag", pin.name, pin.repo)),
+        Some((top, v)) if v > pin.current && !same_line(pin.current, v) => {
+            let kind = if pin.current[0] == 0 { "a new minor" } else { "a new major" };
+            let (name, repo) = (pin.name, pin.repo);
+            Some(format!(
+                "note: {name} stays on {}; {repo} has {top}, {kind}. To move, run: rein install github:{repo}#{top}",
+                tag_text(pin.current)
+            ))
         }
-        Some(_) => {}
+        Some(_) => None,
     }
 }
 
-/// The tag a pin moves to: the highest `v<x.y.z>` tag of the pin's major, when it is higher than the pin.
-/// A higher major is never taken, because it can break the program.
+/// `v<x.y.z>` for numbers.
+fn tag_text(v: [u64; 3]) -> String {
+    format!("v{}.{}.{}", v[0], v[1], v[2])
+}
+
+/// The tag a pin moves to: the highest `v<x.y.z>` tag on the pin's line, when it is higher than the pin. A higher
+/// major is never taken, because it can break the program. Under major 0 a higher minor is not taken either, since
+/// semver allows it to break the program.
 fn move_target(current: [u64; 3], ls_remote: &str) -> Option<String> {
-    let (tag, newest) = newest_tag(ls_remote, Some(current[0]))?;
+    let (tag, newest) = newest_tag(ls_remote, |v| same_line(current, v))?;
     (newest > current).then_some(tag)
 }
 
-/// The highest `v<x.y.z>` tag in `git ls-remote --tags --refs` output, with its tag name and numbers. `major`
-/// limits the tags to one major version.
-fn newest_tag(ls_remote: &str, major: Option<u64>) -> Option<(String, [u64; 3])> {
+/// Whether `v` is on the line that a pin at `current` may move within: its major, or under major 0 its minor.
+fn same_line(current: [u64; 3], v: [u64; 3]) -> bool {
+    if current[0] == 0 {
+        v[0] == 0 && v[1] == current[1]
+    } else {
+        v[0] == current[0]
+    }
+}
+
+/// The highest `v<x.y.z>` tag in `git ls-remote --tags --refs` output, with its tag name and numbers. Only the
+/// tags that `keep` accepts count.
+fn newest_tag(ls_remote: &str, keep: impl Fn([u64; 3]) -> bool) -> Option<(String, [u64; 3])> {
     ls_remote
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1)?.strip_prefix("refs/tags/"))
         .filter_map(|tag| Some((tag.to_string(), version(tag)?)))
-        .filter(|(_, v)| major.is_none_or(|m| v[0] == m))
+        .filter(|(_, v)| keep(*v))
         .max_by_key(|(_, v)| *v)
 }
 
