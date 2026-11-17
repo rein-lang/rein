@@ -767,6 +767,10 @@ impl<'a> Checker<'a> {
             }
             (Value::Name(name), _) => name,
             _ => {
+                // The wrong-type error covers a quoted string here, so it gets no second `TEXT_QUOTES` error.
+                if let Value::Str(s) = v {
+                    self.literals.push(s.span);
+                }
                 let msg = format!(
                     "`{param}` of `@{target}` is `{want}`; pass a parameter or an answer of that type, like `{param}={param}`, or a literal: `true`/`false` for a boolean, a quoted member for a union"
                 );

@@ -96,6 +96,9 @@ fn a_bare_reference_must_pass_every_parameter() {
 fn a_typed_argument_is_a_name_of_the_same_type() {
     let msg = "`big` of `@./review` is `boolean`; pass a parameter or an answer";
     expect_diag(&review_caller("pr=pr, big=`yes`, ci=ci"), Severity::Error, msg);
+    let quoted = check_src(&review_caller("pr=pr, big=\"green\", ci=ci"));
+    assert_eq!(quoted.len(), 1, "{quoted:?}");
+    assert!(quoted[0].message.contains(msg), "{quoted:?}");
     let msg = "`ci` is `\"green\" | \"red\"`, but `big` of `@./review` is `boolean`";
     expect_diag(&review_caller("pr=pr, big=ci, ci=ci"), Severity::Error, msg);
     expect_diag(&review_caller("pr=pr, big=big, ci=nope"), Severity::Error, "unknown parameter `nope`");
