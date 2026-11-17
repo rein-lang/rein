@@ -79,8 +79,7 @@ fn write_manifest(path: &Path) -> Result<(), String> {
 
 /// `rein update` moves each tag-pinned GitHub program to the newest `v<x.y.z>` tag of its major. `pnpm update`
 /// keeps a git tag fixed, so it cannot do this. `names` limits the programs, as `pnpm update` does. No names means
-/// all of them.
-/// `pnpm update` then runs as before.
+/// all of them. A program whose tags cannot be read is skipped with a warning. `pnpm update` then runs as before.
 fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
     let path = dir.join(PACKAGE);
     let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -95,12 +94,15 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
         let Some((repo, current)) = tag_pin(spec.as_str().unwrap_or_default()) else {
             continue;
         };
-        let tags = git_tags(repo)?;
-        let Some(tag) = move_target(current, &tags) else {
-            if let Some((top, _)) = newest_tag(&tags, None).filter(|(_, v)| v[0] > current[0]) {
-                let major = current[0];
-                eprintln!("note: {name} stays on major {major}; {repo} has {top}. Install that major by hand to move.");
+        let tags = match git_tags(repo) {
+            Ok(tags) => tags,
+            Err(message) => {
+                eprintln!("warning: {name} is not moved: {message}");
+                continue;
             }
+        };
+        let Some(tag) = move_target(current, &tags) else {
+            explain_unmoved(name, repo, current, &tags);
             continue;
         };
         let target = format!("github:{repo}#{tag}");
@@ -126,6 +128,18 @@ fn tag_pin(spec: &str) -> Option<(&str, [u64; 3])> {
 /// `v<x.y.z>` as numbers. Pre-releases and other tags give `None`.
 fn version(tag: &str) -> Option<[u64; 3]> {
     triple(tag.strip_prefix('v')?)
+}
+
+/// Prints why a pin stays where it is, when that is not simply because it is the newest of its major.
+fn explain_unmoved(name: &str, repo: &str, current: [u64; 3], ls_remote: &str) {
+    match newest_tag(ls_remote, None) {
+        None => eprintln!("warning: {name} is not moved: {repo} has no v<x.y.z> tag"),
+        Some((top, v)) if v[0] > current[0] => {
+            let major = current[0];
+            eprintln!("note: {name} stays on major {major}; {repo} has {top}. Install that major by hand to move.");
+        }
+        Some(_) => {}
+    }
 }
 
 /// The tag a pin moves to: the highest `v<x.y.z>` tag of the pin's major, when it is higher than the pin.
