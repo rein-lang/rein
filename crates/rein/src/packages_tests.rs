@@ -1,6 +1,6 @@
 use super::{
-    add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_tag_pins, move_target, newest_tag,
-    output_within, selected, spawn_error, tag_pin, tag_pins, unmoved_note, Pin, PACKAGE,
+    add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_notes, move_tag_pins, move_target,
+    newest_tag, output_within, selected, spawn_error, tag_pin, tag_pins, unmoved_note, Pin, PACKAGE,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -159,6 +159,20 @@ fn a_pin_left_behind_a_newer_line_gets_a_note() {
         unmoved_note(&pin, "d\trefs/tags/main\n").as_deref(),
         Some("warning: a is not moved: o/a has no v<x.y.z> tag")
     );
+}
+
+#[test]
+fn a_move_notes_the_program_and_any_newer_line_left_behind() {
+    let pin = Pin { name: "a", repo: "o/a", current: [1, 2, 0], section: "dependencies" };
+    let tags = "x\trefs/tags/v1.3.0\nx\trefs/tags/v2.0.0\n";
+    assert_eq!(
+        move_notes(&pin, "v1.3.0", tags),
+        [
+            "note: a moved to v1.3.0",
+            "note: a stays on v1.3.0; o/a has v2.0.0, a new major. To move, run: rein install github:o/a#v2.0.0"
+        ]
+    );
+    assert_eq!(move_notes(&pin, "v1.2.1", "x\trefs/tags/v1.2.1\n"), ["note: a moved to v1.2.1"]);
 }
 
 #[test]

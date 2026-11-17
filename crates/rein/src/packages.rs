@@ -122,8 +122,20 @@ fn move_tag_pins(
             return Err(move_error(&format!("pnpm add {} failed", spec(&pin, &tag)), &moved));
         }
         moved.push(pin.name);
+        for note in move_notes(&pin, &tag, &tags) {
+            eprintln!("{note}");
+        }
     }
     Ok(moved.into_iter().map(String::from).collect())
+}
+
+/// The notes after a pin moves to `tag`: the move itself, and a note when a newer line still exists past `tag`.
+fn move_notes(pin: &Pin, tag: &str, ls_remote: &str) -> Vec<String> {
+    let mut notes = vec![format!("note: {} moved to {tag}", pin.name)];
+    if let Some(now) = version(tag) {
+        notes.extend(unmoved_note(&Pin { current: now, ..*pin }, ls_remote));
+    }
+    notes
 }
 
 /// The manifest fields that can hold a dependency. `rein install -D` and `-O` write to the last two.
