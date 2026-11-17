@@ -344,7 +344,15 @@ fn output_within(cmd: &mut Command, limit: Duration) -> io::Result<Option<Output
     });
     let deadline = Instant::now() + limit;
     loop {
-        if let Some(status) = child.try_wait()? {
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
+        if let Some(status) = status {
             let stdout = stdout.join().unwrap_or_default();
             let stderr = stderr.join().unwrap_or_default();
             return Ok(Some(Output { status, stdout, stderr }));
