@@ -137,6 +137,7 @@ fn git_tags(repo: &str) -> Result<String, String> {
     let url = format!("https://github.com/{repo}");
     let out = Command::new("git")
         .args(["ls-remote", "--tags", "--refs", &url])
+        .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .map_err(|e| format!("cannot run git: {e}"))?;
     if !out.status.success() {
