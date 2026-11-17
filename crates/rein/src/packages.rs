@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rein_core::flows::{NPM_DIR, PACKAGE};
+use serde_json::Value;
 
+use crate::programs::triple;
 use crate::scopes;
 
 const FAILED: u8 = 1;
@@ -32,8 +34,14 @@ pub fn run(verb: &str, args: &[String]) -> u8 {
     if verb != "remove" && !rest.iter().any(|a| a.starts_with("--ignore-scripts")) {
         pnpm_args.push("--ignore-scripts");
     }
-    pnpm_args.extend(rest);
+    pnpm_args.extend(rest.clone());
     let bin = env::var("REIN_PNPM").unwrap_or_else(|_| "pnpm".to_string());
+    if verb == "update" {
+        let names: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with('-')).collect();
+        if let Err(message) = move_tag_pins(&bin, &dir, &names) {
+            return fail(&message);
+        }
+    }
     match Command::new(&bin).args(&pnpm_args).current_dir(&dir).status() {
         Ok(status) => status.code().and_then(|c| u8::try_from(c).ok()).unwrap_or(FAILED),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -69,7 +77,79 @@ fn write_manifest(path: &Path) -> Result<(), String> {
     fs::write(path, PROJECT_MANIFEST).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+/// `rein update` moves each tag-pinned GitHub program to its newest `v<x.y.z>` tag. `pnpm update` keeps a git tag
+/// fixed, so it cannot do this. `names` limits the programs, as `pnpm update` does. No names means all of them.
+/// `pnpm update` then runs as before.
+fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
+    let path = dir.join(PACKAGE);
+    let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let manifest: Value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+    let Some(deps) = manifest["dependencies"].as_object() else {
+        return Ok(());
+    };
+    for (name, spec) in deps {
+        if !names.is_empty() && !names.contains(&name.as_str()) {
+            continue;
+        }
+        let Some((repo, current)) = tag_pin(spec.as_str().unwrap_or_default()) else {
+            continue;
+        };
+        let (tag, newest) = newest_tag(&git_tags(repo)?).ok_or_else(|| format!("{repo} has no v<x.y.z> tag"))?;
+        if newest <= current {
+            continue;
+        }
+        let target = format!("github:{repo}#{tag}");
+        let status = Command::new(bin)
+            .args(["add", "--ignore-scripts", &target])
+            .current_dir(dir)
+            .status()
+            .map_err(|e| format!("cannot run {bin}: {e}"))?;
+        if !status.success() {
+            return Err(format!("pnpm add {target} failed"));
+        }
+    }
+    Ok(())
+}
+
+/// The repo and version of a `github:<owner>/<repo>#v<x.y.z>` spec. `None` for any other spec.
+fn tag_pin(spec: &str) -> Option<(&str, [u64; 3])> {
+    let (repo, tag) = spec.strip_prefix("github:")?.split_once('#')?;
+    let valid = repo.matches('/').count() == 1 && repo.split('/').all(|part| !part.is_empty());
+    valid.then_some((repo, version(tag)?))
+}
+
+/// `v<x.y.z>` as numbers. Pre-releases and other tags give `None`.
+fn version(tag: &str) -> Option<[u64; 3]> {
+    triple(tag.strip_prefix('v')?)
+}
+
+/// The highest `v<x.y.z>` tag in `git ls-remote --tags --refs` output, with its tag name and numbers.
+fn newest_tag(ls_remote: &str) -> Option<(String, [u64; 3])> {
+    ls_remote
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1)?.strip_prefix("refs/tags/"))
+        .filter_map(|tag| Some((tag.to_string(), version(tag)?)))
+        .max_by_key(|(_, v)| *v)
+}
+
+/// The tags of a GitHub repo, as `git ls-remote` prints them.
+fn git_tags(repo: &str) -> Result<String, String> {
+    let url = format!("https://github.com/{repo}");
+    let out = Command::new("git")
+        .args(["ls-remote", "--tags", "--refs", &url])
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("git ls-remote {url} failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 fn fail(message: &str) -> u8 {
     eprintln!("error: {message}");
     FAILED
 }
+
+#[cfg(test)]
+#[path = "packages_tests.rs"]
+mod tests;

@@ -61,7 +61,7 @@ fn range_holds(range: &str, version: &str) -> Option<bool> {
     Some(have[..=lead] == want[..=lead] && have >= want)
 }
 
-fn triple(version: &str) -> Option<[u64; 3]> {
+pub(crate) fn triple(version: &str) -> Option<[u64; 3]> {
     let parts: Vec<u64> = version.split('.').map(|p| p.parse().ok()).collect::<Option<_>>()?;
     <[u64; 3]>::try_from(parts).ok()
 }
