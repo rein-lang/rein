@@ -44,10 +44,7 @@ pub fn run(verb: &str, args: &[String]) -> u8 {
     }
     match Command::new(&bin).args(&pnpm_args).current_dir(&dir).status() {
         Ok(status) => status.code().and_then(|c| u8::try_from(c).ok()).unwrap_or(FAILED),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            fail("pnpm is not installed or not on PATH; install pnpm (https://pnpm.io) or set REIN_PNPM to its path")
-        }
-        Err(e) => fail(&format!("cannot run {bin}: {e}")),
+        Err(e) => fail(&spawn_error(&bin, &e)),
     }
 }
 
@@ -107,14 +104,12 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
             continue;
         };
         let target = format!("github:{repo}#{tag}");
-        let status = Command::new(bin)
-            .args(["add", "--ignore-scripts", &target])
-            .current_dir(dir)
-            .status()
-            .map_err(|e| format!("cannot run {bin}: {e}"))?;
+        let status = match Command::new(bin).args(["add", "--ignore-scripts", &target]).current_dir(dir).status() {
+            Ok(status) => status,
+            Err(e) => return Err(move_error(&spawn_error(bin, &e), &moved)),
+        };
         if !status.success() {
-            let done = if moved.is_empty() { "none".to_string() } else { moved.join(", ") };
-            return Err(format!("pnpm add {target} failed. Already moved: {done}. pnpm update did not run."));
+            return Err(move_error(&format!("pnpm add {target} failed"), &moved));
         }
         moved.push(name.as_str());
     }
@@ -144,7 +139,9 @@ fn explain_unmoved(name: &str, repo: &str, current: [u64; 3], ls_remote: &str) {
         None => eprintln!("warning: {name} is not moved: {repo} has no v<x.y.z> tag"),
         Some((top, v)) if v[0] > current[0] => {
             let major = current[0];
-            eprintln!("note: {name} stays on major {major}; {repo} has {top}. Install that major by hand to move.");
+            eprintln!(
+                "note: {name} stays on major {major}; {repo} has {top}. To move, run: rein install github:{repo}#{top}"
+            );
         }
         Some(_) => {}
     }
@@ -185,6 +182,21 @@ fn git_tags(repo: &str) -> Result<String, String> {
 fn fail(message: &str) -> u8 {
     eprintln!("error: {message}");
     FAILED
+}
+
+/// The error when a move stops. `why` says what failed. `moved` names the programs already moved, which stay moved.
+fn move_error(why: &str, moved: &[&str]) -> String {
+    let done = if moved.is_empty() { "none".to_string() } else { moved.join(", ") };
+    format!("{why}. Already moved: {done}. pnpm update did not run.")
+}
+
+/// The message when pnpm cannot start. A missing pnpm gets the install hint.
+fn spawn_error(bin: &str, e: &io::Error) -> String {
+    if e.kind() == io::ErrorKind::NotFound {
+        "pnpm is not installed or not on PATH; install pnpm (https://pnpm.io) or set REIN_PNPM to its path".to_string()
+    } else {
+        format!("cannot run {bin}: {e}")
+    }
 }
 
 #[cfg(test)]
