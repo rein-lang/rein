@@ -62,7 +62,10 @@ fn range_holds(range: &str, version: &str) -> Option<bool> {
 }
 
 pub(crate) fn triple(version: &str) -> Option<[u64; 3]> {
-    let parts: Vec<u64> = version.split('.').map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    let parts: Vec<u64> = version
+        .split('.')
+        .map(|p| p.bytes().all(|b| b.is_ascii_digit()).then_some(p).and_then(|p| p.parse().ok()))
+        .collect::<Option<_>>()?;
     <[u64; 3]>::try_from(parts).ok()
 }
 

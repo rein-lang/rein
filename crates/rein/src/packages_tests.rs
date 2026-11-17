@@ -12,6 +12,8 @@ fn reads_only_github_specs_pinned_to_a_v_tag() {
         "github:owner/repo#0.3.0",
         "github:owner/repo#v0.3.0-rc1",
         "github:owner/repo/extra#v1.0.0",
+        "github:owner/repo#v+1.0.0",
+        "github:owner/repo#v1.+0.0",
         "github:/repo#v1.0.0",
         "file:../review-handler",
         "^0.3.0",
