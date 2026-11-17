@@ -66,14 +66,14 @@ fn every_dependency_field_is_read_and_filtered_by_name() {
 #[test]
 fn the_pnpm_add_target_keeps_the_manifest_field() {
     let m = json!({
-        "dependencies": {"a": "github:o/a#v0.3.0"},
+        "dependencies": {"@s/a": "github:o/a#v0.3.0"},
         "devDependencies": {"b": "github:o/b#v0.3.0"},
         "optionalDependencies": {"c": "github:o/c#v0.3.0"}
     });
     let pins = tag_pins(&m, &[]);
-    assert_eq!(add_args(&pins[0], "v0.4.0"), ["add", "--ignore-scripts", "github:o/a#v0.4.0"]);
-    assert_eq!(add_args(&pins[1], "v0.4.0"), ["add", "--ignore-scripts", "--save-dev", "github:o/b#v0.4.0"]);
-    assert_eq!(add_args(&pins[2], "v0.4.0"), ["add", "--ignore-scripts", "--save-optional", "github:o/c#v0.4.0"]);
+    assert_eq!(add_args(&pins[0], "v0.4.0"), ["add", "--ignore-scripts", "@s/a@github:o/a#v0.4.0"]);
+    assert_eq!(add_args(&pins[1], "v0.4.0"), ["add", "--ignore-scripts", "--save-dev", "b@github:o/b#v0.4.0"]);
+    assert_eq!(add_args(&pins[2], "v0.4.0"), ["add", "--ignore-scripts", "--save-optional", "c@github:o/c#v0.4.0"]);
 }
 
 #[test]

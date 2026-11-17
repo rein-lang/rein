@@ -108,7 +108,7 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<Vec<String>, S
             Err(e) => return Err(move_error(&spawn_error(bin, &e), &moved)),
         };
         if !status.success() {
-            return Err(move_error(&format!("pnpm add github:{}#{tag} failed", pin.repo), &moved));
+            return Err(move_error(&format!("pnpm add {} failed", spec(&pin, &tag)), &moved));
         }
         moved.push(pin.name);
     }
@@ -153,8 +153,14 @@ fn add_args(pin: &Pin, tag: &str) -> Vec<String> {
         "optionalDependencies" => args.push("--save-optional".to_string()),
         _ => {}
     }
-    args.push(format!("github:{}#{tag}", pin.repo));
+    args.push(spec(pin, tag));
     args
+}
+
+/// The `<key>@github:<owner>/<repo>#<tag>` spec. The key is the manifest name, so `pnpm add` keeps that entry and
+/// does not add one named after the repo's package.
+fn spec(pin: &Pin, tag: &str) -> String {
+    format!("{}@github:{}#{tag}", pin.name, pin.repo)
 }
 
 /// The repo and version of a `github:<owner>/<repo>#v<x.y.z>` spec. `None` for any other spec.
