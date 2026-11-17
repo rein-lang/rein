@@ -1,5 +1,11 @@
-use super::{move_error, move_target, newest_tag, selected, spawn_error, tag_pin};
+use super::{
+    add_args, after_moves, bare_name, move_error, move_target, newest_tag, output_within, selected, spawn_error,
+    tag_pin, tag_pins,
+};
+use serde_json::json;
 use std::io;
+use std::process::Command;
+use std::time::Duration;
 
 #[test]
 fn reads_only_github_specs_pinned_to_a_v_tag() {
@@ -35,6 +41,61 @@ fn names_limit_the_programs_to_move() {
     assert!(selected(&[], "a"));
     assert!(selected(&["a"], "a"));
     assert!(!selected(&["a"], "b"));
+    assert!(selected(&["a@latest"], "a"));
+    assert!(selected(&["@s/p@^1"], "@s/p"));
+    assert!(selected(&["@s/p"], "@s/p"));
+    assert!(!selected(&["a@latest"], "b"));
+    assert_eq!(bare_name("a@1.2.3"), "a");
+    assert_eq!(bare_name("a"), "a");
+}
+
+#[test]
+fn every_dependency_field_is_read_and_filtered_by_name() {
+    let m = json!({
+        "dependencies": {"a": "github:o/a#v0.3.0", "x": "^1.0.0"},
+        "devDependencies": {"b": "github:o/b#v0.3.0"},
+        "optionalDependencies": {"c": "github:o/c#v0.3.0"}
+    });
+    let mut all: Vec<(&str, &str)> = tag_pins(&m, &[]).iter().map(|p| (p.name, p.section)).collect();
+    all.sort();
+    assert_eq!(all, [("a", "dependencies"), ("b", "devDependencies"), ("c", "optionalDependencies")]);
+    let some: Vec<&str> = tag_pins(&m, &["b@latest"]).iter().map(|p| p.name).collect();
+    assert_eq!(some, ["b"]);
+}
+
+#[test]
+fn the_pnpm_add_target_keeps_the_manifest_field() {
+    let m = json!({
+        "dependencies": {"a": "github:o/a#v0.3.0"},
+        "devDependencies": {"b": "github:o/b#v0.3.0"},
+        "optionalDependencies": {"c": "github:o/c#v0.3.0"}
+    });
+    let pins = tag_pins(&m, &[]);
+    assert_eq!(add_args(&pins[0], "v0.4.0"), ["add", "--ignore-scripts", "github:o/a#v0.4.0"]);
+    assert_eq!(add_args(&pins[1], "v0.4.0"), ["add", "--ignore-scripts", "--save-dev", "github:o/b#v0.4.0"]);
+    assert_eq!(add_args(&pins[2], "v0.4.0"), ["add", "--ignore-scripts", "--save-optional", "github:o/c#v0.4.0"]);
+}
+
+#[test]
+fn a_failed_update_names_the_programs_already_moved() {
+    assert_eq!(after_moves("pnpm update exited with 1", &[]), "pnpm update exited with 1");
+    assert_eq!(
+        after_moves("pnpm update exited with 1", &["a".to_string(), "b".to_string()]),
+        "pnpm update exited with 1. Already moved: a, b. They stay moved."
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_command_past_its_limit_is_killed() {
+    let mut slow = Command::new("sleep");
+    slow.arg("5");
+    assert!(matches!(output_within(&mut slow, Duration::from_millis(100)), Ok(None)));
+    let mut quick = Command::new("echo");
+    quick.arg("hi");
+    let out = output_within(&mut quick, Duration::from_secs(10)).unwrap().unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
 }
 
 #[test]
