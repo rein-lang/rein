@@ -164,9 +164,14 @@ fn tag_pin(spec: &str) -> Option<(&str, [u64; 3])> {
     valid.then_some((repo, version(tag)?))
 }
 
-/// `v<x.y.z>` as numbers. Pre-releases and other tags give `None`.
+/// `v<x.y.z>` as numbers. Pre-releases and other tags give `None`. Each part is digits only, so `v+1.0.0` is no tag.
 fn version(tag: &str) -> Option<[u64; 3]> {
-    triple(tag.strip_prefix('v')?)
+    let parts = tag.strip_prefix('v')?;
+    if parts.bytes().all(|b| b == b'.' || b.is_ascii_digit()) {
+        triple(parts)
+    } else {
+        None
+    }
 }
 
 /// Whether `rein update` moves the program `name`, given the names on the command line. No names means all.
