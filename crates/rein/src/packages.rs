@@ -4,9 +4,11 @@
 
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rein_core::flows::{NPM_DIR, PACKAGE};
 use serde_json::Value;
@@ -36,16 +38,22 @@ pub fn run(verb: &str, args: &[String]) -> u8 {
     }
     pnpm_args.extend(rest.clone());
     let bin = env::var("REIN_PNPM").unwrap_or_else(|_| "pnpm".to_string());
+    let mut moved: Vec<String> = Vec::new();
     if verb == "update" {
         let names: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with('-')).collect();
-        if let Err(message) = move_tag_pins(&bin, &dir, &names) {
-            return fail(&message);
+        match move_tag_pins(&bin, &dir, &names) {
+            Ok(done) => moved = done,
+            Err(message) => return fail(&message),
         }
     }
-    match Command::new(&bin).args(&pnpm_args).current_dir(&dir).status() {
+    let code = match Command::new(&bin).args(&pnpm_args).current_dir(&dir).status() {
         Ok(status) => status.code().and_then(|c| u8::try_from(c).ok()).unwrap_or(FAILED),
-        Err(e) => fail(&spawn_error(&bin, &e)),
+        Err(e) => return fail(&after_moves(&spawn_error(&bin, &e), &moved)),
+    };
+    if code != 0 && !moved.is_empty() {
+        eprintln!("error: {}", after_moves(&format!("pnpm update exited with {code}"), &moved));
     }
+    code
 }
 
 fn is_global(arg: &str) -> bool {
@@ -76,44 +84,77 @@ fn write_manifest(path: &Path) -> Result<(), String> {
 
 /// `rein update` moves each tag-pinned GitHub program to the newest `v<x.y.z>` tag of its major. `pnpm update`
 /// keeps a git tag fixed, so it cannot do this. `names` limits the programs, as `pnpm update` does. No names means
-/// all of them. A program whose tags cannot be read is skipped with a warning. `pnpm update` then runs as before.
-fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
+/// all of them. A program whose tags cannot be read is skipped with a warning. Returns the names of the programs
+/// moved. `pnpm update` then runs as before.
+fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<Vec<String>, String> {
     let path = dir.join(PACKAGE);
     let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let manifest: Value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
-    let Some(deps) = manifest["dependencies"].as_object() else {
-        return Ok(());
-    };
     let mut moved: Vec<&str> = Vec::new();
-    for (name, spec) in deps {
-        if !selected(names, name) {
-            continue;
-        }
-        let Some((repo, current)) = tag_pin(spec.as_str().unwrap_or_default()) else {
-            continue;
-        };
-        let tags = match git_tags(repo) {
+    for pin in tag_pins(&manifest, names) {
+        let tags = match git_tags(pin.repo) {
             Ok(tags) => tags,
             Err(message) => {
-                eprintln!("warning: {name} is not moved: {message}");
+                eprintln!("warning: {} is not moved: {message}", pin.name);
                 continue;
             }
         };
-        let Some(tag) = move_target(current, &tags) else {
-            explain_unmoved(name, repo, current, &tags);
+        let Some(tag) = move_target(pin.current, &tags) else {
+            explain_unmoved(pin.name, pin.repo, pin.current, &tags);
             continue;
         };
-        let target = format!("github:{repo}#{tag}");
-        let status = match Command::new(bin).args(["add", "--ignore-scripts", &target]).current_dir(dir).status() {
+        let status = match Command::new(bin).args(add_args(&pin, &tag)).current_dir(dir).status() {
             Ok(status) => status,
             Err(e) => return Err(move_error(&spawn_error(bin, &e), &moved)),
         };
         if !status.success() {
-            return Err(move_error(&format!("pnpm add {target} failed"), &moved));
+            return Err(move_error(&format!("pnpm add github:{}#{tag} failed", pin.repo), &moved));
         }
-        moved.push(name.as_str());
+        moved.push(pin.name);
     }
-    Ok(())
+    Ok(moved.into_iter().map(String::from).collect())
+}
+
+/// The manifest fields that can hold a dependency. `rein install -D` and `-O` write to the last two.
+const SECTIONS: [&str; 3] = ["dependencies", "devDependencies", "optionalDependencies"];
+
+/// A program pinned to a GitHub tag: its name in the manifest, its repo, its version, and the field it is in.
+struct Pin<'a> {
+    name: &'a str,
+    repo: &'a str,
+    current: [u64; 3],
+    section: &'static str,
+}
+
+/// The tag-pinned programs that `rein update` may move. `names` limits them, as in `selected`.
+fn tag_pins<'a>(manifest: &'a Value, names: &[&str]) -> Vec<Pin<'a>> {
+    let mut pins = Vec::new();
+    for section in SECTIONS {
+        let Some(deps) = manifest[section].as_object() else {
+            continue;
+        };
+        for (name, spec) in deps {
+            if !selected(names, name) {
+                continue;
+            }
+            if let Some((repo, current)) = tag_pin(spec.as_str().unwrap_or_default()) {
+                pins.push(Pin { name: name.as_str(), repo, current, section });
+            }
+        }
+    }
+    pins
+}
+
+/// The `pnpm add` arguments that move a pin to `tag`. The save flag keeps the program in its manifest field.
+fn add_args(pin: &Pin, tag: &str) -> Vec<String> {
+    let mut args = vec!["add".to_string(), "--ignore-scripts".to_string()];
+    match pin.section {
+        "devDependencies" => args.push("--save-dev".to_string()),
+        "optionalDependencies" => args.push("--save-optional".to_string()),
+        _ => {}
+    }
+    args.push(format!("github:{}#{tag}", pin.repo));
+    args
 }
 
 /// The repo and version of a `github:<owner>/<repo>#v<x.y.z>` spec. `None` for any other spec.
@@ -130,7 +171,16 @@ fn version(tag: &str) -> Option<[u64; 3]> {
 
 /// Whether `rein update` moves the program `name`, given the names on the command line. No names means all.
 fn selected(names: &[&str], name: &str) -> bool {
-    names.is_empty() || names.contains(&name)
+    names.is_empty() || names.iter().any(|arg| bare_name(arg) == name)
+}
+
+/// The package name in an argument such as `name@latest` or `@scope/name@^1`: the text before the `@` that starts
+/// the version or tag. The `@` that starts a scope stays.
+fn bare_name(arg: &str) -> &str {
+    match arg.get(1..).and_then(|rest| rest.find('@')) {
+        Some(i) => &arg[..i + 1],
+        None => arg,
+    }
 }
 
 /// Prints why a pin stays where it is, when that is not simply because it is the newest of its major.
@@ -165,18 +215,59 @@ fn newest_tag(ls_remote: &str, major: Option<u64>) -> Option<(String, [u64; 3])>
         .max_by_key(|(_, v)| *v)
 }
 
+/// How long one `git ls-remote` may run. A stalled connection then fails that program, and the update goes on.
+const LS_REMOTE_LIMIT: Duration = Duration::from_secs(30);
+
 /// The tags of a GitHub repo, as `git ls-remote` prints them.
 fn git_tags(repo: &str) -> Result<String, String> {
     let url = format!("https://github.com/{repo}");
-    let out = Command::new("git")
-        .args(["ls-remote", "--tags", "--refs", &url])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|e| format!("cannot run git: {e}"))?;
+    let mut cmd = Command::new("git");
+    cmd.args(["ls-remote", "--tags", "--refs", &url]).env("GIT_TERMINAL_PROMPT", "0");
+    let out = match output_within(&mut cmd, LS_REMOTE_LIMIT) {
+        Ok(Some(out)) => out,
+        Ok(None) => return Err(format!("git ls-remote {url} timed out after {} s", LS_REMOTE_LIMIT.as_secs())),
+        Err(e) => return Err(format!("cannot run git: {e}")),
+    };
     if !out.status.success() {
         return Err(format!("git ls-remote {url} failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Runs `cmd` and collects its output. `Ok(None)` when it runs past `limit`: the child is then killed.
+fn output_within(cmd: &mut Command, limit: Duration) -> io::Result<Option<Output>> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stdout = thread::spawn({
+        let pipe = child.stdout.take();
+        move || drain(pipe)
+    });
+    let stderr = thread::spawn({
+        let pipe = child.stderr.take();
+        move || drain(pipe)
+    });
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stdout = stdout.join().unwrap_or_default();
+            let stderr = stderr.join().unwrap_or_default();
+            return Ok(Some(Output { status, stdout, stderr }));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Reads a child's pipe to its end. A missing pipe gives no bytes.
+fn drain(pipe: Option<impl Read>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if let Some(mut pipe) = pipe {
+        let _ = pipe.read_to_end(&mut bytes);
+    }
+    bytes
 }
 
 fn fail(message: &str) -> u8 {
@@ -188,6 +279,14 @@ fn fail(message: &str) -> u8 {
 fn move_error(why: &str, moved: &[&str]) -> String {
     let done = if moved.is_empty() { "none".to_string() } else { moved.join(", ") };
     format!("{why}. Already moved: {done}. pnpm update did not run.")
+}
+
+/// The error when `pnpm update` cannot run or fails after some programs moved. With no moves, `why` stands alone.
+fn after_moves(why: &str, moved: &[String]) -> String {
+    if moved.is_empty() {
+        return why.to_string();
+    }
+    format!("{why}. Already moved: {}. They stay moved.", moved.join(", "))
 }
 
 /// The message when pnpm cannot start. A missing pnpm gets the install hint.
