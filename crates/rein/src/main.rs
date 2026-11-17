@@ -176,8 +176,9 @@ enum Command {
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
         args: Vec<String>,
     },
-    /// Update installed program packages: runs `pnpm update --ignore-scripts` with these arguments. `-g` picks the
-    /// user folder.
+    /// Update installed program packages: runs `pnpm update --ignore-scripts` with these arguments. A program pinned
+    /// to a `github:owner/repo#vX.Y.Z` tag first moves to the newest `v` tag of its major (of its minor under major 0).
+    /// A version range such as `name@^1` moves no tag pin. `-g` picks the user folder.
     Update {
         /// Arguments for `pnpm update`, such as a package name or `--latest`. `-g` picks the user folder.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
