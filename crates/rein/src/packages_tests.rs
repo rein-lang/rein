@@ -1,6 +1,7 @@
 use super::{
     add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_notes, move_tag_pins, move_target,
-    newest_tag, output_within, package_names, selected, spawn_error, tag_pin, tag_pins, unmoved_note, Pin, PACKAGE,
+    newest_tag, output_within, package_names, selected, spawn_error, tag_pin, tag_pins, unknown_names, unmoved_note,
+    Pin, PACKAGE,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -48,6 +49,15 @@ fn names_limit_the_programs_to_move() {
     assert!(!selected(&["a@latest"], "b"));
     assert_eq!(bare_name("a@1.2.3"), "a");
     assert_eq!(bare_name("a"), "a");
+}
+
+#[test]
+fn a_letter_flag_value_is_reported_as_no_dependency() {
+    let m = json!({"dependencies": {"a": "github:o/a#v0.3.0"}, "devDependencies": {"@s/p": "github:o/p#v0.3.0"}});
+    let names = package_names(&["--loglevel", "silent", "a", "@s/p"]);
+    assert_eq!(names, ["silent", "a", "@s/p"]);
+    assert_eq!(unknown_names(&m, &names), ["silent"]);
+    assert_eq!(unknown_names(&m, &["a@^1", "@s/p@latest"]), Vec::<&str>::new());
 }
 
 #[test]

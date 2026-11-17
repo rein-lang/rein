@@ -108,6 +108,9 @@ fn move_tag_pins(
     for arg in names.iter().filter(|arg| is_range(arg)) {
         eprintln!("note: {arg} names a version range, so rein update moves no tag pin for it");
     }
+    for arg in unknown_names(&manifest, names) {
+        eprintln!("warning: {arg} matches no dependency, so rein update does not move it");
+    }
     let mut moved: Vec<&str> = Vec::new();
     for pin in tag_pins(&manifest, names) {
         let tags = match tags_of(pin.repo) {
@@ -216,6 +219,11 @@ fn version(tag: &str) -> Option<[u64; 3]> {
 /// version range in the names selects no tag move, see `is_range`.
 fn selected(names: &[&str], name: &str) -> bool {
     names.is_empty() || names.iter().any(|arg| bare_name(arg) == name && !is_range(arg))
+}
+
+/// The names that match no dependency in any section. A flag's value such as `silent` in `--loglevel silent` is one.
+fn unknown_names<'a>(manifest: &Value, names: &[&'a str]) -> Vec<&'a str> {
+    names.iter().copied().filter(|arg| !SECTIONS.iter().any(|s| manifest[*s].get(bare_name(arg)).is_some())).collect()
 }
 
 /// The package name in an argument such as `name@latest` or `@scope/name@^1`: the text before the `@` that starts
