@@ -77,8 +77,9 @@ fn write_manifest(path: &Path) -> Result<(), String> {
     fs::write(path, PROJECT_MANIFEST).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// `rein update` moves each tag-pinned GitHub program to its newest `v<x.y.z>` tag. `pnpm update` keeps a git tag
-/// fixed, so it cannot do this. `names` limits the programs, as `pnpm update` does. No names means all of them.
+/// `rein update` moves each tag-pinned GitHub program to the newest `v<x.y.z>` tag of its major. `pnpm update`
+/// keeps a git tag fixed, so it cannot do this. `names` limits the programs, as `pnpm update` does. No names means
+/// all of them.
 /// `pnpm update` then runs as before.
 fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
     let path = dir.join(PACKAGE);
@@ -94,10 +95,14 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
         let Some((repo, current)) = tag_pin(spec.as_str().unwrap_or_default()) else {
             continue;
         };
-        let (tag, newest) = newest_tag(&git_tags(repo)?).ok_or_else(|| format!("{repo} has no v<x.y.z> tag"))?;
-        if newest <= current {
+        let tags = git_tags(repo)?;
+        let Some(tag) = move_target(current, &tags) else {
+            if let Some((top, _)) = newest_tag(&tags, None).filter(|(_, v)| v[0] > current[0]) {
+                let major = current[0];
+                eprintln!("note: {name} stays on major {major}; {repo} has {top}. Install that major by hand to move.");
+            }
             continue;
-        }
+        };
         let target = format!("github:{repo}#{tag}");
         let status = Command::new(bin)
             .args(["add", "--ignore-scripts", &target])
@@ -123,12 +128,21 @@ fn version(tag: &str) -> Option<[u64; 3]> {
     triple(tag.strip_prefix('v')?)
 }
 
-/// The highest `v<x.y.z>` tag in `git ls-remote --tags --refs` output, with its tag name and numbers.
-fn newest_tag(ls_remote: &str) -> Option<(String, [u64; 3])> {
+/// The tag a pin moves to: the highest `v<x.y.z>` tag of the pin's major, when it is higher than the pin.
+/// A higher major is never taken, because it can break the program.
+fn move_target(current: [u64; 3], ls_remote: &str) -> Option<String> {
+    let (tag, newest) = newest_tag(ls_remote, Some(current[0]))?;
+    (newest > current).then_some(tag)
+}
+
+/// The highest `v<x.y.z>` tag in `git ls-remote --tags --refs` output, with its tag name and numbers. `major`
+/// limits the tags to one major version.
+fn newest_tag(ls_remote: &str, major: Option<u64>) -> Option<(String, [u64; 3])> {
     ls_remote
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1)?.strip_prefix("refs/tags/"))
         .filter_map(|tag| Some((tag.to_string(), version(tag)?)))
+        .filter(|(_, v)| major.is_none_or(|m| v[0] == m))
         .max_by_key(|(_, v)| *v)
 }
 

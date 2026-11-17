@@ -25,6 +25,6 @@ fn reads_only_github_specs_pinned_to_a_v_tag() {
 #[test]
 fn picks_the_highest_release_tag_by_number() {
     let out = "a\trefs/tags/v0.3.0\nb\trefs/tags/v0.10.0\nc\trefs/tags/v0.4.0\nd\trefs/tags/v0.11.0-rc1\ne\trefs/tags/latest\n";
-    assert_eq!(newest_tag(out), Some(("v0.10.0".to_string(), [0, 10, 0])));
-    assert_eq!(newest_tag(""), None);
+    assert_eq!(newest_tag(out, None), Some(("v0.10.0".to_string(), [0, 10, 0])));
+    assert_eq!(newest_tag("", None), None);
 }
