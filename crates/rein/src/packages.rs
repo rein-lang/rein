@@ -204,14 +204,27 @@ fn unmoved_note(pin: &Pin, ls_remote: &str) -> Option<String> {
         None => Some(format!("warning: {} is not moved: {} has no v<x.y.z> tag", pin.name, pin.repo)),
         Some((top, v)) if v > pin.current && !same_line(pin.current, v) => {
             let kind = if pin.current[0] == 0 { "a new minor" } else { "a new major" };
-            let (name, repo) = (pin.name, pin.repo);
             Some(format!(
-                "note: {name} stays on {}; {repo} has {top}, {kind}. To move, run: rein install github:{repo}#{top}",
-                tag_text(pin.current)
+                "note: {} stays on {}; {} has {top}, {kind}. To move, run: {}",
+                pin.name,
+                tag_text(pin.current),
+                pin.repo,
+                install_command(pin, &top)
             ))
         }
         Some(_) => None,
     }
+}
+
+/// The `rein install` command that moves a pin to `top`. A pin in `devDependencies` or `optionalDependencies` keeps
+/// its field with `-D` or `-O`, as `rein install` takes them.
+fn install_command(pin: &Pin, top: &str) -> String {
+    let flag = match pin.section {
+        "devDependencies" => "-D ",
+        "optionalDependencies" => "-O ",
+        _ => "",
+    };
+    format!("rein install {flag}github:{}#{top}", pin.repo)
 }
 
 /// `v<x.y.z>` for numbers.

@@ -125,6 +125,11 @@ fn a_pin_left_behind_a_newer_line_gets_a_note() {
     let note = unmoved_note(&pin, "c\trefs/tags/v2.0.0\n").unwrap();
     assert!(note.starts_with("note: a stays on v1.3.0; o/a has v2.0.0, a new major."), "{note}");
     assert_eq!(unmoved_note(&pin, "a\trefs/tags/v1.3.0\n"), None, "the newest of its line needs no note");
+    let dev = Pin { name: "a", repo: "o/a", current: [1, 3, 0], section: "devDependencies" };
+    assert_eq!(
+        unmoved_note(&dev, "c\trefs/tags/v2.0.0\n").as_deref(),
+        Some("note: a stays on v1.3.0; o/a has v2.0.0, a new major. To move, run: rein install -D github:o/a#v2.0.0")
+    );
     assert_eq!(
         unmoved_note(&pin, "d\trefs/tags/main\n").as_deref(),
         Some("warning: a is not moved: o/a has no v<x.y.z> tag")
