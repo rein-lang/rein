@@ -1,6 +1,6 @@
 use super::{
     add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_notes, move_tag_pins, move_target,
-    newest_tag, output_within, selected, spawn_error, tag_pin, tag_pins, unmoved_note, Pin, PACKAGE,
+    newest_tag, output_within, package_names, selected, spawn_error, tag_pin, tag_pins, unmoved_note, Pin, PACKAGE,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -48,6 +48,12 @@ fn names_limit_the_programs_to_move() {
     assert!(!selected(&["a@latest"], "b"));
     assert_eq!(bare_name("a@1.2.3"), "a");
     assert_eq!(bare_name("a"), "a");
+}
+
+#[test]
+fn a_flag_value_is_no_package_name() {
+    assert_eq!(package_names(&["--depth", "0"]), Vec::<&str>::new());
+    assert_eq!(package_names(&["a", "--depth", "0", "@s/p@^1", "./dir", "3d-viewer"]), ["a", "@s/p@^1", "3d-viewer"]);
 }
 
 #[test]

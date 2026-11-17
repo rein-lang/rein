@@ -40,8 +40,7 @@ pub fn run(verb: &str, args: &[String]) -> u8 {
     let bin = env::var("REIN_PNPM").unwrap_or_else(|_| "pnpm".to_string());
     let mut moved: Vec<String> = Vec::new();
     if verb == "update" {
-        let names: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with('-')).collect();
-        match move_tag_pins(&bin, &dir, &names, &git_tags) {
+        match move_tag_pins(&bin, &dir, &package_names(&rest), &git_tags) {
             Ok(done) => moved = done,
             Err(message) => return fail(&message),
         }
@@ -58,6 +57,16 @@ pub fn run(verb: &str, args: &[String]) -> u8 {
 
 fn is_global(arg: &str) -> bool {
     arg == "-g" || arg == "--global"
+}
+
+/// The package names among the arguments. A flag is no name, and neither is a flag's value such as the `0` of
+/// `--depth 0`. A name starts with a letter, a digit or `@`, and has a letter in it.
+fn package_names<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter().copied().filter(|a| is_package_name(a)).collect()
+}
+
+fn is_package_name(arg: &str) -> bool {
+    arg.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '@') && arg.contains(|c: char| c.is_ascii_alphabetic())
 }
 
 /// `<user programs folder>/npm/` for `-g`, else `<project rein folder>/npm/`. Both are created with their
