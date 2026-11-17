@@ -87,6 +87,7 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
     let Some(deps) = manifest["dependencies"].as_object() else {
         return Ok(());
     };
+    let mut moved: Vec<&str> = Vec::new();
     for (name, spec) in deps {
         if !names.is_empty() && !names.contains(&name.as_str()) {
             continue;
@@ -112,8 +113,10 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<(), String> {
             .status()
             .map_err(|e| format!("cannot run {bin}: {e}"))?;
         if !status.success() {
-            return Err(format!("pnpm add {target} failed"));
+            let done = if moved.is_empty() { "none".to_string() } else { moved.join(", ") };
+            return Err(format!("pnpm add {target} failed. Already moved: {done}. pnpm update did not run."));
         }
+        moved.push(name.as_str());
     }
     Ok(())
 }
