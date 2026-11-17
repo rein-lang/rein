@@ -236,7 +236,7 @@ fn unmoved_note(pin: &Pin, ls_remote: &str) -> Option<String> {
     match newest_tag(ls_remote, |_| true) {
         None => Some(format!("warning: {} is not moved: {} has no v<x.y.z> tag", pin.name, pin.repo)),
         Some((top, v)) if v > pin.current && !same_line(pin.current, v) => {
-            let kind = if pin.current[0] == 0 { "a new minor" } else { "a new major" };
+            let kind = if v[0] != pin.current[0] { "a new major" } else { "a new minor" };
             Some(format!(
                 "note: {} stays on {}; {} has {top}, {kind}. To move, run: {}",
                 pin.name,

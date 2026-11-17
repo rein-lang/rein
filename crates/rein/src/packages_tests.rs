@@ -159,6 +159,9 @@ fn a_pin_left_behind_a_newer_line_gets_a_note() {
         unmoved_note(&pin, "d\trefs/tags/main\n").as_deref(),
         Some("warning: a is not moved: o/a has no v<x.y.z> tag")
     );
+    let pin = Pin { name: "a", repo: "o/a", current: [0, 3, 0], section: "dependencies" };
+    let note = unmoved_note(&pin, "d\trefs/tags/v1.0.0\n").unwrap();
+    assert!(note.starts_with("note: a stays on v0.3.0; o/a has v1.0.0, a new major."), "{note}");
 }
 
 #[test]
