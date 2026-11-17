@@ -91,6 +91,9 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<Vec<String>, S
     let path = dir.join(PACKAGE);
     let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let manifest: Value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+    for arg in names.iter().filter(|arg| is_range(arg)) {
+        eprintln!("note: {arg} names a version range, so rein update moves no tag pin for it");
+    }
     let mut moved: Vec<&str> = Vec::new();
     for pin in tag_pins(&manifest, names) {
         let tags = match git_tags(pin.repo) {
@@ -183,17 +186,30 @@ fn version(tag: &str) -> Option<[u64; 3]> {
     }
 }
 
-/// Whether `rein update` moves the program `name`, given the names on the command line. No names means all.
+/// Whether `rein update` moves the program `name`, given the names on the command line. No names means all. A
+/// version range in the names selects no tag move, see `is_range`.
 fn selected(names: &[&str], name: &str) -> bool {
-    names.is_empty() || names.iter().any(|arg| bare_name(arg) == name)
+    names.is_empty() || names.iter().any(|arg| bare_name(arg) == name && !is_range(arg))
 }
 
 /// The package name in an argument such as `name@latest` or `@scope/name@^1`: the text before the `@` that starts
 /// the version or tag. The `@` that starts a scope stays.
 fn bare_name(arg: &str) -> &str {
+    split_version(arg).0
+}
+
+/// Whether an argument names a version range such as `name@^1`, not a tag. `pnpm update` applies a range to the
+/// program's spec, and a tag pin has no spec to apply it to, so the range selects no tag move. `name@latest` is no
+/// range.
+fn is_range(arg: &str) -> bool {
+    split_version(arg).1.is_some_and(|v| v != "latest")
+}
+
+/// The name and the version or tag part of an argument. The version part is `None` when no `@` follows the name.
+fn split_version(arg: &str) -> (&str, Option<&str>) {
     match arg.get(1..).and_then(|rest| rest.find('@')) {
-        Some(i) => &arg[..i + 1],
-        None => arg,
+        Some(i) => (&arg[..i + 1], Some(&arg[i + 2..])),
+        None => (arg, None),
     }
 }
 

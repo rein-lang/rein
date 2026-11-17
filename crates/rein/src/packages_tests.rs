@@ -1,6 +1,6 @@
 use super::{
-    add_args, after_moves, bare_name, move_error, move_target, newest_tag, output_within, selected, spawn_error,
-    tag_pin, tag_pins, unmoved_note, Pin,
+    add_args, after_moves, bare_name, is_range, move_error, move_target, newest_tag, output_within, selected,
+    spawn_error, tag_pin, tag_pins, unmoved_note, Pin,
 };
 use serde_json::json;
 use std::io;
@@ -42,11 +42,23 @@ fn names_limit_the_programs_to_move() {
     assert!(selected(&["a"], "a"));
     assert!(!selected(&["a"], "b"));
     assert!(selected(&["a@latest"], "a"));
-    assert!(selected(&["@s/p@^1"], "@s/p"));
     assert!(selected(&["@s/p"], "@s/p"));
     assert!(!selected(&["a@latest"], "b"));
     assert_eq!(bare_name("a@1.2.3"), "a");
     assert_eq!(bare_name("a"), "a");
+}
+
+#[test]
+fn a_version_range_selects_no_tag_move() {
+    assert!(!selected(&["a@^1"], "a"), "a range is no tag move");
+    assert!(!selected(&["@s/p@~1.2"], "@s/p"));
+    assert!(!selected(&["a@1.2.3"], "a"));
+    assert!(selected(&["a@^1", "b"], "b"), "the other names still count");
+    assert!(is_range("a@^1"));
+    assert!(is_range("@s/p@~1.2"));
+    assert!(!is_range("a@latest"));
+    assert!(!is_range("@s/p"));
+    assert!(!is_range("a"));
 }
 
 #[test]
