@@ -1,9 +1,11 @@
 use super::{
-    add_args, after_moves, bare_name, is_range, move_error, move_target, newest_tag, output_within, selected,
-    ls_remote_command, spawn_error, tag_pin, tag_pins, unmoved_note, Pin,
+    add_args, after_moves, bare_name, is_range, ls_remote_command, move_error, move_target, move_tag_pins, newest_tag,
+    output_within, selected, spawn_error, tag_pin, tag_pins, unmoved_note, Pin, PACKAGE,
 };
-use serde_json::json;
+use serde_json::{json, Value};
+use std::fs;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -175,4 +177,86 @@ fn a_missing_pnpm_gets_the_install_hint() {
     assert!(spawn_error("pnpm", &missing).starts_with("pnpm is not installed or not on PATH"));
     let denied = io::Error::from(io::ErrorKind::PermissionDenied);
     assert!(spawn_error("/x/pnpm", &denied).starts_with("cannot run /x/pnpm: "));
+}
+
+/// The `git ls-remote` output of the stub repos. No network. `o/c` fails, as an unreachable repo does.
+#[cfg(unix)]
+fn canned_tags(repo: &str) -> Result<String, String> {
+    let tags = match repo {
+        "o/a" => vec!["v0.3.0", "v0.3.2"],
+        "o/b" => vec!["v2.0.0"],
+        "o/c" => return Err("network down".to_string()),
+        "o/d" => vec!["v0.4.0"],
+        "o/f" => vec!["v1.2.0"],
+        "o/g" => vec!["v1.0.0", "v1.2.0"],
+        "o/h" => vec!["v1.0.0"],
+        other => return Err(format!("no stub for {other}")),
+    };
+    Ok(tags.iter().map(|t| format!("x\trefs/tags/{t}\n")).collect())
+}
+
+/// A temp folder with the manifest, and a stub pnpm. The stub appends each call's arguments to `log` and fails on
+/// any `f@github` argument. Returns the folder and the stub's path.
+#[cfg(unix)]
+fn stub_folder(label: &str, manifest: &Value) -> (PathBuf, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("rein-move-{label}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(PACKAGE), manifest.to_string()).unwrap();
+    let stub = dir.join("pnpm");
+    let script = format!(
+        "#!/bin/sh\necho \"$*\" >> '{}/log'\ncase \"$*\" in *f@github*) exit 1 ;; esac\nexit 0\n",
+        dir.display()
+    );
+    fs::write(&stub, script).unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, stub.display().to_string())
+}
+
+#[cfg(unix)]
+fn log_of(dir: &Path) -> Vec<String> {
+    fs::read_to_string(dir.join("log")).unwrap_or_default().lines().map(String::from).collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn move_tag_pins_runs_pnpm_add_for_each_move_and_skips_the_rest() {
+    let m = json!({
+        "dependencies": {"a": "github:o/a#v0.3.0", "c": "github:o/c#v0.3.0", "d": "github:o/d#v0.3.0"},
+        "devDependencies": {"b": "github:o/b#v1.0.0", "g": "github:o/g#v1.0.0"},
+        "optionalDependencies": {"h": "github:o/h#v1.0.0"}
+    });
+    let (dir, pnpm) = stub_folder("all", &m);
+    let moved = move_tag_pins(&pnpm, &dir, &[], &canned_tags).unwrap();
+    assert_eq!(moved, ["a", "g"]);
+    assert_eq!(
+        log_of(&dir),
+        ["add --ignore-scripts a@github:o/a#v0.3.2", "add --ignore-scripts --save-dev g@github:o/g#v1.2.0"]
+    );
+    let moved = move_tag_pins(&pnpm, &dir, &["g"], &canned_tags).unwrap();
+    assert_eq!(moved, ["g"], "a name limits the programs");
+    assert_eq!(log_of(&dir).len(), 3);
+    assert_eq!(move_tag_pins(&pnpm, &dir, &["a@^1"], &canned_tags).unwrap(), Vec::<String>::new());
+    assert_eq!(log_of(&dir).len(), 3, "a range moves no tag pin");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn move_tag_pins_names_the_programs_already_moved_when_a_move_fails() {
+    let m = json!({
+        "dependencies": {"a": "github:o/a#v0.3.0"},
+        "devDependencies": {"f": "github:o/f#v1.0.0"}
+    });
+    let (dir, pnpm) = stub_folder("fails", &m);
+    let err = move_tag_pins(&pnpm, &dir, &[], &canned_tags).unwrap_err();
+    assert_eq!(
+        err,
+        "pnpm add f@github:o/f#v1.2.0 failed. Already moved: a. pnpm update did not run."
+    );
+    assert_eq!(log_of(&dir).len(), 2, "the stop is at the first failed add");
+    let err = move_tag_pins("/nonexistent/rein-stub-pnpm", &dir, &[], &canned_tags).unwrap_err();
+    assert!(err.starts_with("pnpm is not installed or not on PATH"), "{err}");
+    let _ = fs::remove_dir_all(&dir);
 }

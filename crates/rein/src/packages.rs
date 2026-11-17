@@ -41,7 +41,7 @@ pub fn run(verb: &str, args: &[String]) -> u8 {
     let mut moved: Vec<String> = Vec::new();
     if verb == "update" {
         let names: Vec<&str> = rest.iter().copied().filter(|a| !a.starts_with('-')).collect();
-        match move_tag_pins(&bin, &dir, &names) {
+        match move_tag_pins(&bin, &dir, &names, &git_tags) {
             Ok(done) => moved = done,
             Err(message) => return fail(&message),
         }
@@ -83,11 +83,16 @@ fn write_manifest(path: &Path) -> Result<(), String> {
 }
 
 /// `rein update` moves each tag-pinned GitHub program to the newest `v<x.y.z>` tag of its line (its major, or under
-/// major 0 its minor). `pnpm update`
-/// keeps a git tag fixed, so it cannot do this. `names` limits the programs, as `pnpm update` does. No names means
-/// all of them. A program whose tags cannot be read is skipped with a warning. Returns the names of the programs
-/// moved. `pnpm update` then runs as before.
-fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<Vec<String>, String> {
+/// major 0 its minor). `pnpm update` keeps a git tag fixed, so it cannot do this. `names` limits the programs, as
+/// `pnpm update` does. No names means all of them. A program whose tags cannot be read is skipped with a warning.
+/// `tags_of` gives a repo's `git ls-remote` output. Returns the names of the programs moved. `pnpm update` then runs
+/// as before.
+fn move_tag_pins(
+    bin: &str,
+    dir: &Path,
+    names: &[&str],
+    tags_of: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<Vec<String>, String> {
     let path = dir.join(PACKAGE);
     let text = fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let manifest: Value = serde_json::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
@@ -96,7 +101,7 @@ fn move_tag_pins(bin: &str, dir: &Path, names: &[&str]) -> Result<Vec<String>, S
     }
     let mut moved: Vec<&str> = Vec::new();
     for pin in tag_pins(&manifest, names) {
-        let tags = match git_tags(pin.repo) {
+        let tags = match tags_of(pin.repo) {
             Ok(tags) => tags,
             Err(message) => {
                 eprintln!("warning: {} is not moved: {message}", pin.name);
