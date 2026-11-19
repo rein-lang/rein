@@ -49,6 +49,40 @@ pub struct Function {
     pub span: Span,
     /// From `export` to the function name: the header the line-limit error points at.
     pub header: Span,
+    /// The `import` lines, in file order. A use of a local name builds the same node as its `@` reference.
+    pub imports: Vec<Import>,
+}
+
+/// One `import` line. Its local name stands for what the target declares: a function, a struct, or a program's
+/// entry. A use of the local name builds the same node as the `@` reference of the path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Import {
+    /// The name the target declares. A default import has its local name here.
+    pub name: Spanned<String>,
+    /// The name this file uses. The same as `name`, unless `as` gives another.
+    pub local: Spanned<String>,
+    /// The path as written: `./ci/fix`, `../x`, `./message.struct`, or a program name such as `pr-handling`.
+    pub path: Spanned<String>,
+    /// `import fix from "./ci/fix"`: the default form. It resolves like the named form.
+    pub default: bool,
+    /// `as` was written. Set even when it keeps the name.
+    pub aliased: bool,
+    /// From `import` to the path.
+    pub span: Span,
+    /// The file uses the local name. Set by the parser.
+    pub used: bool,
+}
+
+impl Import {
+    /// True when the path names a `.struct.rein` file.
+    pub fn is_struct(&self) -> bool {
+        self.path.value.ends_with(STRUCT_SUFFIX)
+    }
+
+    /// The path the `@` reference of this import would write: `./message` for `./message.struct`, else the path.
+    pub fn reference(&self) -> &str {
+        self.path.value.strip_suffix(STRUCT_SUFFIX).unwrap_or(&self.path.value)
+    }
 }
 
 /// A parsed `/** */` doc block.
