@@ -469,6 +469,7 @@ impl Project {
                 let resolve = |path: &str| self.kind_for(name, path);
                 diags.extend(check_function(&sf.function, name, &resolve));
                 diags.extend(self.missing_programs(name, &sf.function));
+                diags.extend(crate::import_check::check(self, name, &sf.function));
                 if !is_struct(name) {
                     diags.extend(check_length(&sf.function, name, &sf.text, self.max_function_lines));
                 }
