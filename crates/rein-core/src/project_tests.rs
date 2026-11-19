@@ -1233,7 +1233,7 @@ fn reachability_starts_at_the_entry_from_the_manifest() {
     // `step` is reached from `flow`, the entry, and only `flow` calls it, so it stays at the root.
     assert!(diags["step"].is_empty(), "{:?}", diags["step"]);
     // `flow` has a deprecated `@./step`; the deprecation is not what this test checks.
-    let flow: Vec<_> = diags["flow"].iter().filter(|d| !d.is_deprecated()).collect();
+    let flow: Vec<_> = diags["flow"].iter().filter(|d| !d.is_removed()).collect();
     assert!(flow.is_empty(), "{:?}", flow);
     assert!(has(&diags["main"], Severity::Warning, "`main` is not reachable from flow"), "{:?}", diags["main"]);
 }
@@ -1242,7 +1242,7 @@ fn reachability_starts_at_the_entry_from_the_manifest() {
 fn program_hand_off_passes_every_parameter() {
     let warnings = |p: &Project| -> Vec<String> {
         let all = &p.check()["main"];
-        all.iter().filter(|d| d.severity == Severity::Warning && !d.is_deprecated()).map(|d| d.message.clone()).collect()
+        all.iter().filter(|d| d.severity == Severity::Warning && !d.is_removed()).map(|d| d.message.clone()).collect()
     };
     let partial = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
     assert_eq!(
@@ -1255,6 +1255,6 @@ fn program_hand_off_passes_every_parameter() {
     let main = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Draft? */\n  const draft: boolean = await request(`Read the PR.`);\n  /** Task? */\n  const task: \"review\" | \"merge\" = await request(`Pick a task.`);\n  return @pr-handling/main(pr=pr, draft=draft, task=task);\n}\n";
     let full = crate::program_fixture::with_main(main.to_string());
     // The `@pr-handling/main` deprecation is not what this test checks.
-    let rest: Vec<_> = full.check()["main"].iter().filter(|d| !d.is_deprecated()).cloned().collect();
+    let rest: Vec<_> = full.check()["main"].iter().filter(|d| !d.is_removed()).cloned().collect();
     assert!(rest.is_empty(), "{:?}", rest);
 }

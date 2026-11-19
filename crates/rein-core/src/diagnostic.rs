@@ -30,15 +30,16 @@ pub enum Severity {
     Warning,
 }
 
-/// The `code` of a deprecation warning. The language server shows it and links it to the docs.
-pub const DEPRECATED_CODE: &str = "deprecated-reference";
+/// The `code` of an error for a removed form: an `@` reference or a default import. The language server shows it and
+/// links it to the docs.
+pub const REMOVED_CODE: &str = "removed-reference";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub span: Span,
     pub message: String,
-    /// A short name for the kind of diagnostic, such as [`DEPRECATED_CODE`]. `None` for most diagnostics.
+    /// A short name for the kind of diagnostic, such as [`REMOVED_CODE`]. `None` for most diagnostics.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<&'static str>,
 }
@@ -52,14 +53,14 @@ impl Diagnostic {
         Self { severity: Severity::Warning, span, message: message.into(), code: None }
     }
 
-    /// A warning that a form is deprecated. It has the code [`DEPRECATED_CODE`].
-    pub fn deprecated(span: Span, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Warning, span, message: message.into(), code: Some(DEPRECATED_CODE) }
+    /// An error that a form was removed. It has the code [`REMOVED_CODE`].
+    pub fn removed(span: Span, message: impl Into<String>) -> Self {
+        Self { severity: Severity::Error, span, message: message.into(), code: Some(REMOVED_CODE) }
     }
 
-    /// True for a deprecation warning, see [`Diagnostic::deprecated`].
-    pub fn is_deprecated(&self) -> bool {
-        self.code == Some(DEPRECATED_CODE)
+    /// True for a removed-form error, see [`Diagnostic::removed`].
+    pub fn is_removed(&self) -> bool {
+        self.code == Some(REMOVED_CODE)
     }
 }
 

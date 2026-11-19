@@ -148,20 +148,16 @@ fn as_with_the_same_name_is_a_warning() {
 }
 
 #[test]
-fn default_import_with_the_declared_name_is_accepted_with_only_a_deprecation() {
+fn default_import_with_the_declared_name_is_an_error_for_the_removal() {
     let project = project_of(&[
         ("ci/fix", FIX),
         ("main", &main_with("import fix from \"./ci/fix\";", "return fix;")),
     ]);
     let diags = project.check();
-    assert!(
-        diags["main"].iter().all(|d| d.severity != Severity::Error),
-        "{:?}",
-        diags["main"]
-    );
-    // The default import still works until the removal date, so its only diagnostic is the deprecation.
-    let deprecations: Vec<_> = diags["main"].iter().filter(|d| d.is_deprecated()).collect();
-    assert_eq!(deprecations.len(), 1, "{:?}", diags["main"]);
+    // Rein 0.2.0 removed default imports. Their only diagnostic is the removal error.
+    let removals: Vec<_> = diags["main"].iter().filter(|d| d.is_removed()).collect();
+    assert_eq!(removals.len(), 1, "{:?}", diags["main"]);
+    assert_eq!(removals[0].severity, Severity::Error);
     assert!(
         !has(&diags["main"], Severity::Warning, "is imported but not used"),
         "{:?}",
@@ -284,7 +280,7 @@ fn messages(project: &Project) -> BTreeMap<String, Vec<String>> {
     project
         .check()
         .into_iter()
-        .map(|(n, ds)| (n, ds.into_iter().filter(|d| !d.is_deprecated()).map(|d| d.message).collect()))
+        .map(|(n, ds)| (n, ds.into_iter().filter(|d| !d.is_removed()).map(|d| d.message).collect()))
         .collect()
 }
 
