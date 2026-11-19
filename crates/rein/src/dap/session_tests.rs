@@ -2,9 +2,14 @@ use super::*;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// The `pr-handling` flow with its `@` references, written inline. It asks for `main.draft`, `main.task` and then the
+/// The `pr-handling` flow with its named imports, written inline. It asks for `main.draft`, `main.task` and then the
 /// `merge` questions. The programs that `main` and `merge` call are stubs, because the tests stop at `main` and `merge`.
-const MAIN: &str = r#"interface Input {
+const MAIN: &str = r#"import { review } from "./review";
+import { address } from "./comments/address";
+import { fix } from "./ci/fix";
+import { merge } from "./merge";
+
+interface Input {
   /** The link of the pull request to handle. */
   pr: string;
   /** Is the pull request still a draft? */
@@ -24,18 +29,22 @@ export default function main({ pr, draft, task }: Input) {
 
   switch (task) {
     case "review":
-      return @./review(pr=pr);
+      return review(pr=pr);
     case "address comments":
-      return @./comments/address(pr=pr);
+      return address(pr=pr);
     case "fix ci":
-      return @./ci/fix(pr=pr);
+      return fix(pr=pr);
     case "merge":
-      return @./merge(pr=pr);
+      return merge(pr=pr);
   }
 }
 "#;
 
-const MERGE: &str = r#"interface Input {
+const MERGE: &str = r#"import { fix } from "./ci/fix";
+import { address } from "./comments/address";
+import { review as openReview } from "./review";
+
+interface Input {
   /** The link of the pull request to merge. */
   pr: string;
   /** What is the CI status of the PR? */
@@ -52,7 +61,7 @@ const MERGE: &str = r#"interface Input {
 export default function merge({ pr, ci, conflicts, review }: Input) {
   switch (ci) {
     case "red":
-      return @./ci/fix(pr=pr);
+      return fix(pr=pr);
     case "pending":
       return `Wait for CI to finish on ${pr}. Then start this program again.`;
     case "green":
@@ -64,9 +73,9 @@ export default function merge({ pr, ci, conflicts, review }: Input) {
         case "approved":
           return `Merge the pull request ${pr}. Then delete its branch.`;
         case "changes requested":
-          return @./comments/address(pr=pr);
+          return address(pr=pr);
         case "no review":
-          return @./review(pr=pr);
+          return openReview(pr=pr);
       }
   }
 }
@@ -264,7 +273,7 @@ fn breakpoint_on_a_question_stops_before_it_is_asked() {
 #[test]
 fn breakpoint_on_a_hand_off_stops_at_the_next_question() {
     let mut session = started(json!({}));
-    let line = line_with("main.rein", "@./merge(pr=pr)");
+    let line = line_with("main.rein", "merge(pr=pr)");
     let source = json!({"path": example("main.rein")});
     session.handle(&request(
         "setBreakpoints",
@@ -290,7 +299,7 @@ fn stack_trace_has_a_frame_per_function_with_its_lines() {
     assert_eq!(frames[0]["name"], "merge");
     assert_eq!(frames[0]["line"], line_with("merge.rein", "switch (ci)"));
     assert_eq!(frames[1]["name"], "main");
-    assert_eq!(frames[1]["line"], line_with("main.rein", "@./merge(pr=pr)"));
+    assert_eq!(frames[1]["line"], line_with("main.rein", "merge(pr=pr)"));
     assert!(frames[0]["source"]["path"]
         .as_str()
         .unwrap()
