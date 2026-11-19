@@ -46,6 +46,9 @@ enum Command {
         /// Project directory or .rein file.
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Make each deprecated `@` reference and default import an error.
+        #[arg(long)]
+        deny_deprecated: bool,
     },
     /// Run a process live. Writes one step per line, reads one answer per line on stdin.
     Run {
@@ -200,7 +203,7 @@ enum Command {
 
 fn main() -> ExitCode {
     let code = match Cli::parse().command {
-        Command::Check { path } => cli::check(&path),
+        Command::Check { path, deny_deprecated } => cli::check(&path, deny_deprecated),
         Command::Run { flow, root, entry, json } => live_run::run(flow, root, entry, json),
         Command::Eval { function, root, set, json } => cli::eval(&function, root, &set, json),
         Command::Step { program, entry, root, flow, answer, input, stdin, json } => {

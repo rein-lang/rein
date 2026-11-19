@@ -526,3 +526,44 @@ fn step_with_root_starts_at_the_entry_in_the_manifest() {
 
     fs::remove_dir_all(&root).unwrap();
 }
+
+/// A project whose entry calls `@./ci/fix`, a deprecated reference.
+fn deprecated_project(tag: &str) -> PathBuf {
+    let root = temp_dir(tag);
+    fs::create_dir_all(root.join("ci")).unwrap();
+    fs::write(root.join("ci/fix.rein"), "/** Fix CI. */\nexport default function fix() {\n  return `Fix the CI.`;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "/** Main. */\nexport default function main() {\n  return @./ci/fix;\n}\n").unwrap();
+    root
+}
+
+#[test]
+fn check_summary_counts_deprecated_references_and_exits_zero() {
+    let root = deprecated_project("deprecated-summary");
+    let out = rein(&["check", root.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(code(&out), 0, "{stderr}");
+    assert!(stderr.contains("1 deprecated imports and references; they become errors on 2026-12-19"), "{stderr}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("warning: `@./ci/fix` is deprecated"));
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn check_deny_deprecated_makes_each_deprecation_an_error() {
+    let root = deprecated_project("deprecated-deny");
+    let out = rein(&["check", root.to_str().unwrap(), "--deny-deprecated"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(code(&out), 1, "{stdout}");
+    assert!(stdout.contains("error: `@./ci/fix` is deprecated"), "{stdout}");
+    assert!(!stdout.contains("warning: `@./ci/fix`"), "{stdout}");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn step_on_a_project_with_at_references_shows_no_deprecation() {
+    let root = deprecated_project("deprecated-step");
+    let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(code(&out), 0, "{stdout}");
+    assert!(!stdout.contains("deprecated"), "{stdout}");
+    fs::remove_dir_all(&root).unwrap();
+}
