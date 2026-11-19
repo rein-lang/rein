@@ -114,13 +114,18 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
 /// Installs `a`, which asks one question and hands off to `b`, and `b`, which asks one question and returns
 /// `b_call`, and `c`, which is done at once. Returns the REIN_HOME.
 fn chain(tag: &str, b_call: &str) -> PathBuf {
+    chain_with(tag, "", b_call)
+}
+
+/// [`chain`], with `b_imports` (import lines, each ending in a newline) written before the function of `b`.
+fn chain_with(tag: &str, b_imports: &str, b_call: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!("rein-handoff-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     let ask = |name: &str, call: &str| {
         format!("/** {name}. */\nexport default function main(\n  /** Go on? */\n  go: boolean,\n) {{\n  if (go) {{\n    return {call};\n  }}\n  return `stop`;\n}}\n")
     };
     program(&home, "a", &ask("A", "@b/main"));
-    program(&home, "b", &ask("B", b_call));
+    program(&home, "b", &format!("{b_imports}{}", ask("B", b_call)));
     program(&home, "c", "/** C. */\nexport default function main() {\n  return `done c`;\n}\n");
     home
 }
@@ -171,6 +176,31 @@ fn first_step_names_a_program_missing_from_the_entry() {
     let home = chain("direct", "@c/main");
     fs::remove_dir_all(home.join("b")).unwrap();
     assert_first_step_names(&home, "unknown program `b`; run `rein list` to list programs, or `rein install -g b` to install it");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn a_chain_of_named_imports_with_every_program_installed_runs() {
+    let home = chain_with("imports-present", "import { main as c } from \"c\";\n\n", "c");
+    let out = rein(&home, &["check", home.join("a").to_str().unwrap()]);
+    assert!(out.status.success(), "{out:?}");
+    let out = rein(&home, &["step", "a", "--answer", "main.go=true", "--answer", "@b/main.go=true", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("done c") && text.contains("@c/main"), "{text}");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_named_import_of_a_program_missing_behind_another_program() {
+    let home = chain_with("imports-missing", "import { main as d } from \"d\";\n\n", "d");
+    assert_first_step_names(&home, "`@b/main` hands off to `@d`: unknown program `d`; run `rein list` to list programs, or `rein install -g d` to install it");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_named_import_of_a_function_the_program_does_not_declare() {
+    let home = chain_with("imports-nofn", "import { other as c } from \"c\";\n\n", "c");
+    assert_first_step_names(&home, "`@b/main` hands off to `@c`: `c` declares `main`, not `other`; write `import { main } from ");
     fs::remove_dir_all(&home).unwrap();
 }
 

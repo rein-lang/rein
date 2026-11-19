@@ -2,7 +2,7 @@
 //! import that is not used or that `as` renames to the same name.
 
 use crate::ast::{Binding, Function, Import};
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Span};
 use crate::imports::{missing_struct, own_names};
 use crate::project::Project;
 
@@ -58,17 +58,25 @@ fn open_name(name: &str) -> String {
 
 /// An error when the target of `import` does not resolve, or declares another name than the import gives.
 fn wrong_name(project: &Project, from: &str, import: &Import) -> Option<Diagnostic> {
+    let (span, message) = name_problem(project, from, import)?;
+    Some(Diagnostic::error(span, message))
+}
+
+/// Why `import` of function `from` is wrong: where the error points and what it says. `None` when the import names
+/// what its target declares. A program that a hand-off reaches checks its imports with this too, so the error reads
+/// the same wherever it is reported.
+pub fn name_problem(project: &Project, from: &str, import: &Import) -> Option<(Span, String)> {
     let declared = if import.is_struct() {
         match project.struct_for(from, import.reference()) {
             Ok((_, s)) => s.name.value.clone(),
-            Err(_) => return Some(Diagnostic::error(import.path.span, missing_struct(import))),
+            Err(_) => return Some((import.path.span, missing_struct(import))),
         }
     } else {
         match project.binding_for(from, import.reference()) {
             Ok(Binding::Function(target)) => declared_function(project, &target)?,
             Ok(Binding::Template { path: Some(target), .. }) => declared_function(project, &target)?,
             Ok(_) => return None,
-            Err(reason) => return Some(Diagnostic::error(import.path.span, reason)),
+            Err(reason) => return Some((import.path.span, reason)),
         }
     };
     (declared != import.name.value).then(|| {
@@ -77,7 +85,7 @@ fn wrong_name(project: &Project, from: &str, import: &Import) -> Option<Diagnost
             "`{path}` declares `{declared}`, not `{}`; write `import {{ {declared} }} from \"{path}\"`",
             import.name.value
         );
-        Diagnostic::error(import.name.span, message)
+        (import.name.span, message)
     })
 }
 

@@ -298,7 +298,8 @@ impl Project {
     }
 
     /// One error per program reference that a hand-off from `name` can reach inside other programs and that does
-    /// not resolve: a program that is not installed, or a function it does not have. A reference written in `name`
+    /// not resolve: a program that is not installed, or a function it does not have. A named import of a program
+    /// that declares another name than the import gives is an error too. A reference written in `name`
     /// itself is the checker's error, so it is not repeated here. The run would fail when it reached the reference,
     /// so the agent learns it before the first step.
     fn missing_programs(&self, name: &str, f: &Function) -> Vec<Diagnostic> {
@@ -327,6 +328,16 @@ impl Project {
                         out.push(Diagnostic::error(Span::default(), format!("`{from}` hands off to `@{key}`: {reason}")));
                     }
                     None => {}
+                }
+            }
+            // A named import of a program reaches it by the same key as `@program`, so the name it gives must match
+            // what the entry declares, as `@program/function` must reach the entry. A missing program was reported above.
+            for import in sf.function.imports.iter().filter(|i| i.used && !i.is_struct() && is_program_key(i.reference())) {
+                if !bindings.contains_key(import.reference()) {
+                    continue;
+                }
+                if let Some((_, reason)) = crate::import_check::name_problem(self, &from, import) {
+                    out.push(Diagnostic::error(Span::default(), format!("`{from}` hands off to `@{}`: {reason}", import.reference())));
                 }
             }
         }
