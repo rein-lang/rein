@@ -177,7 +177,11 @@ fn pr_handling_checks_with_no_errors_or_warnings() {
     assert!(stderr(&out).contains("0 errors, "), "{}", stderr(&out));
     // ponytail: the example still lets callees ask their `boolean` and union parameters; drop this filter and
     // expect `0 warnings` again once rein-lang/examples passes every parameter.
-    let other = stdout(&out).lines().filter(|l| l.contains("warning:") && !l.contains("missing argument `")).count();
+    // The `@` references of the example are deprecated; they are not what this test checks.
+    let other = stdout(&out)
+        .lines()
+        .filter(|l| l.contains("warning:") && !l.contains("missing argument `") && !l.contains("is deprecated and becomes"))
+        .count();
     assert_eq!(other, 0, "{}", stdout(&out));
 }
 

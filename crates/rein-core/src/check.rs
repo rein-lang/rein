@@ -696,7 +696,7 @@ impl<'a> Checker<'a> {
                 let names: Vec<String> = params.into_iter().map(|(n, _)| n).collect();
                 let message = format!("`@{path}` takes {}, got 0; pass {}", count_args(names.len()), and_list(&names));
                 let severity = if strings { Severity::Error } else { MISSING_TYPED_ARG };
-                self.out.push(Diagnostic { severity, span: reference.span, message });
+                self.out.push(Diagnostic { severity, span: reference.span, message, code: None });
             }
             Ok(Kind::Function { .. } | Kind::Request) => {}
         }
@@ -821,7 +821,7 @@ impl<'a> Checker<'a> {
             if !given.contains(p.as_str()) && !positional {
                 let severity = if *ty == InputType::Text { Severity::Error } else { MISSING_TYPED_ARG };
                 let message = format!("missing argument `{p}` in call to `{target}`; write `{p}=value`");
-                self.out.push(Diagnostic { severity, span: call.span, message });
+                self.out.push(Diagnostic { severity, span: call.span, message, code: None });
             }
         }
     }
