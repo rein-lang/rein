@@ -693,6 +693,32 @@ fn a_wrong_import_name_has_a_quick_fix_to_the_declared_name() {
 }
 
 #[test]
+fn definition_of_a_named_import_goes_to_its_function() {
+    let root = temp_project("import-definition");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(
+        &start,
+        "import { target } from \"./target\";\n\n/** Start. */\nexport default function start() {\n  return target;\n}\n",
+    );
+    // Line 0, column 9 is the imported name. Line 4, column 9 is its use. Both go to the header of `target`.
+    for (id, (line, character)) in [(2, (0, 9)), (3, (4, 9))] {
+        let def = server.request(
+            id,
+            "textDocument/definition",
+            json!({"textDocument": {"uri": start}, "position": {"line": line, "character": character}}),
+        );
+        assert!(def["result"]["uri"].as_str().unwrap().ends_with("/target.rein"), "{def}");
+        assert_eq!(def["result"]["range"]["start"]["line"], 1, "{def}");
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn a_deprecated_reference_is_tagged_with_its_code_and_docs_link() {
     let root = temp_project("deprecated-tag");
     let mut server = Server::start();
