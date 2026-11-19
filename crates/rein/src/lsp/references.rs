@@ -3,6 +3,7 @@
 use lsp_types::{Location, ReferenceParams};
 use rein_core::ast::is_struct;
 
+use super::import_references::{import_sites, local_sites};
 use super::occurrences::{callers, declaration, header_span, param_uses, symbol_at, Symbol};
 use super::structs::{field_sites, field_span, struct_decl, type_sites};
 use super::text::offset;
@@ -24,6 +25,14 @@ pub fn references(state: &State, p: &ReferenceParams) -> Option<Vec<Location>> {
     let sites = match &symbol {
         Symbol::Function(target) => {
             let mut sites = callers(&project, target);
+            sites.extend(import_sites(&project, target));
+            if with_declaration {
+                sites.push((target.clone(), header_span(&project, target)));
+            }
+            sites
+        }
+        Symbol::ImportLocal { file, local, target } => {
+            let mut sites = local_sites(&project, file, local);
             if with_declaration {
                 sites.push((target.clone(), header_span(&project, target)));
             }

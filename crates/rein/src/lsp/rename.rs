@@ -14,6 +14,8 @@ use rein_core::diagnostic::Span;
 use rein_core::lexer::KEYWORDS;
 use rein_core::project::{join, skips_folder, Project};
 
+use super::import_references::local_use_spans;
+use super::import_rename::{move_imports, rename_import_local};
 use super::occurrences::{declaration, name_span, param_uses, refs, symbol_at, Symbol};
 use super::structs::{base as struct_base, field_sites, struct_decl, type_sites};
 use super::text::{is_identifier, offset, range, relative_import};
@@ -31,6 +33,7 @@ pub fn prepare(state: &State, p: &TextDocumentPositionParams) -> Result<Option<P
         Symbol::Std(n) => return Err(std_error(&n)),
         Symbol::Param { name: n, .. } => (span, n),
         Symbol::Field { name: n, .. } => (span, n),
+        Symbol::ImportLocal { local, .. } => (span, local),
         Symbol::Struct { name: n, file } if !is_struct(&file) => (span, n),
         Symbol::Struct { file, .. } => {
             let base = struct_base(&file).to_string();
@@ -64,6 +67,7 @@ pub fn rename(state: &State, p: &RenameParams) -> Result<Option<WorkspaceEdit>, 
         Symbol::Std(n) => Err(std_error(&n)),
         Symbol::Param { function, name: old } => rename_param(&state.docs, &project, &function, &old, new).map(Some),
         Symbol::Field { file, strukt, name: old } => rename_field(&state.docs, &project, &file, &strukt, &old, new).map(Some),
+        Symbol::ImportLocal { file, local: old, .. } => rename_import_local(&state.docs, &project, &file, &old, new).map(Some),
         Symbol::Struct { file, name: old } => rename_struct(state, &project, &file, &old, new).map(Some),
         Symbol::Function(target) => rename_function(state, &project, &target, new).map(Some),
     }
@@ -77,7 +81,7 @@ fn std_error(n: &str) -> String {
 fn other_program(symbol: &Symbol) -> Option<&str> {
     let path = match symbol {
         Symbol::Function(f) | Symbol::Param { function: f, .. } => f,
-        Symbol::Struct { file, .. } | Symbol::Field { file, .. } => file,
+        Symbol::Struct { file, .. } | Symbol::Field { file, .. } | Symbol::ImportLocal { file, .. } => file,
         Symbol::Std(_) => return None,
     };
     path.strip_prefix('@')?.split('/').next()
@@ -240,7 +244,12 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
     let mut edits = Edits::default();
     for (from, file) in &project.files {
         let new_from = moved(from);
+        let import_uses = local_use_spans(&file.function, &file.text);
         for (span, value, suffix) in references(project, from) {
+            // A use of an import's local name keeps its name. `move_imports` changes it with the import line.
+            if import_uses.contains(&span) {
+                continue;
+            }
             let Ok(path_now) = join(from, &value) else {
                 // The reference leaves the project root, so it names nothing now. A moved file may now reach a file.
                 if let Some(new_from) = &new_from {
@@ -290,6 +299,7 @@ pub fn move_function(state: &State, project: &Project, target: &str, new_target:
             }
         }
     }
+    move_imports(project, target, new_target, &moved, &mut edits)?;
     if let Some(span) = name_span(&sf.text).filter(|s| &sf.text[s.start..s.end] == old) {
         edits.add(project, target, span, new);
     }
@@ -432,10 +442,10 @@ fn shown_name(name: &str) -> String {
 
 /// Text edits per function file.
 #[derive(Default)]
-struct Edits(BTreeMap<String, Vec<TextEdit>>);
+pub(super) struct Edits(BTreeMap<String, Vec<TextEdit>>);
 
 impl Edits {
-    fn add(&mut self, project: &Project, function: &str, span: Span, new_text: &str) {
+    pub(super) fn add(&mut self, project: &Project, function: &str, span: Span, new_text: &str) {
         let Some(sf) = project.get(function) else { return };
         // An edit that writes the text already there changes nothing, so it is left out.
         if sf.text.get(span.start..span.end) == Some(new_text) {
@@ -447,7 +457,7 @@ impl Edits {
 
     /// The text edits of each file, then the file renames. The text edits use the old URIs, so they apply before
     /// the renames.
-    fn into_workspace_edit(self, docs: &Docs, project: &Project, renames: impl IntoIterator<Item = (Url, Url)>) -> WorkspaceEdit {
+    pub(super) fn into_workspace_edit(self, docs: &Docs, project: &Project, renames: impl IntoIterator<Item = (Url, Url)>) -> WorkspaceEdit {
         let mut ops: Vec<DocumentChangeOperation> = self
             .0
             .into_iter()

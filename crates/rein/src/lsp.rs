@@ -17,6 +17,8 @@ mod diagnostics;
 mod document_symbols;
 mod hover;
 mod import_completion;
+mod import_references;
+mod import_rename;
 mod import_symbols;
 mod occurrences;
 mod references;

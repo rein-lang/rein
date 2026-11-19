@@ -36,7 +36,7 @@ fn target_markdown(project: &Project, name: &str, sf: &SourceFile, off: usize) -
         return Some((value, None));
     };
     let value = match symbol {
-        Symbol::Function(target) => {
+        Symbol::Function(target) | Symbol::ImportLocal { target, .. } => {
             let doc = function_markdown(&target, &project.get(&target)?.function);
             match target.strip_prefix('@').and_then(|t| t.split_once('/')) {
                 Some((program, _)) => format!("{}\n\n---\n\n{doc}", program_markdown(project, program)?),
