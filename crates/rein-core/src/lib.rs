@@ -9,6 +9,7 @@ pub mod graph;
 pub mod import_check;
 pub mod imports;
 pub mod lexer;
+pub mod migrate_imports;
 pub mod naming;
 pub mod parser;
 pub mod project;

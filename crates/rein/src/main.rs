@@ -10,6 +10,7 @@ mod live_run;
 mod list;
 mod lsp;
 mod mcp;
+mod migrate;
 mod packages;
 mod programs;
 mod run_log;
@@ -183,6 +184,11 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
         args: Vec<String>,
     },
+    /// Migrate the project to named imports, such as `rein migrate imports`.
+    Migrate {
+        #[command(subcommand)]
+        command: migrate::MigrateCommand,
+    },
     /// Run the language server on stdio.
     Lsp,
     /// Run the debug adapter on stdio (Debug Adapter Protocol). The VS Code extension starts it.
@@ -216,6 +222,7 @@ fn main() -> ExitCode {
         Command::Install { args } => packages::run("add", &args),
         Command::Uninstall { args } => packages::run("remove", &args),
         Command::Update { args } => packages::run("update", &args),
+        Command::Migrate { command } => migrate::run(command),
         Command::Lsp => lsp::serve(),
         Command::Dap => dap::serve(),
         Command::DocsCli => {
