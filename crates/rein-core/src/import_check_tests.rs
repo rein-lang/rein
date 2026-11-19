@@ -281,7 +281,7 @@ fn messages(project: &Project) -> BTreeMap<String, Vec<String>> {
     project
         .check()
         .into_iter()
-        .map(|(n, ds)| (n, ds.into_iter().map(|d| d.message).collect()))
+        .map(|(n, ds)| (n, ds.into_iter().filter(|d| !d.is_deprecated()).map(|d| d.message).collect()))
         .collect()
 }
 

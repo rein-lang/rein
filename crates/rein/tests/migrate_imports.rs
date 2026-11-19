@@ -92,10 +92,16 @@ fn migrate(root: &Path, check: bool) -> Output {
 }
 
 /// The last line of `rein check`'s stderr, such as `0 errors, 2 warnings`.
+/// The messages of the check, without line numbers. A deprecation is left out: migrating removes it, and the test
+/// checks what else the migration changes.
 fn check_summary(root: &Path) -> (i32, String) {
     let out = rein(&["check", root.to_str().unwrap()]);
-    let summary = text(&out.stderr).lines().last().unwrap_or_default().to_string();
-    (code(&out), summary)
+    let messages: Vec<String> = text(&out.stdout)
+        .lines()
+        .filter(|l| !l.contains("is deprecated and becomes") && !l.contains("default imports are deprecated"))
+        .map(|l| l.split_once(": ").map_or(l, |(_, rest)| rest).to_string())
+        .collect();
+    (code(&out), messages.join("\n"))
 }
 
 /// The first answer that a scripted caller gives to a question or request: the first option, else a boolean or text.

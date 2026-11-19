@@ -1965,8 +1965,9 @@ fn a_project_without_program_refs_checks_and_completes_without_programs() {
     // The file references only a local function, so the checker finds nothing wrong.
     let main = uri_of(&root, "main.rein");
     server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
-    let diags = server.wait_diagnostics(&main, |d| d.is_empty());
-    assert!(diags.is_empty(), "{diags:?}");
+    // The `@./target` reference is deprecated, so its warning is the only diagnostic.
+    let diags = server.wait_diagnostics(&main, |d| d.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("is deprecated"))));
+    assert!(diags.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("is deprecated"))), "{diags:?}");
 
     // After `@./` the local functions only. The installed program is not offered.
     let items = server.request(2, "textDocument/completion", at(&main, 2, 12));
