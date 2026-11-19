@@ -3,14 +3,18 @@
 
 use crate::ast::{Binding, Function, Import};
 use crate::diagnostic::Diagnostic;
-use crate::imports::missing_struct;
+use crate::imports::{missing_struct, own_names};
 use crate::project::Project;
 
 /// The errors and warnings of the imports of function `from`.
 pub fn check(project: &Project, from: &str, f: &Function) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    let own = own_names(f);
     for import in &f.imports {
         if let Some(d) = wrong_name(project, from, import) {
+            out.push(d);
+        }
+        if let Some(d) = shadowed(import, &own) {
             out.push(d);
         }
         if !import.used {
@@ -26,6 +30,30 @@ pub fn check(project: &Project, from: &str, f: &Function) -> Vec<Diagnostic> {
         }
     }
     out
+}
+
+/// A warning when the local name of `import` is a parameter, a field, a `const` or a struct of the same file. Both
+/// names then read the same, so the message gives an alias. It is a warning in rein 0.1.x, so installed programs
+/// keep working in a patch release.
+fn shadowed(import: &Import, own: &[(String, &str)]) -> Option<Diagnostic> {
+    let local = &import.local.value;
+    let (_, kind) = own.iter().find(|(name, _)| name == local)?;
+    let declared = &import.name.value;
+    let alias = open_name(local);
+    let path = &import.path.value;
+    let message = format!(
+        "import `{local}` clashes with the {kind} `{local}`; give the import another name, like `import {{ {declared} as {alias} }} from \"{path}\"`; this becomes an error in rein 0.2.0"
+    );
+    Some(Diagnostic::warning(import.local.span, message))
+}
+
+/// `open` followed by `name` with its first letter capitalized, such as `openReview` for `review`.
+fn open_name(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => format!("open{}{}", first.to_uppercase(), chars.as_str()),
+        None => "open".to_string(),
+    }
 }
 
 /// An error when the target of `import` does not resolve, or declares another name than the import gives.

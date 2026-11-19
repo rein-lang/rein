@@ -326,3 +326,64 @@ fn import_that_leaves_the_project_root_is_an_error_at_the_import() {
         diags["main"]
     );
 }
+
+const REVIEW: &str = "/** Review. */\nexport default function review() {\n  return `Review.`;\n}\n";
+const INPUT: &str = "interface Input {\n  /** Review? */\n  review: string;\n}\n";
+
+#[test]
+fn import_named_like_a_destructured_field_is_an_error() {
+    let main = format!(
+        "import {{ review }} from \"./review\";\n{INPUT}\n/** Entry. */\nexport default function main({{ review }}: Input) {{\n  return review;\n}}\n"
+    );
+    let project = project_of(&[("review", REVIEW), ("main", &main)]);
+    let diags = project.check();
+    assert!(
+        has(
+            &diags["main"],
+            Severity::Warning,
+            "import `review` clashes with the parameter `review`; give the import another name, like `import { review as openReview } from \"./review\"`; this becomes an error in rein 0.2.0"
+        ),
+        "{:?}",
+        diags["main"]
+    );
+    assert!(!has(&diags["main"], Severity::Error, "clashes"), "{:?}", diags["main"]);
+}
+
+#[test]
+fn import_named_like_a_scalar_parameter_is_an_error() {
+    let main = "import { review } from \"./review\";\n\n/** Entry. */\nexport default function main(/** Review? */ review: string) {\n  return review;\n}\n";
+    let project = project_of(&[("review", REVIEW), ("main", main)]);
+    let diags = project.check();
+    assert!(
+        has(&diags["main"], Severity::Warning, "import `review` clashes with the parameter `review`"),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn import_named_like_a_const_is_an_error() {
+    let main = "import { review } from \"./review\";\n\n/** Entry. */\nexport default async function main() {\n  /** Review? */\n  const review: boolean = await request(\"Review it.\");\n  if (review) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
+    let project = project_of(&[("review", REVIEW), ("main", main)]);
+    let diags = project.check();
+    assert!(
+        has(&diags["main"], Severity::Warning, "import `review` clashes with the const `review`"),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn aliased_import_of_a_destructured_field_name_is_clean() {
+    let main = format!(
+        "import {{ review as openReview }} from \"./review\";\n{INPUT}\n/** Entry. */\nexport default function main({{ review }}: Input) {{\n  return openReview;\n}}\n"
+    );
+    let project = project_of(&[("review", REVIEW), ("main", &main)]);
+    let diags = project.check();
+    assert!(!has(&diags["main"], Severity::Error, "clashes"), "{:?}", diags["main"]);
+    assert!(
+        diags["main"].iter().all(|d| d.severity != Severity::Error),
+        "{:?}",
+        diags["main"]
+    );
+}
