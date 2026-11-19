@@ -106,7 +106,7 @@ fn check_summary(root: &Path) -> (i32, String) {
     let out = rein(&["check", root.to_str().unwrap()]);
     let messages: Vec<String> = text(&out.stdout)
         .lines()
-        .filter(|l| !l.contains("is deprecated and becomes") && !l.contains("default imports are deprecated"))
+        .filter(|l| !l.contains("was removed in rein 0.2.0") && !l.contains("default imports were removed in rein 0.2.0"))
         .map(|l| l.split_once(": ").map_or(l, |(_, rest)| rest).to_string())
         .collect();
     (code(&out), messages.join("\n"))
@@ -171,7 +171,8 @@ fn trace(root: &Path, inputs: &[&str], preset: &[(&str, &str)]) -> (Vec<String>,
 fn migrate_removes_every_at_reference_and_check_is_unchanged() {
     let root = at_project("check");
     let (before_code, before) = check_summary(&root);
-    assert_eq!(before_code, 0, "before: {before}");
+    // Before the migration, the `@` references are removed errors.
+    assert_eq!(before_code, 1, "before: {before}");
 
     let out = migrate(&root, false);
     assert_eq!(code(&out), 0, "{}", text(&out.stderr));
@@ -220,21 +221,25 @@ fn migrated_project_runs_the_same_steps() {
         ("faq.solved", "true"),
     ];
     let billing: [(&str, &str); 0] = [];
-    for (tag, preset) in [("how-to", &how_to[..]), ("billing", &billing[..])] {
+    // The answer keys of each path, as the `@` form answered them before the removal. The `@` form is refused now,
+    // so the keys are fixed here.
+    let how_to_keys = ["main.vip", "main.category", "faq.article_found", "faq.solved"];
+    let billing_keys = ["main.vip", "main.category", "refund.refund_over_limit"];
+    for (tag, preset, keys) in [
+        ("how-to", &how_to[..], &how_to_keys[..]),
+        ("billing", &billing[..], &billing_keys[..]),
+    ] {
         let root = support_ticket_project(tag);
-        let (before, before_keys) = trace(&root, &[], preset);
-        assert!(
-            before.last().is_some_and(|line| line.contains("\"kind\":\"done\"")),
-            "{tag}: the script must reach done: {before:#?}"
-        );
-
         assert_eq!(code(&migrate(&root, false)), 0, "{tag}");
         for (path, body) in rein_files(&root) {
             assert!(!body.contains('@'), "{tag}: {} still has `@`", path.display());
         }
         let (after, after_keys) = trace(&root, &[], preset);
-        assert_eq!(after, before, "{tag}: the step trace changed");
-        assert_eq!(after_keys, before_keys, "{tag}: the answer keys changed");
+        assert!(
+            after.last().is_some_and(|line| line.contains("\"kind\":\"done\"")),
+            "{tag}: the script must reach done: {after:#?}"
+        );
+        assert_eq!(after_keys, keys, "{tag}: the answer keys changed");
         fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }
 }

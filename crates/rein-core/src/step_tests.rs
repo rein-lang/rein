@@ -402,7 +402,7 @@ fn nested_template_call_adds_no_hop_to_the_trace() {
 fn project_with_errors_is_refused() {
     let project = project(&[(
         "main.rein",
-        "/** Entry. */\nexport default function main() {\n  return @./missing;\n}\n",
+        "import { missing } from \"./missing\";\n\n/** Entry. */\nexport default function main() {\n  return missing;\n}\n",
     )]);
     let res = step(&project, &req("main", &[]));
     let StepResponse::Error {
@@ -415,9 +415,9 @@ fn project_with_errors_is_refused() {
     };
     assert_eq!(
         message,
-        "project has 1 error(s); run `rein check` and fix them"
+        "project has 2 error(s); run `rein check` and fix them"
     );
-    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics.len(), 2);
     assert_eq!(diagnostics[0].file, "main.rein");
     assert!(
         diagnostics[0].message.contains("cannot find function"),
@@ -618,9 +618,12 @@ fn inputs_are_read_from_json_and_left_out_when_empty() {
     assert!(!empty.contains("inputs"), "{empty}");
 }
 
+/// A handler that hands `pr` to the entry of the linked program `pr-handling`.
+const HANDOFF: &str = "import { main as prHandling } from \"pr-handling\";\n\n/** Handler. */\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {\n  return prHandling(pr=pr);\n}\n";
+
 #[test]
 fn step_follows_a_hand_off_into_another_program() {
-    let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    let p = crate::program_fixture::with_main(HANDOFF.to_string());
     let mut request = req("main", &[]);
     request.inputs.insert("pr".into(), "https://x/pr/1".into());
     let StepResponse::Question { key, function, trace, .. } = step(&p, &request) else { panic!("not a question") };
@@ -637,7 +640,7 @@ fn step_follows_a_hand_off_into_another_program() {
     assert_eq!(instruction, "Do merge on https://x/pr/1.");
 }
 
-const PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return @pr-handling/main(pr=pick.pr);\n}\n";
+const PICKER: &str = "import { main as prHandling } from \"pr-handling\";\n\ninterface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return prHandling(pr=pick.pr);\n}\n";
 
 #[test]
 fn struct_answer_asks_for_a_json_object_with_the_fields_of_the_struct() {
@@ -798,7 +801,7 @@ fn an_await_inside_the_callee_asks_the_inner_caller_first() {
 
 #[test]
 fn await_of_another_program_walks_it_with_its_own_keys() {
-    let main = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR merged? */\n  const merged: boolean = await @pr-handling(pr=pr);\n\n  if (merged) {\n    return `Report ${pr} as merged.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
+    let main = "import { main as prHandling } from \"pr-handling\";\n\n/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR merged? */\n  const merged: boolean = await prHandling(pr=pr);\n\n  if (merged) {\n    return `Report ${pr} as merged.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
     let p = crate::program_fixture::with_main(main.to_string());
     let pr = [("pr", "u/1")];
     let r = step(&p, &req_with("main", &[], &pr));
@@ -971,7 +974,7 @@ fn a_passed_boolean_binds_and_the_callee_does_not_ask() {
         panic!("{res:?}")
     };
     assert_eq!((instruction.as_str(), trace), ("kept", vec!["main".to_string(), "two".to_string()]));
-    let literal = project_with_main_body(&project, "return @./two(ok=false);");
+    let literal = project_with_main_body(&project, "return two(ok=false);");
     let res = step(&literal, &req("main", &[]));
     let StepResponse::Done { instruction, .. } = res else { panic!("{res:?}") };
     assert_eq!(instruction, "swapped");
@@ -980,7 +983,7 @@ fn a_passed_boolean_binds_and_the_callee_does_not_ask() {
 /// `project` with `main.rein` replaced by an entry without parameters whose body is `body`.
 fn project_with_main_body(project: &Project, body: &str) -> Project {
     let two = project.get("two").unwrap().text.clone();
-    let main = format!("/** Entry. */\nexport default function main() {{\n  {body}\n}}\n");
+    let main = format!("import {{ two }} from \"./two\";\n\n/** Entry. */\nexport default function main() {{\n  {body}\n}}\n");
     self::project(&[("main.rein", &main), ("two.rein", &two)])
 }
 
@@ -998,7 +1001,7 @@ fn a_passed_union_binds_through_an_await() {
 
 #[test]
 fn struct_fields_pass_to_another_program_through_step() {
-    let main = "interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The next PR. */\n  const pick: Pick = await request(`pick a PR`);\n  return @pr-handling/main(pr=pick.pr, draft=false, task=pick.task);\n}\n";
+    let main = "import { main as prHandling } from \"pr-handling\";\n\ninterface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Which task. */\n  task: \"review\" | \"merge\";\n}\n/** Entry. */\nexport default async function main() {\n  /** The next PR. */\n  const pick: Pick = await request(`pick a PR`);\n  return prHandling(pr=pick.pr, draft=false, task=pick.task);\n}\n";
     let p = crate::program_fixture::with_main(main.to_string());
     let res = step(&p, &req("main", &[("main.pick", r#"{"pr":"L","task":"merge"}"#)]));
     let StepResponse::Done { instruction, trace, .. } = res else { panic!("{res:?}") };
@@ -1011,14 +1014,14 @@ fn struct_fields_pass_to_another_program_through_step() {
 #[test]
 fn a_hand_off_back_passes_the_value_and_it_beats_the_stored_answer() {
     let main = "import { fix } from \"./fix\";\n\n/** Entry. */\nexport default function main(\n  /** Ready? */\n  ready: boolean,\n) {\n  if (ready) {\n    return `done`;\n  }\n  return fix;\n}\n";
-    let fix = |back: &str| format!("/** Fix. */\nexport default async function fix() {{\n  /** Ready now? */\n  const ready: boolean = await request(`Fix it.`);\n  if (ready) {{\n    return {back};\n  }}\n  return `give up`;\n}}\n");
-    let passing = project(&[("main.rein", main), ("fix.rein", &fix("@./main(ready=ready)"))]);
+    let fix = |back: &str| format!("import {{ main }} from \"./main\";\n\n/** Fix. */\nexport default async function fix() {{\n  /** Ready now? */\n  const ready: boolean = await request(`Fix it.`);\n  if (ready) {{\n    return {back};\n  }}\n  return `give up`;\n}}\n");
+    let passing = project(&[("main.rein", main), ("fix.rein", &fix("main(ready=ready)"))]);
     assert!(passing.check().values().flatten().all(|d| d.severity != crate::diagnostic::Severity::Error && !d.message.contains("missing")));
     let res = step(&passing, &req("main", &[("main.ready", "no"), ("fix.ready", "yes")]));
     let StepResponse::Done { instruction, trace, .. } = res else { panic!("{res:?}") };
     assert_eq!((instruction.as_str(), trace.len()), ("done", 3));
 
-    let bare = project(&[("main.rein", main), ("fix.rein", &fix("@./main"))]);
+    let bare = project(&[("main.rein", main), ("fix.rein", &fix("main"))]);
     let diags: Vec<_> = bare.check().into_values().flatten().filter(|d| d.severity == crate::check::MISSING_TYPED_ARG).collect();
     assert!(diags.iter().any(|d| d.message.contains("`@./main` takes 1 argument, got 0; pass `ready`")), "{diags:?}");
 }

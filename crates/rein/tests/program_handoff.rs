@@ -111,16 +111,23 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     fs::remove_dir_all(&home).unwrap();
 }
 
-/// Installs `a`, which asks one question and hands off to `b`, and `b`, which asks one question and returns
-/// `b_call`, and `c`, which is done at once. Returns the REIN_HOME.
-fn chain(tag: &str, b_call: &str) -> PathBuf {
+/// The import line and the local name of a hand-off to `target`, such as `@c/main`. The name is the program name.
+fn handoff(target: &str) -> (String, String) {
+    let (program, entry) = target.trim_start_matches('@').split_once('/').unwrap_or((target, "main"));
+    (format!("import {{ {entry} as {program} }} from \"{program}\";\n\n"), program.to_string())
+}
+
+/// Installs `a`, which asks one question and hands off to `b`, and `b`, which asks one question and hands off to
+/// `b_target`, and `c`, which is done at once. Returns the REIN_HOME.
+fn chain(tag: &str, b_target: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!("rein-handoff-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
-    let ask = |name: &str, call: &str| {
-        format!("/** {name}. */\nexport default function main(\n  /** Go on? */\n  go: boolean,\n) {{\n  if (go) {{\n    return {call};\n  }}\n  return `stop`;\n}}\n")
+    let ask = |name: &str, target: &str| {
+        let (import, call) = handoff(target);
+        format!("{import}/** {name}. */\nexport default function main(\n  /** Go on? */\n  go: boolean,\n) {{\n  if (go) {{\n    return {call};\n  }}\n  return `stop`;\n}}\n")
     };
     program(&home, "a", &ask("A", "@b/main"));
-    program(&home, "b", &ask("B", b_call));
+    program(&home, "b", &ask("B", b_target));
     program(&home, "c", "/** C. */\nexport default function main() {\n  return `done c`;\n}\n");
     home
 }
@@ -155,14 +162,18 @@ fn a_chain_of_hand_offs_with_every_program_installed_runs() {
 #[test]
 fn first_step_names_a_program_missing_behind_another_program() {
     let home = chain("transitive", "@d/main");
-    assert_first_step_names(&home, "`@b/main` hands off to `@d/main`: unknown program `d`; run `rein list` to list programs, or `rein install -g d` to install it");
+    assert_first_step_names(&home, "`@b/main` hands off to `@d`: unknown program `d`; run `rein list` to list programs, or `rein install -g d` to install it");
     fs::remove_dir_all(&home).unwrap();
 }
 
 #[test]
-fn first_step_names_a_hand_off_inside_an_installed_program() {
+fn a_hand_off_to_a_non_entry_inside_an_installed_program_is_named_by_its_check() {
+    // The named import of `other` is an error in `b`. `rein step a` does not name it, so `b` is checked alone.
     let home = chain("nofn", "@c/other");
-    assert_first_step_names(&home, "`@b/main` hands off to `@c/other`: `@c/other` reaches inside program `c`; import its entry from `c` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry");
+    let out = rein(&home, &["check", home.join("b").to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("`c` declares `main`, not `other`"), "{text}");
     fs::remove_dir_all(&home).unwrap();
 }
 

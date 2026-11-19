@@ -635,14 +635,14 @@ fn deprecation_fixes(server: &mut Server, id: i64, uri: &str, code: &str) -> Vec
 }
 
 #[test]
-fn deprecated_reference_has_quick_fixes_that_leave_no_at_reference() {
+fn removed_reference_has_quick_fixes_that_leave_no_at_reference() {
     let root = temp_project("deprecated-fix");
     let mut server = Server::start();
     initialize(&mut server);
 
     let start = uri_of(&root, "start.rein");
     server.open(&start, START);
-    let fixes = deprecation_fixes(&mut server, 2, &start, "deprecated-reference");
+    let fixes = deprecation_fixes(&mut server, 2, &start, "removed-reference");
     let titles: Vec<&str> = fixes.iter().map(|(t, _)| t.as_str()).collect();
     assert_eq!(titles, ["Convert to named import", "Convert all in this file"], "{fixes:?}");
     for (i, (_, new_text)) in fixes.iter().enumerate() {
@@ -656,7 +656,7 @@ fn deprecated_reference_has_quick_fixes_that_leave_no_at_reference() {
 }
 
 #[test]
-fn deprecated_default_import_has_a_named_import_quick_fix() {
+fn removed_default_import_has_a_named_import_quick_fix() {
     let root = temp_project("deprecated-default-fix");
     let mut server = Server::start();
     initialize(&mut server);
@@ -664,7 +664,7 @@ fn deprecated_default_import_has_a_named_import_quick_fix() {
     let uses = uri_of(&root, "uses.rein");
     let text = "import target from \"./target\";\n\n/** Uses. */\nexport default function uses() {\n  return target;\n}\n";
     server.open(&uses, text);
-    let fixes = deprecation_fixes(&mut server, 2, &uses, "deprecated-reference");
+    let fixes = deprecation_fixes(&mut server, 2, &uses, "removed-reference");
     let (title, new_text) = &fixes[0];
     assert_eq!(title, "Convert to named import", "{fixes:?}");
     assert!(new_text.contains("import { target } from \"./target\";"), "{new_text}");
@@ -939,16 +939,15 @@ fn rename_a_function_refuses_a_name_that_clashes_with_an_import_without_alias() 
 }
 
 #[test]
-fn a_deprecated_reference_is_tagged_with_its_code_and_docs_link() {
+fn a_removed_reference_has_its_code_and_docs_link() {
     let root = temp_project("deprecated-tag");
     let mut server = Server::start();
     initialize(&mut server);
 
     let start = uri_of(&root, "start.rein");
     server.open(&start, START);
-    let diags = server.wait_diagnostics(&start, |d| has_message(d, "is deprecated"));
-    let diag = diags.iter().find(|d| d["code"] == "deprecated-reference").unwrap();
-    assert_eq!(diag["tags"], json!([2]), "{diag}");
+    let diags = server.wait_diagnostics(&start, |d| has_message(d, "was removed in rein 0.2.0"));
+    let diag = diags.iter().find(|d| d["code"] == "removed-reference").unwrap();
     assert_eq!(diag["codeDescription"]["href"], "https://rein-lang.com/docs/reference/roadmap", "{diag}");
 
     server.shutdown();
@@ -956,7 +955,7 @@ fn a_deprecated_reference_is_tagged_with_its_code_and_docs_link() {
 }
 
 #[test]
-fn hover_on_a_deprecated_reference_says_when_it_is_removed() {
+fn hover_on_a_removed_reference_says_it_was_removed() {
     let root = temp_project("deprecated-hover");
     let mut server = Server::start();
     initialize(&mut server);
@@ -970,8 +969,8 @@ fn hover_on_a_deprecated_reference_says_when_it_is_removed() {
         json!({"textDocument": {"uri": start}, "position": {"line": 2, "character": 10}}),
     );
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
-    assert!(text.contains("is deprecated"), "{text}");
-    assert!(text.contains("becomes an error on 2026-12-19"), "{text}");
+    assert!(text.contains("**Removed**"), "{text}");
+    assert!(text.contains("was removed in rein 0.2.0"), "{text}");
     assert!(text.contains("import { target } from \"./target\""), "{text}");
     assert!(text.contains("Target function does X"), "{text}");
 
@@ -980,7 +979,7 @@ fn hover_on_a_deprecated_reference_says_when_it_is_removed() {
 }
 
 #[test]
-fn hover_on_a_default_import_says_when_it_is_removed() {
+fn hover_on_a_default_import_says_it_was_removed() {
     let root = temp_project("deprecated-default");
     let mut server = Server::start();
     initialize(&mut server);
@@ -996,8 +995,8 @@ fn hover_on_a_default_import_says_when_it_is_removed() {
         json!({"textDocument": {"uri": uses}, "position": {"line": 0, "character": 8}}),
     );
     let text = hover["result"]["contents"]["value"].as_str().unwrap();
-    assert!(text.contains("default imports are deprecated"), "{text}");
-    assert!(text.contains("become an error on 2026-12-19"), "{text}");
+    assert!(text.contains("default imports were removed in rein 0.2.0"), "{text}");
+    assert!(text.contains("**Removed**"), "{text}");
     assert!(text.contains("import { target } from \"./target\""), "{text}");
 
     server.shutdown();
@@ -2467,9 +2466,9 @@ fn a_project_without_program_refs_checks_and_completes_without_programs() {
     // The file references only a local function, so the checker finds nothing wrong.
     let main = uri_of(&root, "main.rein");
     server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
-    // The `@./target` reference is deprecated, so its warning is the only diagnostic.
-    let diags = server.wait_diagnostics(&main, |d| d.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("is deprecated"))));
-    assert!(diags.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("is deprecated"))), "{diags:?}");
+    // The `@./target` reference was removed, so its error is the only diagnostic.
+    let diags = server.wait_diagnostics(&main, |d| d.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("was removed in rein 0.2.0"))));
+    assert!(diags.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("was removed in rein 0.2.0"))), "{diags:?}");
 
     // After `@./` the local functions only. The installed program is not offered.
     let items = server.request(2, "textDocument/completion", at(&main, 2, 12));

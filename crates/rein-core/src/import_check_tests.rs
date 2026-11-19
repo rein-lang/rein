@@ -1,6 +1,5 @@
 use super::*;
 use crate::diagnostic::Severity;
-use crate::graph;
 use crate::program_fixture::with_main;
 use crate::step::Answers;
 use crate::step::{step, StepRequest, StepResponse, PROTOCOL_VERSION};
@@ -211,7 +210,7 @@ fn program_import_must_name_the_entry_function() {
     );
 }
 
-/// The reference form of the equivalence project: every hand-off written with `@`.
+/// The removed `@` form of the project: every hand-off written with `@`. Each one is an error now.
 fn by_reference() -> Vec<(&'static str, String)> {
     vec![
         (
@@ -275,30 +274,10 @@ fn step_of(project: &Project, pairs: &[(&str, &str)]) -> StepResponse {
     )
 }
 
-/// The messages of each file, by name: equal for two projects that differ only in how they write a hand-off.
-fn messages(project: &Project) -> BTreeMap<String, Vec<String>> {
-    project
-        .check()
-        .into_iter()
-        .map(|(n, ds)| (n, ds.into_iter().filter(|d| !d.is_removed()).map(|d| d.message).collect()))
-        .collect()
-}
-
 #[test]
-fn import_project_runs_the_same_steps_as_the_reference_project() {
-    let refs = build(by_reference());
+fn import_project_finishes_through_the_named_import() {
     let imports = build(by_import());
-    for pairs in [
-        vec![],
-        vec![("main.path", "fix")],
-        vec![("main.path", "tpl")],
-        vec![("main.path", "wait")],
-        vec![("main.path", "wait"), ("wait.merged", "yes")],
-        vec![("main.path", "wait"), ("wait.merged", "no")],
-    ] {
-        assert_eq!(step_of(&refs, &pairs), step_of(&imports, &pairs), "{pairs:?}");
-    }
-    // The equal answers are real results, not one shared error: the `fix` path finishes through `ci/fix`.
+    // The `fix` path finishes through `ci/fix`, so the named import reaches the callee.
     let done = step_of(&imports, &[("main.path", "fix")]);
     assert!(
         matches!(&done, StepResponse::Done { trace, .. } if trace.iter().any(|t| t == "ci/fix")),
@@ -307,73 +286,26 @@ fn import_project_runs_the_same_steps_as_the_reference_project() {
 }
 
 #[test]
-fn import_project_has_the_same_graph_and_keys_as_the_reference_project() {
-    let refs = build(by_reference());
+fn import_of_a_struct_reads_its_fields() {
     let imports = build(by_import());
-    for entry in ["main", "wait", "tell"] {
-        assert_eq!(
-            serde_json::to_string(&graph::flow(&refs, entry)).unwrap(),
-            serde_json::to_string(&graph::flow(&imports, entry)).unwrap(),
-            "flow {entry}"
-        );
-        assert_eq!(
-            serde_json::to_string(&graph::refs(&refs, entry)).unwrap(),
-            serde_json::to_string(&graph::refs(&imports, entry)).unwrap(),
-            "refs {entry}"
-        );
-    }
+    let fields: Vec<String> = imports
+        .get("tell")
+        .unwrap()
+        .function
+        .inputs
+        .iter()
+        .map(|i| i.name.value.clone())
+        .collect();
+    assert_eq!(fields, vec!["opening".to_string(), "next_step".to_string()]);
 }
 
 #[test]
-fn import_project_checks_like_the_reference_project() {
+fn reference_form_is_refused_after_the_removal() {
     let refs = build(by_reference());
-    let imports = build(by_import());
-    assert_eq!(messages(&refs), messages(&imports));
-    for name in ["main", "wait", "tell"] {
-        assert!(
-            imports.check()[name].iter().all(|d| d.severity != Severity::Error),
-            "{name}: {:?}",
-            imports.check()[name]
-        );
-    }
-}
-
-#[test]
-fn import_of_a_struct_reads_the_same_fields_as_the_reference() {
-    let refs = build(by_reference());
-    let imports = build(by_import());
-    let fields = |p: &Project| -> Vec<String> {
-        p.get("tell")
-            .unwrap()
-            .function
-            .inputs
-            .iter()
-            .map(|i| i.name.value.clone())
-            .collect()
-    };
-    assert_eq!(fields(&refs), fields(&imports));
-    assert_eq!(fields(&imports), vec!["opening".to_string(), "next_step".to_string()]);
-}
-
-#[test]
-fn program_import_runs_the_same_steps_as_the_program_reference() {
+    assert!(refs.check()["main"].iter().any(|d| d.is_removed()), "{:?}", refs.check()["main"]);
+    assert!(matches!(step_of(&refs, &[]), StepResponse::Error { .. }));
     let by_ref = with_main(program_main("", "return @pr-handling(pr=pr);"));
-    let by_name = with_main(program_main(
-        "import { main as handle } from \"pr-handling\";",
-        "return handle(pr=pr);",
-    ));
-    for pairs in [
-        vec![],
-        vec![("main.draft", "yes")],
-        vec![("main.draft", "no"), ("main.task", "merge")],
-    ] {
-        assert_eq!(step_of(&by_ref, &pairs), step_of(&by_name, &pairs), "{pairs:?}");
-    }
-    assert_eq!(
-        serde_json::to_string(&graph::flow(&by_ref, "main")).unwrap(),
-        serde_json::to_string(&graph::flow(&by_name, "main")).unwrap()
-    );
-    assert_eq!(messages(&by_ref), messages(&by_name));
+    assert!(by_ref.check()["main"].iter().any(|d| d.is_removed()), "{:?}", by_ref.check()["main"]);
 }
 
 /// A handler `main(pr)` with the given imports before it.
@@ -408,13 +340,14 @@ fn import_named_like_a_destructured_field_is_an_error() {
     assert!(
         has(
             &diags["main"],
-            Severity::Warning,
-            "import `review` clashes with the parameter `review`; give the import another name, like `import { review as openReview } from \"./review\"`; this becomes an error in rein 0.2.0"
+            Severity::Error,
+            "import `review` clashes with the parameter `review`, which is an error; give the import another name, like `import { review as openReview } from \"./review\"`"
         ),
         "{:?}",
         diags["main"]
     );
-    assert!(!has(&diags["main"], Severity::Error, "clashes"), "{:?}", diags["main"]);
+    let clashes = diags["main"].iter().filter(|d| d.message.contains("clashes")).count();
+    assert_eq!(clashes, 1, "{:?}", diags["main"]);
 }
 
 #[test]
@@ -423,7 +356,7 @@ fn import_named_like_a_scalar_parameter_is_an_error() {
     let project = project_of(&[("review", REVIEW), ("main", main)]);
     let diags = project.check();
     assert!(
-        has(&diags["main"], Severity::Warning, "import `review` clashes with the parameter `review`"),
+        has(&diags["main"], Severity::Error, "import `review` clashes with the parameter `review`"),
         "{:?}",
         diags["main"]
     );
@@ -435,7 +368,7 @@ fn import_named_like_a_const_is_an_error() {
     let project = project_of(&[("review", REVIEW), ("main", main)]);
     let diags = project.check();
     assert!(
-        has(&diags["main"], Severity::Warning, "import `review` clashes with the const `review`"),
+        has(&diags["main"], Severity::Error, "import `review` clashes with the const `review`"),
         "{:?}",
         diags["main"]
     );

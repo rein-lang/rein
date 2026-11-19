@@ -809,45 +809,54 @@ fn errors(project: &Project) -> Vec<String> {
     all.iter().filter(|d| d.severity == Severity::Error).map(|d| d.message.clone()).collect()
 }
 
+/// A project whose `main(pr: string)` has `body`. `import` is the text after `import ` in its first line.
+fn with_handoff(import: &str, body: &str) -> Project {
+    crate::program_fixture::with_main(format!(
+        "import {import};\n\n/** Handler. */\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {{\n  {body}\n}}\n"
+    ))
+}
+
+const PR_HANDLING: &str = "{ main as prHandling } from \"pr-handling\"";
+
 #[test]
 fn program_hand_off_with_string_args_is_clean() {
-    let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    let p = with_handoff(PR_HANDLING, "return prHandling(pr=pr);");
     assert_eq!(errors(&p), Vec::<String>::new());
-    let bare = crate::program_fixture::with_program("return @pr-handling(pr=pr);");
-    assert_eq!(errors(&bare), Vec::<String>::new());
 }
 
 #[test]
 fn unknown_program_is_an_error_naming_it() {
-    let mut p = crate::program_fixture::with_program("return @pr-handlng/main(pr=pr);");
+    let mut p = with_handoff("{ main as prHandlng } from \"pr-handlng\"", "return prHandlng(pr=pr);");
     p.link_programs(&|name| Err(format!("unknown program `{name}`; run `rein list` to list programs")));
-    assert_eq!(errors(&p), ["unknown program `pr-handlng`; run `rein list` to list programs"]);
+    let unknown = "unknown program `pr-handlng`; run `rein list` to list programs";
+    assert_eq!(errors(&p), [unknown, unknown]);
     let unlinked = Project::from_sources(
         PathBuf::from("/p"),
-        vec![(PathBuf::from("/p/main.rein"), "/** M. */\nexport default function main() {\n  return @nope;\n}\n".into())],
+        vec![(PathBuf::from("/p/main.rein"), "import { nope } from \"nope\";\n\n/** M. */\nexport default function main() {\n  return nope;\n}\n".into())],
     );
-    assert_eq!(errors(&unlinked), ["cannot find program `nope`; run `rein list` to list programs"]);
+    let nope = "cannot find program `nope`; run `rein list` to list programs";
+    assert_eq!(errors(&unlinked), [nope, nope]);
 }
 
 #[test]
 fn program_hand_off_checks_argument_names_and_function() {
-    let p = crate::program_fixture::with_program("return @pr-handling/main(url=pr);");
+    let p = with_handoff(PR_HANDLING, "return prHandling(url=pr);");
     let msgs = errors(&p);
-    assert!(msgs.iter().any(|m| m.contains("`url` is not a parameter of `@pr-handling/main`; parameters are pr")), "{msgs:?}");
-    let missing = crate::program_fixture::with_program("return @pr-handling/main;");
-    assert_eq!(errors(&missing), ["`@pr-handling/main` takes 3 arguments, got 0; pass `pr`, `draft` and `task`"]);
-    let nofn = crate::program_fixture::with_program("return @pr-handling/other(pr=pr);");
+    assert!(msgs.iter().any(|m| m.contains("`url` is not a parameter of `@pr-handling`; parameters are pr")), "{msgs:?}");
+    let missing = with_handoff(PR_HANDLING, "return prHandling;");
+    assert_eq!(errors(&missing), ["`@pr-handling` takes 3 arguments, got 0; pass `pr`, `draft` and `task`"]);
+    let nofn = with_handoff("{ other as prOther } from \"pr-handling\"", "return prOther(pr=pr);");
     assert_eq!(
         errors(&nofn),
-        ["`@pr-handling/other` reaches inside program `pr-handling`; import its entry from `pr-handling` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry"]
+        ["`pr-handling` declares `main`, not `other`; write `import { main } from \"pr-handling\"`"]
     );
 }
 
 #[test]
 fn program_references_are_not_in_project_edges() {
-    let p = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    let p = with_handoff(PR_HANDLING, "return prHandling(pr=pr);");
     assert!(p.references().is_empty());
-    assert_eq!(p.program_refs(), [("main".to_string(), "pr-handling/main".to_string())]);
+    assert_eq!(p.program_refs(), [("main".to_string(), "pr-handling".to_string())]);
 }
 
 /// A function `long` whose return line has `width` characters. The string repeats `fill`.
@@ -1244,15 +1253,15 @@ fn program_hand_off_passes_every_parameter() {
         let all = &p.check()["main"];
         all.iter().filter(|d| d.severity == Severity::Warning && !d.is_removed()).map(|d| d.message.clone()).collect()
     };
-    let partial = crate::program_fixture::with_program("return @pr-handling/main(pr=pr);");
+    let partial = with_handoff(PR_HANDLING, "return prHandling(pr=pr);");
     assert_eq!(
         warnings(&partial),
         [
-            "missing argument `draft` in call to `@pr-handling/main`; write `draft=value`",
-            "missing argument `task` in call to `@pr-handling/main`; write `task=value`",
+            "missing argument `draft` in call to `@pr-handling`; write `draft=value`",
+            "missing argument `task` in call to `@pr-handling`; write `task=value`",
         ]
     );
-    let main = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Draft? */\n  const draft: boolean = await request(`Read the PR.`);\n  /** Task? */\n  const task: \"review\" | \"merge\" = await request(`Pick a task.`);\n  return @pr-handling/main(pr=pr, draft=draft, task=task);\n}\n";
+    let main = "import { main as prHandling } from \"pr-handling\";\n\n/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Draft? */\n  const draft: boolean = await request(`Read the PR.`);\n  /** Task? */\n  const task: \"review\" | \"merge\" = await request(`Pick a task.`);\n  return prHandling(pr=pr, draft=draft, task=task);\n}\n";
     let full = crate::program_fixture::with_main(main.to_string());
     // The `@pr-handling/main` deprecation is not what this test checks.
     let rest: Vec<_> = full.check()["main"].iter().filter(|d| !d.is_removed()).cloned().collect();

@@ -489,14 +489,14 @@ fn named_arguments_bind_in_any_order() {
 #[test]
 fn call_arguments_must_be_named_and_known() {
     let cases = [
-        ("return @./greet(\"world\", \"Hello\");", 1, "missing argument `greeting` in call to `@./greet`; write `greeting=value`"),
-        ("return @./greet(greeting=`Hello`, who=`world`);", 1, "`who` is not a parameter of `@./greet`; parameters are greeting, name"),
-        ("return @./greet(greeting=`Hi`, greeting=`Hello`, name=`world`);", 1, "`greeting` is given twice in call to `@./greet`; give each name once"),
-        ("return @./greet(name=`world`, greeting=`Hello`);", 0, "0 errors"),
+        ("return greet(\"world\", \"Hello\");", 1, "missing argument `greeting` in call to `@./greet`; write `greeting=value`"),
+        ("return greet(greeting=`Hello`, who=`world`);", 1, "`who` is not a parameter of `@./greet`; parameters are greeting, name"),
+        ("return greet(greeting=`Hi`, greeting=`Hello`, name=`world`);", 1, "`greeting` is given twice in call to `@./greet`; give each name once"),
+        ("return greet(name=`world`, greeting=`Hello`);", 0, "0 errors"),
     ];
     for (i, (body, want, message)) in cases.into_iter().enumerate() {
         let root = temp_dir(&format!("args{i}"));
-        fs::write(root.join("main.rein"), format!("/** Entry. */\nexport default function main() {{\n  {body}\n}}\n")).unwrap();
+        fs::write(root.join("main.rein"), format!("import {{ greet }} from \"./greet\";\n\n/** Entry. */\nexport default function main() {{\n  {body}\n}}\n")).unwrap();
         fs::write(root.join("greet.rein"), GREET).unwrap();
 
         let out = rein(&["check", root.to_str().unwrap()]);
@@ -527,8 +527,8 @@ fn step_with_root_starts_at_the_entry_in_the_manifest() {
     fs::remove_dir_all(&root).unwrap();
 }
 
-/// A project whose entry calls `@./ci/fix`, a deprecated reference.
-fn deprecated_project(tag: &str) -> PathBuf {
+/// A project whose entry calls `@./ci/fix`, a removed reference.
+fn removed_project(tag: &str) -> PathBuf {
     let root = temp_dir(tag);
     fs::create_dir_all(root.join("ci")).unwrap();
     fs::write(root.join("ci/fix.rein"), "/** Fix CI. */\nexport default function fix() {\n  return `Fix the CI.`;\n}\n").unwrap();
@@ -537,33 +537,33 @@ fn deprecated_project(tag: &str) -> PathBuf {
 }
 
 #[test]
-fn check_summary_counts_deprecated_references_and_exits_zero() {
-    let root = deprecated_project("deprecated-summary");
+fn check_refuses_removed_references_without_a_summary() {
+    let root = removed_project("removed-summary");
     let out = rein(&["check", root.to_str().unwrap()]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(code(&out), 0, "{stderr}");
-    assert!(stderr.contains("1 deprecated imports and references; they become errors on 2026-12-19"), "{stderr}");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("warning: `@./ci/fix` is deprecated"));
-    fs::remove_dir_all(&root).unwrap();
-}
-
-#[test]
-fn check_deny_deprecated_makes_each_deprecation_an_error() {
-    let root = deprecated_project("deprecated-deny");
-    let out = rein(&["check", root.to_str().unwrap(), "--deny-deprecated"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(code(&out), 1, "{stdout}");
-    assert!(stdout.contains("error: `@./ci/fix` is deprecated"), "{stdout}");
-    assert!(!stdout.contains("warning: `@./ci/fix`"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(code(&out), 1, "{stdout}{stderr}");
+    assert!(stdout.contains("error: `@./ci/fix` was removed in rein 0.2.0"), "{stdout}");
+    assert!(!stderr.contains("deprecated imports and references"), "{stderr}");
     fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
-fn step_on_a_project_with_at_references_shows_no_deprecation() {
-    let root = deprecated_project("deprecated-step");
+fn check_deny_deprecated_is_accepted_and_changes_nothing() {
+    let root = removed_project("removed-deny");
+    let plain = rein(&["check", root.to_str().unwrap()]);
+    let denied = rein(&["check", root.to_str().unwrap(), "--deny-deprecated"]);
+    assert_eq!(code(&denied), code(&plain));
+    assert_eq!(String::from_utf8_lossy(&denied.stdout), String::from_utf8_lossy(&plain.stdout));
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn step_on_a_project_with_at_references_is_refused() {
+    let root = removed_project("removed-step");
     let out = rein(&["step", "--root", root.to_str().unwrap(), "--json"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(code(&out), 0, "{stdout}");
-    assert!(!stdout.contains("deprecated"), "{stdout}");
+    assert_eq!(code(&out), 1, "{stdout}");
+    assert!(stdout.contains("was removed in rein 0.2.0"), "{stdout}");
     fs::remove_dir_all(&root).unwrap();
 }
