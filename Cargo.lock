@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "rein"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -942,7 +942,7 @@ dependencies = [
 
 [[package]]
 name = "rein-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
