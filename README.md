@@ -6,7 +6,7 @@ Status: proof of concept. Syntax can still change.
 
 Rein is a language for agent processes. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It returns the next step as text, as a reference to another function, or as a template call. When it needs a fact, it asks the agent. When it needs a step done, it sends the agent a request and waits for the answer.
 
-Rein mimics TypeScript syntax and types, except `@` references. Imports name the declared function, such as `import { fix } from "./ci/fix";`. There is no `else`, and no `default` in a `switch`. Every function returns on every path. A function takes one parameter: a scalar or a struct, and a shared struct is a `<name>.struct.rein` file.
+Rein mimics TypeScript syntax and types. `@` references were removed in rein 0.2.0, and default imports too. Imports name the declared function, such as `import { fix } from "./ci/fix";`. There is no `else`, and no `default` in a `switch`. Every function returns on every path. A function takes one parameter: a scalar or a struct, and a shared struct is a `<name>.struct.rein` file.
 
 Rein is not TypeScript, and it does not handle logic. See [Why not an existing language](https://rein-lang.com/docs/why-not-a-programming-language).
 
@@ -16,6 +16,9 @@ Rein is not TypeScript, and it does not handle logic. See [Why not an existing l
 
 ```ts
 // merge_pr.rein
+
+import { reviewCode } from "./merge_pr/review_code";
+import { fixCi } from "./merge_pr/fix";
 
 interface Input {
   /** Does the PR change only documentation files? */
@@ -34,9 +37,9 @@ export default function mergePr({ docs_only, ci }: Input) {
 
   switch (ci) {
     case "green":
-      return @./merge_pr/review_code;
+      return reviewCode;
     case "red":
-      return @./merge_pr/fix;
+      return fixCi;
     case "pending":
       return `wait for CI, then run merge_pr again`;
   }
@@ -86,7 +89,7 @@ A call follows each reference in the same call. The `trace` lists the functions 
 
 ```sh
 git submodule update --init             # fetch examples/
-cargo install --git https://github.com/rein-lang/rein --tag v0.1.3 --locked rein  # puts `rein` on PATH
+cargo install --git https://github.com/rein-lang/rein --tag v0.2.0 --locked rein  # puts `rein` on PATH
 cd examples
 rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin
