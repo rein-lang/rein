@@ -1,11 +1,11 @@
-//! Quick fixes for a deprecated `@` reference or default import: convert that one form, or convert every form in the file.
+//! Quick fixes for a removed `@` reference or default import: convert that one form, or convert every form in the file.
 
 use std::collections::HashMap;
 
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, Diagnostic, NumberOrString, Range, TextEdit, Url, WorkspaceEdit,
 };
-use rein_core::diagnostic::{Span, DEPRECATED_CODE};
+use rein_core::diagnostic::{Span, REMOVED_CODE};
 use rein_core::migrate_imports::{migrate_one, migrate_text};
 use rein_core::project::Project;
 
@@ -20,9 +20,9 @@ pub fn deprecation_actions(
     uri: &Url,
     diags: &[Diagnostic],
 ) -> Vec<CodeActionOrCommand> {
-    let deprecated = Some(NumberOrString::String(DEPRECATED_CODE.to_string()));
+    let removed = Some(NumberOrString::String(REMOVED_CODE.to_string()));
     let mut out = Vec::new();
-    for d in diags.iter().filter(|d| d.code == deprecated) {
+    for d in diags.iter().filter(|d| d.code == removed) {
         let span = Span::new(offset(text, d.range.start), offset(text, d.range.end));
         let one = migrate_one(project, name, text, span).text;
         let all = migrate_text(project, name, text).text;

@@ -1,16 +1,13 @@
-//! The deprecation warnings of the `@` references and the default imports. Both work until
-//! [`IMPORT_REMOVAL_DATE`], then they are errors. A reference that is an import use is not a `@` reference, so it
-//! gets no warning here: the lexer finds only the `@` tokens.
+//! The errors for the removed forms: the `@` references and the default imports. Rein 0.2.0 removed both. A
+//! reference that is an import use is not a `@` reference, so it gets no error here: the lexer finds only the `@`
+//! tokens. The lexer still reads each `@` reference, so the error points at it and `rein migrate imports` can read it.
 
 use crate::ast::{Binding, Import};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{self, Tok};
 use crate::project::{Project, SourceFile};
 
-/// The date when `@` references and default imports become errors. The one place that holds the date.
-pub const IMPORT_REMOVAL_DATE: &str = "2026-12-19";
-
-/// The deprecation warnings of file `from`: one for each `@` reference and one for each default import.
+/// The errors of file `from`: one for each `@` reference and one for each default import.
 pub fn check(project: &Project, from: &str, sf: &SourceFile) -> Vec<Diagnostic> {
     let Ok(tokens) = lexer::lex(&sf.text) else {
         return Vec::new();
@@ -22,16 +19,16 @@ pub fn check(project: &Project, from: &str, sf: &SourceFile) -> Vec<Diagnostic> 
         };
         // A struct type follows `:`, such as `({ a }: @./message)`. Any other reference is a function.
         let struct_type = i > 0 && tokens[i - 1].0 == Tok::Colon;
-        out.push(reference_warning(project, from, path, *span, struct_type));
+        out.push(reference_error(project, from, path, *span, struct_type));
     }
     for import in sf.function.imports.iter().filter(|i| i.default) {
-        out.push(default_warning(project, from, import));
+        out.push(default_error(project, from, import));
     }
     out
 }
 
-/// The warning for one `@` reference. It suggests the named import that replaces it.
-fn reference_warning(project: &Project, from: &str, path: &str, span: Span, struct_type: bool) -> Diagnostic {
+/// The error for one `@` reference. It suggests the named import that replaces it.
+fn reference_error(project: &Project, from: &str, path: &str, span: Span, struct_type: bool) -> Diagnostic {
     let is_struct = struct_type && !is_program(path);
     let import_path = if is_struct {
         format!("{path}.struct")
@@ -40,20 +37,19 @@ fn reference_warning(project: &Project, from: &str, path: &str, span: Span, stru
     };
     let name = declared_name(project, from, path, is_struct).unwrap_or_else(|| fallback_name(path, is_struct));
     let message = format!(
-        "`@{path}` is deprecated and becomes an error on {IMPORT_REMOVAL_DATE}; write `import {{ {name} }} from \"{import_path}\";` and use `{name}`. Run `rein migrate imports` to change every file"
+        "`@{path}` was removed in rein 0.2.0; write `import {{ {name} }} from \"{import_path}\";` and use `{name}`. Run `rein migrate imports` to change every file"
     );
-    Diagnostic::deprecated(span, message)
+    Diagnostic::removed(span, message)
 }
 
-/// The warning for one default import. It suggests the named import with the name the target declares.
-fn default_warning(project: &Project, from: &str, import: &Import) -> Diagnostic {
+/// The error for one default import. It suggests the named import with the name the target declares.
+fn default_error(project: &Project, from: &str, import: &Import) -> Diagnostic {
     let reference = import.reference();
     let name = declared_name(project, from, reference, import.is_struct()).unwrap_or_else(|| import.name.value.clone());
     let path = &import.path.value;
-    let message = format!(
-        "default imports are deprecated and become an error on {IMPORT_REMOVAL_DATE}; write `import {{ {name} }} from \"{path}\"`"
-    );
-    Diagnostic::deprecated(import.span, message)
+    let message =
+        format!("default imports were removed in rein 0.2.0; write `import {{ {name} }} from \"{path}\"`");
+    Diagnostic::removed(import.span, message)
 }
 
 /// The name that the target of `reference` declares, or `None` when the target does not resolve.

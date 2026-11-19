@@ -46,7 +46,7 @@ enum Command {
         /// Project directory or .rein file.
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Make each deprecated `@` reference and default import an error.
+        /// Does nothing. Since rein 0.2.0 each `@` reference and default import is an error. Kept so CI configs still run.
         #[arg(long)]
         deny_deprecated: bool,
     },
@@ -203,7 +203,7 @@ enum Command {
 
 fn main() -> ExitCode {
     let code = match Cli::parse().command {
-        Command::Check { path, deny_deprecated } => cli::check(&path, deny_deprecated),
+        Command::Check { path, deny_deprecated: _ } => cli::check(&path),
         Command::Run { flow, root, entry, json } => live_run::run(flow, root, entry, json),
         Command::Eval { function, root, set, json } => cli::eval(&function, root, &set, json),
         Command::Step { program, entry, root, flow, answer, input, stdin, json } => {
