@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{Import, STRUCT_SUFFIX};
+use crate::deprecation::program_or_path;
 use crate::diagnostic::{Diagnostic, Span};
 use crate::imports;
 use crate::lexer::{lex, Tok};
@@ -90,11 +91,11 @@ fn migrate_selected(project: &Project, from: &str, src: &str, only: Option<Span>
         let local = if old == target.declared || !taken.contains(&target.declared) {
             target.declared.clone()
         } else {
-            unique(&local_base(&import.path.value), &taken)
+            unique(&local_base(program_or_path(&import.path.value)), &taken)
         };
         taken.insert(local.clone());
         chosen.insert(target.key, local.clone());
-        edits.push((*stmt, import_line(&target.declared, &local, &import.path.value)));
+        edits.push((*stmt, import_line(&target.declared, &local, program_or_path(&import.path.value))));
         if local != old {
             renames.push((old, local));
         }
@@ -125,14 +126,16 @@ fn migrate_selected(project: &Project, from: &str, src: &str, only: Option<Span>
         let local = match chosen.get(&target.key) {
             Some(local) => local.clone(),
             None => {
+                // An import of a program names the program, so `pkg/<entry>` writes `pkg`.
+                let written = program_or_path(&import_path);
                 let local = if taken.contains(&target.declared) {
-                    unique(&local_base(&import_path), &taken)
+                    unique(&local_base(written), &taken)
                 } else {
                     target.declared.clone()
                 };
                 taken.insert(local.clone());
                 chosen.insert(target.key, local.clone());
-                new_lines.push(import_line(&target.declared, &local, &import_path));
+                new_lines.push(import_line(&target.declared, &local, written));
                 local
             }
         };

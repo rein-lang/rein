@@ -143,6 +143,26 @@ fn program_reference_suggests_the_camel_cased_program_name() {
 }
 
 #[test]
+fn program_entry_reference_suggests_the_bare_program_import() {
+    let project = project_of(&[("main", &main_with("", "return @pr-handling/main;"))]);
+    let msgs = deprecations(&project);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].contains("write `import { prHandling } from \"pr-handling\";` and use `prHandling`"),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn linked_program_entry_reference_suggests_the_bare_program_import() {
+    let project = crate::program_fixture::with_main(main_with("", "return @pr-handling/main;"));
+    let msgs = deprecations(&project);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].contains("from \"pr-handling\""), "{msgs:?}");
+    assert!(!msgs[0].contains("from \"pr-handling/main\""), "{msgs:?}");
+}
+
+#[test]
 fn named_import_use_is_not_a_deprecation() {
     let project = project_of(&[
         ("ci/fix", FIX),

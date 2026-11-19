@@ -104,12 +104,12 @@ fn fallback_name(path: &str, is_struct: bool) -> String {
 }
 
 /// A bare path, such as `pr-handling`, names an installed program. A `./` or `../` path names a file.
-fn is_program(path: &str) -> bool {
+pub(crate) fn is_program(path: &str) -> bool {
     !(path.starts_with("./") || path.starts_with("../"))
 }
 
 /// The import path of a program reference: the program name, without the function after `/`.
-fn program_or_path(path: &str) -> &str {
+pub(crate) fn program_or_path(path: &str) -> &str {
     if is_program(path) {
         path.split('/').next().unwrap_or(path)
     } else {

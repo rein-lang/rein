@@ -167,3 +167,26 @@ fn a_bad_import_line_leaves_the_file_alone() {
     assert_eq!(out.text, main);
     assert_eq!(out.warnings.len(), 1);
 }
+
+#[test]
+fn a_program_entry_reference_imports_from_the_bare_program_name() {
+    let main = "export default function main(\n  /** The PR link. */\n  pr: string,\n) {\n  return @pr-handling/main(pr=pr);\n}\n";
+    let out = migrate_text(&with_main(main.to_string()), "main", main);
+    assert_eq!(
+        out.text,
+        "import { main as prHandling } from \"pr-handling\";\n\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {\n  return prHandling(pr=pr);\n}\n"
+    );
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
+#[test]
+fn a_migrated_program_entry_reference_passes_the_import_check() {
+    let main = "/** Handle a PR. */\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {\n  return @pr-handling/main(pr=pr);\n}\n";
+    let out = migrate_text(&with_main(main.to_string()), "main", main);
+    let checked = with_main(out.text).check();
+    let errors: Vec<_> = checked["main"]
+        .iter()
+        .filter(|d| d.severity == crate::diagnostic::Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+}
