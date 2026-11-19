@@ -89,15 +89,15 @@ fn pnpm_package(base: &Path, store: &str, name: &str, link: &str, manifest: &str
 /// Packages used by the discovery tests, under `base/npm`.
 fn lay_out_packages(base: &Path) {
     pnpm_package(base, "plain-tool@1.0.0", "plain-tool", "plain-tool",
-        r#"{"name": "plain-tool", "version": "1.0.0", "description": "A plain tool.", "engines": {"rein": "^0.1.0"}}"#,
+        r#"{"name": "plain-tool", "version": "1.0.0", "description": "A plain tool.", "engines": {"rein": "^0.2.0"}}"#,
         Some(ENTRY_WITH_QUESTION));
     pnpm_package(base, "@scope+tool@2.0.0", "@scope/tool", "@scope/tool",
         r#"{"name": "@scope/tool", "version": "2.0.0", "description": "A scoped tool."}"#, Some(ENTRY));
     pnpm_package(base, "pr@1.0.0", "pr", "pr-v1",
-        r#"{"name": "pr", "version": "1.0.0", "description": "PR handling, version one.", "engines": {"rein": "^0.1.0"}}"#,
+        r#"{"name": "pr", "version": "1.0.0", "description": "PR handling, version one.", "engines": {"rein": "^0.2.0"}}"#,
         Some(ENTRY));
     pnpm_package(base, "pr@2.0.0", "pr", "pr-v2",
-        r#"{"name": "pr", "version": "2.0.0", "description": "PR handling, version two.", "engines": {"rein": "^0.2.0"}}"#,
+        r#"{"name": "pr", "version": "2.0.0", "description": "PR handling, version two.", "engines": {"rein": "^0.3.0"}}"#,
         Some(ENTRY));
     pnpm_package(base, "lodash-like@4.0.0", "lodash-like", "lodash-like", r#"{"name": "lodash-like", "version": "4.0.0"}"#, None);
 }
@@ -132,7 +132,7 @@ fn list_finds_user_packages_by_their_link_names() {
     assert_eq!(by("pr-v1")["description"], "PR handling, version one.");
     assert!(by("pr-v1").get("warning").is_none());
     assert_eq!(by("pr-v2")["description"], "PR handling, version two.");
-    assert_eq!(by("pr-v2")["warning"], format!("needs rein ^0.2.0; this is rein {}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(by("pr-v2")["warning"], format!("needs rein ^0.3.0; this is rein {}", env!("CARGO_PKG_VERSION")));
 
     // A package runs by its link name, and `rein show` prints its source.
     let step = sb.rein(&sb.work(), &["step", "plain-tool", "--json"]).output().unwrap();
