@@ -345,7 +345,8 @@ fn unused_string_input_is_a_warning() {
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
     assert!(stdout(&out).contains("warning: unused parameter `pr`"), "{}", stdout(&out));
-    assert!(stderr(&out).contains("0 errors, 1 warnings"), "{}", stderr(&out));
+    // The `@./done` reference adds a deprecation warning, so the count is 2.
+    assert!(stderr(&out).contains("0 errors, 2 warnings"), "{}", stderr(&out));
 }
 
 #[test]
@@ -411,7 +412,8 @@ fn string_input_is_a_template_argument_and_the_check_is_clean() {
     ]);
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
-    assert!(stderr(&out).contains("0 errors, 0 warnings"), "{}", stderr(&out));
+    // The `@./tpl` reference is deprecated, and it is the only warning.
+    assert!(stderr(&out).contains("0 errors, 1 warnings"), "{}", stderr(&out));
     let run = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
     assert_eq!(code(&run), 0, "{}{}", stdout(&run), stderr(&run));
     assert_eq!(stdout(&run).trim(), format!("{LINK} then b"));

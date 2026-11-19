@@ -148,7 +148,7 @@ fn as_with_the_same_name_is_a_warning() {
 }
 
 #[test]
-fn default_import_with_the_declared_name_is_accepted_without_a_warning() {
+fn default_import_with_the_declared_name_is_accepted_with_only_a_deprecation() {
     let project = project_of(&[
         ("ci/fix", FIX),
         ("main", &main_with("import fix from \"./ci/fix\";", "return fix;")),
@@ -159,8 +159,11 @@ fn default_import_with_the_declared_name_is_accepted_without_a_warning() {
         "{:?}",
         diags["main"]
     );
+    // The default import still works until the removal date, so its only diagnostic is the deprecation.
+    let deprecations: Vec<_> = diags["main"].iter().filter(|d| d.is_deprecated()).collect();
+    assert_eq!(deprecations.len(), 1, "{:?}", diags["main"]);
     assert!(
-        !has(&diags["main"], Severity::Warning, "deprecated"),
+        !has(&diags["main"], Severity::Warning, "is imported but not used"),
         "{:?}",
         diags["main"]
     );

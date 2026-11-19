@@ -6,7 +6,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rein_core::ast::{Function, Input, InputType};
-use rein_core::diagnostic::{line_col, Severity};
+use rein_core::deprecation::IMPORT_REMOVAL_DATE;
+use rein_core::diagnostic::{line_col, Diagnostic, Severity};
 use rein_core::eval::{self, Outcome};
 use rein_core::project::{Project, ENTRY};
 
@@ -26,9 +27,11 @@ struct Row {
     start: usize,
     severity: Severity,
     line: String,
+    /// A deprecation warning, see `Diagnostic::is_deprecated`.
+    deprecated: bool,
 }
 
-pub fn check(given: &Path) -> u8 {
+pub fn check(given: &Path, deny_deprecated: bool) -> u8 {
     if !given.exists() {
         return fail(false, &format!("no such file or directory: {}", given.display()));
     }
@@ -41,13 +44,17 @@ pub fn check(given: &Path) -> u8 {
         Ok(p) => p,
         Err(e) => return fail(false, &format!("cannot read {}: {e}", root.display())),
     };
-    let rows = rows(&project, &scope);
+    let rows = rows(&project, &scope, deny_deprecated);
     let errors = rows.iter().filter(|r| r.severity == Severity::Error).count();
     let warnings = rows.len() - errors;
+    let deprecated = rows.iter().filter(|r| r.deprecated).count();
     for r in &rows {
         println!("{}", r.line);
     }
     eprintln!("{errors} errors, {warnings} warnings");
+    if deprecated > 0 {
+        eprintln!("{deprecated} deprecated imports and references; they become errors on {IMPORT_REMOVAL_DATE}");
+    }
     if errors > 0 {
         FAILED
     } else {
@@ -63,7 +70,7 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
     let Some(sf) = project.get(function) else {
         return fail(json, &unknown_function(&project, function));
     };
-    let errors: Vec<Row> = rows(&project, &sf.path)
+    let errors: Vec<Row> = rows(&project, &sf.path, false)
         .into_iter()
         .filter(|r| r.severity == Severity::Error)
         .collect();
@@ -331,7 +338,8 @@ fn load(root: Option<PathBuf>) -> Result<Project, String> {
 
 /// Diagnostics under `scope`: one file, one directory, or the whole project. Sorted by file then position.
 /// Project-level diagnostics (such as a missing `main.rein`) show only when `scope` is the project root.
-fn rows(project: &Project, scope: &Path) -> Vec<Row> {
+/// With `deny_deprecated`, each deprecation is an error.
+fn rows(project: &Project, scope: &Path, deny_deprecated: bool) -> Vec<Row> {
     let mut rows = Vec::new();
     for (name, diags) in project.check() {
         let Some(sf) = project.get(&name) else { continue };
@@ -341,7 +349,7 @@ fn rows(project: &Project, scope: &Path) -> Vec<Row> {
         let file = display_path(&sf.path);
         for d in diags {
             let (line, col) = line_col(&sf.text, d.span.start);
-            rows.push(row(&file, line, col, &d));
+            rows.push(row(&file, line, col, &deny(d, deny_deprecated)));
         }
     }
     if scope == project.root {
@@ -355,8 +363,17 @@ fn rows(project: &Project, scope: &Path) -> Vec<Row> {
     rows
 }
 
-/// One printed row. `line` and `col` are 0-based.
-fn row(file: &str, line: usize, col: usize, d: &rein_core::diagnostic::Diagnostic) -> Row {
+/// The diagnostic with a deprecation made an error, when `deny` is set. Other diagnostics stay as they are.
+fn deny(d: Diagnostic, deny: bool) -> Diagnostic {
+    if deny && d.is_deprecated() {
+        Diagnostic { severity: Severity::Error, ..d }
+    } else {
+        d
+    }
+}
+
+/// One printed row. `line` and `col` are 0-based. `deprecated` is read before a deny changes the severity.
+fn row(file: &str, line: usize, col: usize, d: &Diagnostic) -> Row {
     let label = match d.severity {
         Severity::Error => "error",
         Severity::Warning => "warning",
@@ -366,6 +383,7 @@ fn row(file: &str, line: usize, col: usize, d: &rein_core::diagnostic::Diagnosti
         start: d.span.start,
         severity: d.severity,
         file: file.to_string(),
+        deprecated: d.is_deprecated(),
     }
 }
 

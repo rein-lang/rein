@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod check;
 pub mod dependencies;
+pub mod deprecation;
 pub mod doc;
 pub mod diagnostic;
 pub mod eval;
