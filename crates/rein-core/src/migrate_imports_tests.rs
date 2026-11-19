@@ -190,3 +190,59 @@ fn a_migrated_program_entry_reference_passes_the_import_check() {
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+const REVIEW: &str = "/** Review. */\nexport default function review() {\n  return `ok`;\n}\n";
+const INPUT: &str = "interface Input {\n  /** Review? */\n  review: string;\n}\n";
+
+#[test]
+fn a_reference_named_like_a_destructured_field_gets_an_alias() {
+    let main = format!("{INPUT}\n/** Go. */\nexport default function main({{ review }}: Input) {{\n  return @./review;\n}}\n");
+    let out = migrate(&main, &[("review", REVIEW)]);
+    assert_eq!(
+        out.text,
+        format!("import {{ review as review2 }} from \"./review\";\n\n{INPUT}\n/** Go. */\nexport default function main({{ review }}: Input) {{\n  return review2;\n}}\n")
+    );
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
+#[test]
+fn a_reference_named_like_a_scalar_parameter_gets_an_alias() {
+    let main = "/** Go. */\nexport default function main(/** Review? */ review: string) {\n  return @./review;\n}\n";
+    let out = migrate(main, &[("review", REVIEW)]);
+    assert_eq!(
+        out.text,
+        "import { review as review2 } from \"./review\";\n\n/** Go. */\nexport default function main(/** Review? */ review: string) {\n  return review2;\n}\n"
+    );
+}
+
+#[test]
+fn a_reference_named_like_a_const_gets_an_alias() {
+    let main = "/** Go. */\nexport default async function main() {\n  /** Review? */\n  const review: boolean = await request(\"Review it.\");\n  return @./review;\n}\n";
+    let out = migrate(main, &[("review", REVIEW)]);
+    assert_eq!(
+        out.text,
+        "import { review as review2 } from \"./review\";\n\n/** Go. */\nexport default async function main() {\n  /** Review? */\n  const review: boolean = await request(\"Review it.\");\n  return review2;\n}\n"
+    );
+}
+
+#[test]
+fn a_default_import_named_like_a_field_stays_with_a_warning() {
+    let main = format!("import review from \"./review\";\n\n{INPUT}\n/** Go. */\nexport default function main({{ review }}: Input) {{\n  return review;\n}}\n");
+    let out = migrate(&main, &[("review", REVIEW)]);
+    assert_eq!(out.text, main);
+    assert_eq!(out.warnings.len(), 1);
+    assert!(out.warnings[0].message.contains("`./review` is not migrated"), "{:?}", out.warnings);
+}
+
+#[test]
+fn a_migrated_destructured_field_clash_passes_the_import_check() {
+    let main = format!("{INPUT}\n/** Go. */\nexport default function main({{ review }}: Input) {{\n  return @./review;\n}}\n");
+    let others = [("review", REVIEW)];
+    let out = migrate(&main, &others);
+    let checked = project(&out.text, &others).check();
+    let errors: Vec<_> = checked["main"]
+        .iter()
+        .filter(|d| d.severity == crate::diagnostic::Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+}
