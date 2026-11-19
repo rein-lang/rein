@@ -134,7 +134,7 @@ fn bare_at_name_is_a_program_reference() {
 fn bad_program_reference_is_an_error() {
     for src in ["@", "@-x", "@x/", "@x//y", "@x/a-b"] {
         let err = lex(src).unwrap_err();
-        assert!(err.message.contains("@program/function"), "{src}: {}", err.message);
+        assert!(err.message.contains("an import path is"), "{src}: {}", err.message);
     }
 }
 

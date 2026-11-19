@@ -9,6 +9,7 @@ use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Inpu
 use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
+use crate::imports::missing_struct;
 use crate::parser::parse;
 
 /// The function every project starts from. It is `main.rein` at the project root.
@@ -204,7 +205,11 @@ impl Project {
             let answers = f.answer_struct_refs().into_iter().map(|(a, r)| (Some(a), r));
             for (answer, r) in param.into_iter().chain(answers) {
                 if let StructRef::Ref(r) = &r {
-                    found.push((name.clone(), answer, self.struct_for(name, &r.value).map(|(_, s)| s.clone())));
+                    // A named import of the struct names the import form in its error. A `@` reference keeps its text.
+                    let named = f.imports.iter().find(|i| i.is_struct() && i.reference() == r.value);
+                    let bound = self.struct_for(name, &r.value).map(|(_, s)| s.clone());
+                    let bound = bound.map_err(|reason| named.map_or(reason, missing_struct));
+                    found.push((name.clone(), answer, bound));
                 }
             }
         }
@@ -422,7 +427,7 @@ impl Project {
         };
         if let Some(path) = path.filter(|p| *p != linked.entry) {
             return Err(format!(
-                "`@{program}/{path}` reaches inside program `{program}`; call its entry `@{program}` instead. \
+                "`@{program}/{path}` reaches inside program `{program}`; import its entry from `{program}` instead. \
                  If `{path}` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry"
             ));
         }
@@ -667,7 +672,7 @@ impl Placement {
         if clash.is_empty() {
             return format!(
                 "`{name}` is only called by `{caller}`; move it to `{home}.rein` so the folders show the process. \
-                 The move changes its answer keys and breaks `@<program>/{name}` references from other programs"
+                 The move changes its answer keys"
             );
         }
         let others: Vec<String> = clash.iter().map(|c| format!("`{c}`")).collect();
@@ -694,7 +699,7 @@ fn callers_of(adj: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String, BTre
 /// `../`, has no extension, is relative to the folder of `from`, and stays inside the root.
 pub fn join(from: &str, source: &str) -> Result<String, String> {
     if !(source.starts_with("./") || source.starts_with("../")) {
-        return Err(format!("references are relative: write `@./{source}`"));
+        return Err(format!("a file path is relative: write `import {{ name }} from \"./{source}\"`"));
     }
     if source.rsplit('/').next().is_some_and(|last| last.contains('.') && last != "..") {
         return Err("references have no extension".into());

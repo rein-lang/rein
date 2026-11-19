@@ -226,7 +226,7 @@ pub fn check_length(f: &Function, name: &str, text: &str, max: u64) -> Vec<Diagn
     vec![Diagnostic::error(
         f.header,
         format!(
-            "function `{name}` has {lines} lines; the limit is {max}. Move part of it into its own function and call it with `@./name`"
+            "function `{name}` has {lines} lines; the limit is {max}. Move part of it into its own function and import it by name"
         ),
     )]
 }
@@ -689,7 +689,7 @@ impl<'a> Checker<'a> {
             Err(msg) => self.error(reference.span, msg),
             Ok(Kind::Template { .. }) => self.error(
                 reference.span,
-                format!("`@{path}` is a template; call it with arguments, like `@{path}(...)`"),
+                format!("`@{path}` is a template; import it, then call it with arguments, like `{}(...)`", path.rsplit('/').next().unwrap_or(path)),
             ),
             Ok(Kind::Function { params }) if !params.is_empty() => {
                 let strings = params.iter().any(|(_, t)| *t == InputType::Text);

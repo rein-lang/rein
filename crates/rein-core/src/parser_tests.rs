@@ -155,7 +155,7 @@ fn return_needs_a_value() {
     let msg = one_error("/** d */\nexport default function f() {\n  return;\n}");
     assert_eq!(
         msg,
-        "`return` needs a value: a string, a template, or `@./function`"
+        "`return` needs a value: a string, a template, or an imported function"
     );
 }
 
@@ -181,7 +181,7 @@ fn default_import_parses_and_its_name_is_a_reference() {
 fn bare_name_is_not_a_return_value() {
     let msg = one_error("/** d */\nexport default function f() { return nope; }");
     assert!(
-        msg.contains("expected a string, a template literal, or a reference"),
+        msg.contains("expected a string, a template literal, or an imported function"),
         "{msg}"
     );
 }
@@ -416,7 +416,7 @@ fn request_answer_needs_a_doc_comment() {
 #[test]
 fn only_request_can_be_awaited() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q */\n  const x: boolean = await fetch(\"a\");\n  return \"y\"\n}");
-    assert!(msg.contains("only `request` or a reference like `@program` can be awaited"), "{msg}");
+    assert!(msg.contains("only `request` or an imported program can be awaited"), "{msg}");
 }
 
 #[test]
@@ -540,12 +540,12 @@ export default async function f() {
 fn await_outside_a_const_answer_gives_the_fix() {
     for body in ["  await @./x;\n  return `y`", "  return await @./x;"] {
         let msg = one_error(&format!("/** d */\nexport default async function f() {{\n{body}\n}}"));
-        assert!(msg.contains("const name: Type = await @program(...)"), "{body}: {msg}");
+        assert!(msg.contains("const name: Type = await program(...)"), "{body}: {msg}");
     }
 }
 
 #[test]
 fn a_doc_comment_before_a_bare_await_gives_the_await_hint() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q? */\n  await @./x;\n  return `y`\n}");
-    assert!(msg.contains("const name: Type = await @program(...)"), "{msg}");
+    assert!(msg.contains("const name: Type = await program(...)"), "{msg}");
 }

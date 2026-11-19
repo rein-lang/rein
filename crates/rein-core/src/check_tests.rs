@@ -637,7 +637,7 @@ fn template_returned_without_a_call_is_an_error() {
 export default function f() { return @./tpl }"#,
         ),
         Severity::Error,
-        "`@./tpl` is a template; call it with arguments, like `@./tpl(...)`",
+        "`@./tpl` is a template; import it, then call it with arguments, like `tpl(...)`",
     );
 }
 

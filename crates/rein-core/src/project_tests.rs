@@ -517,7 +517,7 @@ fn import_path_errors() {
     );
     assert_eq!(
         project.resolve("ci/fix", "top").unwrap_err(),
-        "references are relative: write `@./top`"
+        "a file path is relative: write `import { name } from \"./top\"`"
     );
     assert_eq!(
         project.resolve("ci/fix", "./top.rein").unwrap_err(),
@@ -705,7 +705,7 @@ fn forty_one_lines_fails_on_the_header() {
     assert_eq!(d.severity, Severity::Error);
     assert_eq!(
         d.message,
-        "function `long` has 41 lines; the limit is 40. Move part of it into its own function and call it with `@./name`"
+        "function `long` has 41 lines; the limit is 40. Move part of it into its own function and import it by name"
     );
     assert_eq!(
         &text[d.span.start..d.span.end],
@@ -839,7 +839,7 @@ fn program_hand_off_checks_argument_names_and_function() {
     let nofn = crate::program_fixture::with_program("return @pr-handling/other(pr=pr);");
     assert_eq!(
         errors(&nofn),
-        ["`@pr-handling/other` reaches inside program `pr-handling`; call its entry `@pr-handling` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry"]
+        ["`@pr-handling/other` reaches inside program `pr-handling`; import its entry from `pr-handling` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry"]
     );
 }
 
@@ -1011,14 +1011,36 @@ fn a_function_called_only_by_the_entry_belongs_at_the_root() {
 }
 
 #[test]
-fn the_nesting_warning_says_a_move_changes_keys_and_program_references() {
+fn the_nesting_warning_says_a_move_changes_keys_and_not_program_references() {
     let project = project_of(&[
         ("main", "/** m */\nexport default function main() { return @./a }\n"),
         ("a", "/** a */\nexport default function a() { return @./steps/leaf }\n"),
         ("steps/leaf", "/** l */\nexport default function leaf() { return `ok` }\n"),
     ]);
-    let tail = "The move changes its answer keys and breaks `@<program>/steps/leaf` references from other programs";
-    assert!(has(&project.check()["steps/leaf"], Severity::Warning, tail), "{:?}", project.check()["steps/leaf"]);
+    let tail = "The move changes its answer keys";
+    let warning = &project.check()["steps/leaf"];
+    assert!(has(warning, Severity::Warning, tail), "{warning:?}");
+    assert!(!has(warning, Severity::Warning, "breaks"), "{warning:?}");
+}
+
+#[test]
+fn a_named_import_of_a_missing_struct_names_the_import_form() {
+    let project = project_of(&[(
+        "f",
+        "import { Message } from \"./message.struct\";\n/** f */\nexport default function f({ x }: Message) { return `x` }\n",
+    )]);
+    let text = "cannot find struct `./message.struct`; add a `message.struct.rein` file that holds `export default interface Message`";
+    assert!(has(&project.check()["f"], Severity::Error, text), "{:?}", project.check()["f"]);
+}
+
+#[test]
+fn a_named_import_of_a_missing_struct_gives_the_import_error_on_the_path() {
+    let project = project_of(&[(
+        "f",
+        "import { Message } from \"./message.struct\";\n/** f */\nexport default function f() { return `x` }\n",
+    )]);
+    let text = "cannot find struct `./message.struct`; add a `message.struct.rein` file that holds `export default interface Message`";
+    assert!(has(&project.check()["f"], Severity::Error, text), "{:?}", project.check()["f"]);
 }
 
 #[test]
