@@ -337,7 +337,7 @@ fn all_string_template_run_by_itself_is_still_an_error() {
 fn unused_string_input_is_a_warning() {
     let flow = Flow::new(&[(
         "main.rein",
-        "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return @./done;\n}\n",
+        "import { done } from \"./done\";\n\n/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return done;\n}\n",
     ), (
         "done.rein",
         "/** Done. */\nexport default function done() {\n  return `done`;\n}\n",
@@ -345,8 +345,7 @@ fn unused_string_input_is_a_warning() {
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
     assert!(stdout(&out).contains("warning: unused parameter `pr`"), "{}", stdout(&out));
-    // The `@./done` reference adds a deprecation warning, so the count is 2.
-    assert!(stderr(&out).contains("0 errors, 2 warnings"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("0 errors, 1 warnings"), "{}", stderr(&out));
 }
 
 #[test]
@@ -407,13 +406,13 @@ fn argument_that_is_not_a_string_input_is_a_check_error() {
 #[test]
 fn string_input_is_a_template_argument_and_the_check_is_clean() {
     let flow = Flow::new(&[
-        ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return @./tpl(a=pr, b=`b`);\n  }\n\n  return `n`;\n}\n"),
+        ("main.rein", "import { tpl } from \"./tpl\";\n\ninterface Input {\n  /** The link. */\n  pr: string;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ pr, ok }: Input) {\n  if (ok) {\n    return tpl(a=pr, b=`b`);\n  }\n\n  return `n`;\n}\n"),
         ("tpl.rein", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** Template. */\nexport default function tpl({ a, b }: Input) {\n  return `${a} then ${b}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
-    // The `@./tpl` reference is deprecated, and it is the only warning.
-    assert!(stderr(&out).contains("0 errors, 1 warnings"), "{}", stderr(&out));
+    // A named import adds no warning, so the check is clean.
+    assert!(stderr(&out).contains("0 errors, 0 warnings"), "{}", stderr(&out));
     let run = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
     assert_eq!(code(&run), 0, "{}{}", stdout(&run), stderr(&run));
     assert_eq!(stdout(&run).trim(), format!("{LINK} then b"));
