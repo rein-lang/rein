@@ -1,5 +1,5 @@
-//! Runs the built `rein migrate imports` on copies of the examples and on an inline project with `@` references. The
-//! migrated project must check the same as before, run the same steps, and a second run must change nothing.
+//! Runs the built `rein migrate imports` on inline projects with `@` references. The migrated project must check the same
+//! as before, run the same steps with the same answers, and a second run must change nothing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,6 +7,10 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+
+#[path = "fixtures/support_ticket.rs"]
+mod support_ticket;
+use support_ticket::SUPPORT_TICKET;
 
 fn examples_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -39,24 +43,14 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
-fn copy_tree(src: &Path, dst: &Path) {
-    fs::create_dir_all(dst).unwrap();
-    for entry in fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let (from, to) = (entry.path(), dst.join(entry.file_name()));
-        if from.is_dir() {
-            copy_tree(&from, &to);
-        } else {
-            fs::copy(&from, &to).unwrap();
-        }
+/// A fresh copy of the support-ticket program with its `@` references, in a temp folder that the test removes.
+fn support_ticket_project(tag: &str) -> PathBuf {
+    let root = temp_dir(tag).join("support-ticket");
+    for (file, text) in SUPPORT_TICKET {
+        let path = root.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
     }
-}
-
-/// A fresh copy of the example `name`, in a temp folder that the test removes.
-fn copy_example(name: &str, tag: &str) -> PathBuf {
-    let dir = temp_dir(tag);
-    let root = dir.join(name);
-    copy_tree(&examples_root().join(name), &root);
     root
 }
 
@@ -127,10 +121,11 @@ fn scripted(options: &Value, kind: Option<&str>) -> String {
     }
 }
 
-/// Steps the program at `root` until it stops asking, and returns each response as printed. The answers are scripted
-/// the same way every time, so two projects that run the same steps give the same lines.
-fn trace(root: &Path, inputs: &[&str]) -> Vec<String> {
-    let mut answers: Vec<(String, String)> = Vec::new();
+/// Steps the program at `root` until it stops asking. Returns each response as printed, and the keys answered, in
+/// order. The `preset` answers are given first. The rest are scripted the same way every time, so two projects that
+/// run the same steps give the same lines and keys.
+fn trace(root: &Path, inputs: &[&str], preset: &[(&str, &str)]) -> (Vec<String>, Vec<String>) {
+    let mut answers: Vec<(String, String)> = preset.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let mut lines = Vec::new();
     for _ in 0..40 {
         let mut args = vec![
@@ -168,7 +163,8 @@ fn trace(root: &Path, inputs: &[&str]) -> Vec<String> {
         }
         answers.push((key.to_string(), value));
     }
-    lines
+    let keys = answers.into_iter().map(|(key, _)| key).collect();
+    (lines, keys)
 }
 
 #[test]
@@ -215,20 +211,30 @@ fn check_lists_changed_files_and_exits_1_without_writing() {
 
 #[test]
 fn migrated_project_runs_the_same_steps() {
-    let cases: [(&str, &[&str]); 4] = [
-        ("support-ticket", &[]),
-        ("merge-pr", &[]),
-        ("incident-triage", &[]),
-        ("pr-handling", &["pr=https://example.test/pull/1"]),
+    // The `how_to` path reaches the `await request(...)` in faq.rein, then the template call to close_ticket.
+    // The default answers take the `billing` path, which asks a refund question first.
+    let how_to = [
+        ("main.vip", "false"),
+        ("main.category", "how_to"),
+        ("faq.article_found", "true"),
+        ("faq.solved", "true"),
     ];
-    for (name, inputs) in cases {
-        let root = copy_example(name, "trace");
-        let before = trace(&root, inputs);
-        assert!(before.len() >= 2, "{name}: the script must reach a step: {before:?}");
+    let billing: [(&str, &str); 0] = [];
+    for (tag, preset) in [("how-to", &how_to[..]), ("billing", &billing[..])] {
+        let root = support_ticket_project(tag);
+        let (before, before_keys) = trace(&root, &[], preset);
+        assert!(
+            before.last().is_some_and(|line| line.contains("\"kind\":\"done\"")),
+            "{tag}: the script must reach done: {before:#?}"
+        );
 
-        assert_eq!(code(&migrate(&root, false)), 0, "{name}");
-        let after = trace(&root, inputs);
-        assert_eq!(after, before, "{name}: the step trace changed");
+        assert_eq!(code(&migrate(&root, false)), 0, "{tag}");
+        for (path, body) in rein_files(&root) {
+            assert!(!body.contains('@'), "{tag}: {} still has `@`", path.display());
+        }
+        let (after, after_keys) = trace(&root, &[], preset);
+        assert_eq!(after, before, "{tag}: the step trace changed");
+        assert_eq!(after_keys, before_keys, "{tag}: the answer keys changed");
         fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }
 }
