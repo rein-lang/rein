@@ -11,6 +11,7 @@ mod code_lens;
 mod completion;
 mod definition;
 mod deprecation;
+mod deprecation_actions;
 mod deprecation_hover;
 mod diagnostics;
 mod document_symbols;

@@ -598,6 +598,100 @@ fn reference_completion_replaces_the_whole_token() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+/// Opens `text` as file `name` of the project and asserts that it checks with no error and no warning.
+fn assert_clean(server: &mut Server, root: &Path, name: &str, text: &str) {
+    let uri = uri_of(root, name);
+    server.open(&uri, text);
+    let diags = server.wait_diagnostics(&uri, |_| true);
+    // The scratch file is not reachable from `main`, so that one warning is expected.
+    let bad: Vec<&Value> = diags
+        .iter()
+        .filter(|d| d["severity"] == 1 || d["severity"] == 2)
+        .filter(|d| !d["message"].as_str().unwrap().contains("is not reachable from"))
+        .collect();
+    assert!(bad.is_empty(), "{name}: {bad:?}");
+}
+
+/// The quick fix actions of `uri` for the diagnostic with `code`, as their titles and the new text of each.
+fn deprecation_fixes(server: &mut Server, id: i64, uri: &str, code: &str) -> Vec<(String, String)> {
+    let diags = server.wait_diagnostics(uri, |d| d.iter().any(|x| x["code"] == code));
+    let diag = diags.iter().find(|d| d["code"] == code).unwrap().clone();
+    let params = json!({"textDocument": {"uri": uri}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(id, "textDocument/codeAction", params);
+    actions["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            assert_eq!(a["kind"], "quickfix", "{actions}");
+            let new_text = a["edit"]["changes"][uri][0]["newText"].as_str().unwrap().to_string();
+            (a["title"].as_str().unwrap().to_string(), new_text)
+        })
+        .collect()
+}
+
+#[test]
+fn deprecated_reference_has_quick_fixes_that_leave_no_at_reference() {
+    let root = temp_project("deprecated-fix");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, START);
+    let fixes = deprecation_fixes(&mut server, 2, &start, "deprecated-reference");
+    let titles: Vec<&str> = fixes.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(titles, ["Convert to named import", "Convert all in this file"], "{fixes:?}");
+    for (i, (_, new_text)) in fixes.iter().enumerate() {
+        assert!(!new_text.contains('@'), "{new_text}");
+        assert!(new_text.contains("import { target } from \"./target\";"), "{new_text}");
+        assert_clean(&mut server, &root, &format!("fixed_{i}.rein"), new_text);
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn deprecated_default_import_has_a_named_import_quick_fix() {
+    let root = temp_project("deprecated-default-fix");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let uses = uri_of(&root, "uses.rein");
+    let text = "import target from \"./target\";\n\n/** Uses. */\nexport default function uses() {\n  return target;\n}\n";
+    server.open(&uses, text);
+    let fixes = deprecation_fixes(&mut server, 2, &uses, "deprecated-reference");
+    let (title, new_text) = &fixes[0];
+    assert_eq!(title, "Convert to named import", "{fixes:?}");
+    assert!(new_text.contains("import { target } from \"./target\";"), "{new_text}");
+    assert!(!new_text.contains("import target from"), "{new_text}");
+    assert_clean(&mut server, &root, "fixed_default.rein", new_text);
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_wrong_import_name_has_a_quick_fix_to_the_declared_name() {
+    let root = temp_project("wrong-name");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let uses = uri_of(&root, "uses.rein");
+    server.open(
+        &uses,
+        "import { targetX } from \"./target\";\n\n/** Uses. */\nexport default function uses() {\n  return targetX;\n}\n",
+    );
+    let (title, edit) = quick_fix(&mut server, 2, &uses, "declares `target`");
+    assert_eq!(title, "Use the declared name `target`");
+    assert_eq!(edit["newText"], "target");
+    // `targetX` starts after `import { ` at column 9.
+    assert_eq!(edit["range"]["start"]["character"], 9, "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn a_deprecated_reference_is_tagged_with_its_code_and_docs_link() {
     let root = temp_project("deprecated-tag");

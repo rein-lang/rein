@@ -26,6 +26,16 @@ pub struct Migration {
 ///
 /// `project` must hold the target files and the linked programs of the file. Its own copy of `from` is not read.
 pub fn migrate_text(project: &Project, from: &str, src: &str) -> Migration {
+    migrate_selected(project, from, src, None)
+}
+
+/// Migrates only the `@` reference or the default import that holds `span`. Every other form keeps its old form.
+/// `span` is the span of the warning on that form. The new names and import lines are the ones [`migrate_text`] gives.
+pub fn migrate_one(project: &Project, from: &str, src: &str, span: Span) -> Migration {
+    migrate_selected(project, from, src, Some(span))
+}
+
+fn migrate_selected(project: &Project, from: &str, src: &str, only: Option<Span>) -> Migration {
     let toks = match lex(src) {
         Ok(toks) => toks,
         Err(d) => return unchanged(src, vec![d]),
@@ -59,7 +69,7 @@ pub fn migrate_text(project: &Project, from: &str, src: &str) -> Migration {
     let mut edits: Vec<(Span, String)> = Vec::new();
     // Old local name -> new local name, for the uses to rename.
     let mut renames: Vec<(String, String)> = Vec::new();
-    for (import, stmt) in existing.iter().filter(|(i, _)| i.default) {
+    for (import, stmt) in existing.iter().filter(|(i, _)| i.default).filter(|(_, stmt)| selected(only, *stmt)) {
         let target = match resolve(project, from, &import.path.value) {
             Ok(target) => target,
             Err(reason) => {
@@ -93,6 +103,9 @@ pub fn migrate_text(project: &Project, from: &str, src: &str) -> Migration {
     let mut new_lines = Vec::new();
     for (i, (tok, span)) in toks.iter().enumerate().skip(body) {
         let Tok::Ref(path) = tok else { continue };
+        if !selected(only, *span) {
+            continue;
+        }
         let is_struct = i > 0 && toks[i - 1].0 == Tok::Colon;
         let import_path = if is_struct {
             format!("{path}{STRUCT_SUFFIX}")
@@ -154,6 +167,11 @@ pub fn migrate_text(project: &Project, from: &str, src: &str) -> Migration {
         text.replace_range(span.start..span.end, &replacement);
     }
     Migration { text, warnings }
+}
+
+/// True when nothing is selected, or when the selected span lies inside `span`.
+fn selected(only: Option<Span>, span: Span) -> bool {
+    only.is_none_or(|o| span.start <= o.start && o.end <= span.end)
 }
 
 fn unchanged(src: &str, warnings: Vec<Diagnostic>) -> Migration {

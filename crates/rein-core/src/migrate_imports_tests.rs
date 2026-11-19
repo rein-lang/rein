@@ -31,6 +31,33 @@ fn function_reference_becomes_a_named_import_above_the_doc() {
 }
 
 #[test]
+fn migrate_one_converts_only_the_selected_reference() {
+    let main = "/** Go. */\nexport default function main() {\n  return @./ci/fix;\n  return @./other;\n}\n";
+    let other = "export default function other() {\n  return `o`;\n}\n";
+    let p = project(main, &[("ci/fix", FIX), ("other", other)]);
+    let at = main.find("@./ci/fix").unwrap();
+    let out = migrate_one(&p, "main", main, Span::new(at, at + "@./ci/fix".len()));
+    assert_eq!(
+        out.text,
+        "import { fix } from \"./ci/fix\";\n\n/** Go. */\nexport default function main() {\n  return fix;\n  return @./other;\n}\n"
+    );
+    assert!(out.warnings.is_empty());
+}
+
+#[test]
+fn migrate_one_converts_only_the_selected_default_import() {
+    let main = "import ciFix from \"./ci/fix\";\n\n/** Go. */\nexport default function main() {\n  return ciFix;\n  return @./other;\n}\n";
+    let other = "export default function other() {\n  return `o`;\n}\n";
+    let p = project(main, &[("ci/fix", FIX), ("other", other)]);
+    let stmt = main.find(';').unwrap() + 1;
+    let out = migrate_one(&p, "main", main, Span::new(0, stmt));
+    assert_eq!(
+        out.text,
+        "import { fix } from \"./ci/fix\";\n\n/** Go. */\nexport default function main() {\n  return fix;\n  return @./other;\n}\n"
+    );
+}
+
+#[test]
 fn struct_reference_names_the_struct_in_a_parameter_type() {
     let main = "export default function tell({ opening }: @./message) {\n  return opening;\n}\n";
     let out = migrate(main, &[("message.struct", MESSAGE)]);
