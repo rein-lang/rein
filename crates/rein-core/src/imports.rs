@@ -1,7 +1,7 @@
 //! The `import { name } from "path";` form: one import line, the rules a line holds on its own, and the lookups
 //! that let a local name stand for the `@` reference it replaces.
 
-use crate::ast::{Function, Import, Spanned, StructRef, STRUCT_SUFFIX};
+use crate::ast::{walk_stmts, Function, Import, Param, Spanned, Stmt, StructRef, STRUCT_SUFFIX};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::Tok;
 use crate::stdlib;
@@ -135,6 +135,25 @@ pub fn clash(imports: &[Import], f: &Function) -> Option<Diagnostic> {
                 format!("`{}` is already declared in this file", i.local.value),
             )
         })
+}
+
+/// The names that the file's own declarations hold, each with its kind for a message: each parameter and each field
+/// of a struct parameter, each `const` answer, and each struct. An import's local name must not be one of them.
+pub fn own_names(f: &Function) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    for param in &f.params {
+        match param {
+            Param::Scalar(input) => out.push((input.name.value.clone(), "parameter")),
+            Param::Struct(s) => out.extend(s.fields.iter().map(|field| (field.value.clone(), "parameter"))),
+        }
+    }
+    walk_stmts(&f.body, &mut |s| {
+        if let Stmt::Request { response, .. } = s {
+            out.push((response.name.value.clone(), "const"));
+        }
+    });
+    out.extend(f.structs.iter().map(|s| (s.name.value.clone(), "struct")));
+    out
 }
 
 /// Whether `name` is the local name of an import.
