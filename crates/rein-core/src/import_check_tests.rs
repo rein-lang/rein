@@ -340,13 +340,14 @@ fn import_named_like_a_destructured_field_is_an_error() {
     assert!(
         has(
             &diags["main"],
-            Severity::Warning,
-            "import `review` clashes with the parameter `review`; give the import another name, like `import { review as openReview } from \"./review\"`; this becomes an error in rein 0.2.0"
+            Severity::Error,
+            "import `review` clashes with the parameter `review`, which is an error; give the import another name, like `import { review as openReview } from \"./review\"`"
         ),
         "{:?}",
         diags["main"]
     );
-    assert!(!has(&diags["main"], Severity::Error, "clashes"), "{:?}", diags["main"]);
+    let clashes = diags["main"].iter().filter(|d| d.message.contains("clashes")).count();
+    assert_eq!(clashes, 1, "{:?}", diags["main"]);
 }
 
 #[test]
@@ -355,7 +356,7 @@ fn import_named_like_a_scalar_parameter_is_an_error() {
     let project = project_of(&[("review", REVIEW), ("main", main)]);
     let diags = project.check();
     assert!(
-        has(&diags["main"], Severity::Warning, "import `review` clashes with the parameter `review`"),
+        has(&diags["main"], Severity::Error, "import `review` clashes with the parameter `review`"),
         "{:?}",
         diags["main"]
     );
@@ -367,7 +368,7 @@ fn import_named_like_a_const_is_an_error() {
     let project = project_of(&[("review", REVIEW), ("main", main)]);
     let diags = project.check();
     assert!(
-        has(&diags["main"], Severity::Warning, "import `review` clashes with the const `review`"),
+        has(&diags["main"], Severity::Error, "import `review` clashes with the const `review`"),
         "{:?}",
         diags["main"]
     );
