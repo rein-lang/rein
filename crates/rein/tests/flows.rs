@@ -300,12 +300,12 @@ fn install_other_name_is_a_package_for_pnpm() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("pnpm is not installed"));
 }
 
-/// A program with no `rein/` folder, no manifest and no `main.rein`: the file is the program. It refs `@./ci/fix`.
+/// A program with no `rein/` folder, no manifest and no `main.rein`: the file is the program. It imports `./ci/fix`.
 fn write_file_program(base: &Path) -> PathBuf {
     write(
         base,
         "x/review.rein",
-        "/**\n * Review a failing change.\n */\nexport default function review(\n  /** Is CI green? */\n  green: boolean,\n) {\n  if (green) {\n    return `approved`;\n  }\n  return @./ci/fix;\n}\n",
+        "import { fix } from \"./ci/fix\";\n\n/**\n * Review a failing change.\n */\nexport default function review(\n  /** Is CI green? */\n  green: boolean,\n) {\n  if (green) {\n    return `approved`;\n  }\n  return fix;\n}\n",
     );
     write(
         base,

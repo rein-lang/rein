@@ -396,7 +396,7 @@ fn hand_off_arguments_to_a_function_without_parameters_is_a_check_error() {
 #[test]
 fn argument_that_is_not_a_string_input_is_a_check_error() {
     let flow = Flow::new(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** C */\n  ci: \"green\" | \"red\",\n) {\n  return @./merge(pr=ci);\n}\n"),
+        ("main.rein", "import { merge } from \"./merge\";\n\n/** Entry. */\nexport default function main(\n  /** C */\n  ci: \"green\" | \"red\",\n) {\n  return merge(pr=ci);\n}\n"),
         ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n) {\n  return `Merge ${pr}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
