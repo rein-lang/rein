@@ -159,7 +159,7 @@ fn first_step_names_a_program_missing_behind_another_program() {
 #[test]
 fn first_step_names_a_hand_off_inside_an_installed_program() {
     let home = chain("nofn", "@c/other");
-    assert_first_step_names(&home, "`@b/main` hands off to `@c/other`: `@c/other` reaches inside program `c`; call its entry `@c` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry");
+    assert_first_step_names(&home, "`@b/main` hands off to `@c/other`: `@c/other` reaches inside program `c`; import its entry from `c` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry");
     fs::remove_dir_all(&home).unwrap();
 }
 

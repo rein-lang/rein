@@ -40,9 +40,9 @@ const IMPORTS_FIRST: &str = "imports come first; move this `import` above the do
 const DOC_PLACES: &str =
     "the doc comment must go right before `export default function`, an `interface`, a parameter, a field, or a const answer";
 const NO_VARIABLES: &str = "Rein has no variables, except `/** question */ const x: type = await request(...)`";
-const ONLY_AWAIT: &str = "only `request` or a reference like `@program` can be awaited";
+const ONLY_AWAIT: &str = "only `request` or an imported program can be awaited";
 const AWAIT_NEEDS_CONST: &str =
-    "`await` gives an answer; write `/** question */ const name: Type = await @program(...);`, then read `name`";
+    "`await` gives an answer; import the program, then write `/** question */ const name: Type = await program(...);`, then read `name`";
 const NO_ELSE: &str = "Rein has no `else`: end the `if` block with a return, and handle the other case after it";
 
 fn no_default(span: Span) -> Diagnostic {
@@ -290,7 +290,7 @@ impl Parser {
                 let span = self.bump();
                 imports::struct_ref(&mut self.imports, &name, span)?
             }
-            _ => return Err(self.unexpected("a struct name, or a reference like `@./name`")),
+            _ => return Err(self.unexpected("a struct name, or an imported struct")),
         };
         Ok(StructParam { fields, ty, span: start.to(self.last_span()) })
     }
@@ -465,7 +465,7 @@ impl Parser {
     fn return_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         let start = self.bump();
         if *self.peek() == Tok::Semi || *self.peek() == Tok::RBrace {
-            return Err(Diagnostic::error(start, "`return` needs a value: a string, a template, or `@./function`"));
+            return Err(Diagnostic::error(start, "`return` needs a value: a string, a template, or an imported function"));
         }
         let (value, span) = match self.peek().clone() {
             Tok::Str(s) => {
@@ -497,7 +497,7 @@ impl Parser {
                 let span = call.span;
                 (ReturnValue::Call(call), span)
             }
-            _ => return Err(self.unexpected("a string, a template literal, or a reference like `@./path`")),
+            _ => return Err(self.unexpected("a string, a template literal, or an imported function")),
         };
         if *self.peek() == Tok::Semi {
             self.bump();
@@ -556,7 +556,7 @@ impl Parser {
                 return Ok((Awaited::Call(ReturnValue::Ref(target)), span));
             }
         }
-        let callee = self.ident("`request` or a reference like `@program`")?;
+        let callee = self.ident("`request` or an imported program")?;
         if callee.value != "request" {
             return Err(Diagnostic::error(callee.span, ONLY_AWAIT));
         }
@@ -607,7 +607,7 @@ impl Parser {
                     Callee::Std(Spanned { value: name, span })
                 }
             }
-            _ => return Err(self.unexpected("a reference like `@./path`, or a std name")),
+            _ => return Err(self.unexpected("an imported function, or a std name")),
         };
         self.expect(Tok::LParen, "`(`")?;
         let mut args = Vec::new();

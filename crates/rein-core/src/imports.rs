@@ -184,6 +184,15 @@ pub fn struct_ref(imports: &mut [Import], name: &str, span: Span) -> Result<Stru
     }))
 }
 
+/// The error for a named struct import whose `.struct.rein` file is missing. It names the import form, and the file to add.
+pub fn missing_struct(import: &Import) -> String {
+    let base = import.reference().rsplit('/').next().unwrap_or_default();
+    format!(
+        "cannot find struct `{}`; add a `{base}.struct.rein` file that holds `export default interface {}`",
+        import.path.value, import.name.value
+    )
+}
+
 /// Why a path is not valid in an import, or `None` when it is. A relative path starts with `./` or `../`, names
 /// folders and a file with letters, digits and `_`, and may end with `.struct`. Any other path names a program.
 pub fn path_error(path: &str) -> Option<String> {

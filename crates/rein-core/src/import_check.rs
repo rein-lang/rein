@@ -3,6 +3,7 @@
 
 use crate::ast::{Binding, Function, Import};
 use crate::diagnostic::Diagnostic;
+use crate::imports::missing_struct;
 use crate::project::Project;
 
 /// The errors and warnings of the imports of function `from`.
@@ -32,7 +33,7 @@ fn wrong_name(project: &Project, from: &str, import: &Import) -> Option<Diagnost
     let declared = if import.is_struct() {
         match project.struct_for(from, import.reference()) {
             Ok((_, s)) => s.name.value.clone(),
-            Err(reason) => return Some(Diagnostic::error(import.path.span, reason)),
+            Err(_) => return Some(Diagnostic::error(import.path.span, missing_struct(import))),
         }
     } else {
         match project.binding_for(from, import.reference()) {

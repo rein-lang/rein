@@ -225,7 +225,7 @@ fn resolve_program(project: &Project, import_path: &str) -> Result<Target, Strin
     };
     if let Some(rest) = rest.filter(|r| *r != linked.entry) {
         return Err(format!(
-            "`@{program}/{rest}` is not the entry of `{program}`; call `@{program}` instead"
+            "`@{program}/{rest}` is not the entry of `{program}`; import `{program}` instead"
         ));
     }
     let declared = linked
