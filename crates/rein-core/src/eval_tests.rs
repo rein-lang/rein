@@ -38,7 +38,7 @@ fn text_return() {
 
 #[test]
 fn ref_return_resolves_the_import_to_its_project_path() {
-    let f = func("/** d */\nexport default function f() { return @./ci/fix }");
+    let f = func("import { fix } from \"./ci/fix\";\n\n/** d */\nexport default function f() { return fix }");
     let bindings = BTreeMap::from([("./ci/fix".to_string(), Binding::Function("ci/fix".into()))]);
     assert_eq!(
         run(&f, &inputs(&[]), &bindings),
@@ -200,9 +200,11 @@ export default function tpl(
 }"#,
     );
     let f = func(
-        r#"/** d */
+        r#"import { tpl } from "./tpl";
+
+/** d */
 export default function f() {
-  return @./tpl(a=`one`, b=`two`);
+  return tpl(a=`one`, b=`two`);
 }"#,
     );
     let bindings = BTreeMap::from([(
@@ -360,11 +362,13 @@ export default async function f(
 #[test]
 fn hand_off_returns_the_string_arguments() {
     let f = func(
-        r#"/** d */
+        r#"import { merge } from "./merge";
+
+/** d */
 export default function f(
   /** Link */ pr: string,
 ) {
-  return @./merge(pr=pr);
+  return merge(pr=pr);
 }"#,
     );
     let bindings = BTreeMap::from([("./merge".to_string(), Binding::Function("merge".into()))]);

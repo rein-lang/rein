@@ -22,16 +22,16 @@ fn temp_project(tag: &str) -> PathBuf {
     };
     write(
         "main.rein",
-        "/** Entry. */\nexport default function main() {\n  return @./merge_pr;\n}\n",
+        "import { mergePr } from \"./merge_pr\";\n\n/** Entry. */\nexport default function main() {\n  return mergePr;\n}\n",
     );
     write(
         "merge_pr.rein",
-        "/** Merge a pull request. */\nexport default function mergePr(\n  /** CI status? */\n  ci: \"green\" | \"red\" | \"pending\",\n) {\n\
-         switch (ci) {\n    case \"green\": return `merge`;\n    case \"red\": return @./ci/fix;\n    case \"pending\": return @./nope;\n}\n}\n",
+        "import { fix } from \"./ci/fix\";\nimport { nope } from \"./nope\";\n\n/** Merge a pull request. */\nexport default function mergePr(\n  /** CI status? */\n  ci: \"green\" | \"red\" | \"pending\",\n) {\n\
+         switch (ci) {\n    case \"green\": return `merge`;\n    case \"red\": return fix;\n    case \"pending\": return nope;\n}\n}\n",
     );
     write(
         "ci/fix.rein",
-        "/** Fix red CI. */\nexport default function fixCi() {\n  return @../merge_pr;\n}\n",
+        "import { merge_pr } from \"../merge_pr\";\n\n/** Fix red CI. */\nexport default function fixCi() {\n  return merge_pr;\n}\n",
     );
     write(
         "bad-name.rein",
@@ -96,7 +96,7 @@ fn check_one(src: &str) -> Vec<Diagnostic> {
         vec![
             (
                 root.join("main.rein"),
-                "/** m */\nexport default function main() { return @./f }\n".to_string(),
+                "import { f } from \"./f\";\n\n/** m */\nexport default function main() { return f }\n".to_string(),
             ),
             (root.join("f.rein"), src.to_string()),
         ],
@@ -110,7 +110,7 @@ fn template_only_used_in_a_nested_call_is_bound_and_reachable() {
     let project = Project::from_sources(
         root.clone(),
         vec![
-            (root.join("main.rein"), "/** m */\nexport default function main() { return delegate(model=@./tpl(a=`x`), task=`task`) }\n".to_string()),
+            (root.join("main.rein"), "import { tpl } from \"./tpl\";\n\n/** m */\nexport default function main() { return delegate(model=tpl(a=`x`), task=`task`) }\n".to_string()),
             (root.join("tpl.rein"), "/** t */\nexport default function tpl(\n  /** A */ a: string,\n) { return `Hi ${a}` }\n".to_string()),
         ],
     );
@@ -144,15 +144,15 @@ fn syntax_error_file_gets_no_cycle_warning() {
         vec![
             (
                 root.join("main.rein"),
-                "/** m */\nexport default function main() { return @./f }\n".to_string(),
+                "import { f } from \"./f\";\n\n/** m */\nexport default function main() { return f }\n".to_string(),
             ),
             (
                 root.join("f.rein"),
-                "/** d */\nexport default function f() { return @./g }\nreturn )".to_string(),
+                "import { g } from \"./g\";\n\n/** d */\nexport default function f() { return g }\nreturn )".to_string(),
             ),
             (
                 root.join("g.rein"),
-                "/** d */\nexport default function g() { return @./f }\n".to_string(),
+                "import { f } from \"./f\";\n\n/** d */\nexport default function g() { return f }\n".to_string(),
             ),
         ],
     );
@@ -216,23 +216,23 @@ fn cycle_warns_on_every_return_on_the_cycle() {
     let project = project_of(&[
         (
             "main",
-            "/** m */\nexport default function main() { return @./a }\n",
+            "import { a } from \"./a\";\n\n/** m */\nexport default function main() { return a }\n",
         ),
         (
             "a",
-            "/** d */\nexport default function a() { return @./b }\n",
+            "import { b } from \"./b\";\n\n/** d */\nexport default function a() { return b }\n",
         ),
         (
             "b",
-            "/** d */\nexport default function b() { return @./c }\n",
+            "import { c } from \"./c\";\n\n/** d */\nexport default function b() { return c }\n",
         ),
         (
             "c",
-            "/** d */\nexport default function c() { return @./a }\n",
+            "import { a } from \"./a\";\n\n/** d */\nexport default function c() { return a }\n",
         ),
         (
             "self",
-            "/** d */\nexport default function me() { return @./self }\n",
+            "import { self } from \"./self\";\n\n/** d */\nexport default function me() { return self }\n",
         ),
     ]);
     let diags = project.check();
@@ -266,7 +266,7 @@ fn cycle_warns_on_every_return_on_the_cycle() {
 
 /// Cycle warnings of `files`, in a project whose `main` returns `@./a`.
 fn cycle_warnings_of(files: &[(&str, &str)]) -> BTreeMap<String, Vec<Diagnostic>> {
-    let mut all = vec![("main", "/** m */\nexport default function main() { return @./a }\n")];
+    let mut all = vec![("main", "import { a } from \"./a\";\n\n/** m */\nexport default function main() { return a }\n")];
     all.extend_from_slice(files);
     project_of(&all).check()
 }
@@ -275,17 +275,17 @@ fn has_cycle_warning(diags: &[Diagnostic]) -> bool {
     diags.iter().any(|d| d.message.contains("reference cycle"))
 }
 
-const SELF_AWAIT: &str = "/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n";
-const GUARDED_SELF_AWAIT: &str = "/** Recurse until the agent says stop. */\nexport default async function a(\n  /** Keep going? */\n  more: boolean,\n) {\n  if (!more) {\n    return `stopped`;\n  }\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n";
-const AWAIT_B: &str = "/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await @./b;\n  return `a`;\n}\n";
-const AWAIT_A: &str = "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./a;\n  return `b`;\n}\n";
-const GUARDED_AWAIT_B: &str = "/** d */\nexport default async function a(\n  /** A? */\n  go: boolean,\n) {\n  if (!go) {\n    return `a stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await @./b;\n  return `a`;\n}\n";
-const GUARDED_AWAIT_A: &str = "/** d */\nexport default async function b(\n  /** B? */\n  go: boolean,\n) {\n  if (!go) {\n    return `b stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await @./a;\n  return `b`;\n}\n";
+const SELF_AWAIT: &str = "import { a as a2 } from \"./a\";\n\n/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await a2;\n  return `done`;\n}\n";
+const GUARDED_SELF_AWAIT: &str = "import { a as a2 } from \"./a\";\n\n/** Recurse until the agent says stop. */\nexport default async function a(\n  /** Keep going? */\n  more: boolean,\n) {\n  if (!more) {\n    return `stopped`;\n  }\n  /** Again? */\n  const again: boolean = await a2;\n  return `done`;\n}\n";
+const AWAIT_B: &str = "import { b } from \"./b\";\n\n/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await b;\n  return `a`;\n}\n";
+const AWAIT_A: &str = "import { a } from \"./a\";\n\n/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await a;\n  return `b`;\n}\n";
+const GUARDED_AWAIT_B: &str = "import { b } from \"./b\";\n\n/** d */\nexport default async function a(\n  /** A? */\n  go: boolean,\n) {\n  if (!go) {\n    return `a stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await b;\n  return `a`;\n}\n";
+const GUARDED_AWAIT_A: &str = "import { a } from \"./a\";\n\n/** d */\nexport default async function b(\n  /** B? */\n  go: boolean,\n) {\n  if (!go) {\n    return `b stop`;\n  }\n  /** Ok? */\n  const ok: boolean = await a;\n  return `b`;\n}\n";
 
 #[test]
 fn hand_off_self_cycle_still_warns() {
     // c1
-    let diags = cycle_warnings_of(&[("a", "/** d */\nexport default function a() { return @./a }\n")]);
+    let diags = cycle_warnings_of(&[("a", "import { a as a2 } from \"./a\";\n\n/** d */\nexport default function a() { return a2 }\n")]);
     assert!(
         has(&diags["a"], Severity::Warning, "reference cycle: a -> a; Rein has no loops yet"),
         "{:?}",
@@ -297,8 +297,8 @@ fn hand_off_self_cycle_still_warns() {
 fn hand_off_two_cycle_warns() {
     // c2
     let diags = cycle_warnings_of(&[
-        ("a", "/** d */\nexport default function a() { return @./b }\n"),
-        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+        ("a", "import { b } from \"./b\";\n\n/** d */\nexport default function a() { return b }\n"),
+        ("b", "import { a } from \"./a\";\n\n/** d */\nexport default function b() { return a }\n"),
     ]);
     assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
     assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
@@ -342,7 +342,7 @@ fn mutual_await_after_questions_is_not_warned() {
 fn hand_off_then_await_without_a_question_warns() {
     // c5: a returns b, and b awaits a with no question before it.
     let diags = cycle_warnings_of(&[
-        ("a", "/** d */\nexport default function a() { return @./b }\n"),
+        ("a", "import { b } from \"./b\";\n\n/** d */\nexport default function a() { return b }\n"),
         ("b", AWAIT_A),
     ]);
     assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
@@ -353,8 +353,8 @@ fn hand_off_then_await_without_a_question_warns() {
 fn hand_off_cycle_with_an_await_elsewhere_warns() {
     // c6: the await is not on the cycle, and the two returns replay the same answers.
     let diags = cycle_warnings_of(&[
-        ("a", "/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await @./c;\n  return @./b;\n}\n"),
-        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+        ("a", "import { c } from \"./c\";\nimport { b } from \"./b\";\n\n/** d */\nexport default async function a() {\n  /** Ok? */\n  const ok: boolean = await c;\n  return b;\n}\n"),
+        ("b", "import { a } from \"./a\";\n\n/** d */\nexport default function b() { return a }\n"),
         ("c", "/** d */\nexport default function c() { return `c` }\n"),
     ]);
     assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
@@ -373,7 +373,7 @@ fn await_answer_does_not_count_as_a_question_before_its_own_edge() {
     // c8: `ok` is the answer to the await, so it comes after the edge.
     let diags = cycle_warnings_of(&[
         ("a", AWAIT_B),
-        ("b", "/** d */\nexport default function b() { return @./a }\n"),
+        ("b", "import { a } from \"./a\";\n\n/** d */\nexport default function b() { return a }\n"),
     ]);
     assert!(has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
     assert!(has_cycle_warning(&diags["b"]), "{:?}", diags["b"]);
@@ -383,9 +383,9 @@ fn await_answer_does_not_count_as_a_question_before_its_own_edge() {
 fn mixed_cycle_without_a_question_warns() {
     // c9: one await edge, but no question before any edge.
     let diags = cycle_warnings_of(&[
-        ("a", "/** d */\nexport default function a() { return @./b }\n"),
-        ("b", "/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await @./c;\n  return `b`;\n}\n"),
-        ("c", "/** d */\nexport default function c() { return @./a }\n"),
+        ("a", "import { b } from \"./b\";\n\n/** d */\nexport default function a() { return b }\n"),
+        ("b", "import { c } from \"./c\";\n\n/** d */\nexport default async function b() {\n  /** Ok? */\n  const ok: boolean = await c;\n  return `b`;\n}\n"),
+        ("c", "import { a } from \"./a\";\n\n/** d */\nexport default function c() { return a }\n"),
     ]);
     for name in ["a", "b", "c"] {
         assert!(has_cycle_warning(&diags[name]), "{name}: {:?}", diags[name]);
@@ -397,7 +397,7 @@ fn request_answer_before_the_await_is_a_question() {
     // A `request` answer above the await asks a new key at each level.
     let diags = cycle_warnings_of(&[(
         "a",
-        "/** d */\nexport default async function a() {\n  /** Checked? */\n  const checked: boolean = await request(`Check the thing.`);\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n",
+        "import { a as a2 } from \"./a\";\n\n/** d */\nexport default async function a() {\n  /** Checked? */\n  const checked: boolean = await request(`Check the thing.`);\n  /** Again? */\n  const again: boolean = await a2;\n  return `done`;\n}\n",
     )]);
     assert!(!has_cycle_warning(&diags["a"]), "{:?}", diags["a"]);
 }
@@ -433,11 +433,11 @@ fn unreachable_function_is_a_warning() {
     let project = project_of(&[
         (
             "main",
-            "/** m */\nexport default function main() { return @./used }\n",
+            "import { used } from \"./used\";\n\n/** m */\nexport default function main() { return used }\n",
         ),
         (
             "used",
-            "/** u */\nexport default function used() { return @./deep/leaf }\n",
+            "import { leaf } from \"./deep/leaf\";\n\n/** u */\nexport default function used() { return leaf }\n",
         ),
         (
             "deep/leaf",
@@ -542,7 +542,7 @@ fn import_path_errors() {
 fn import_outside_root_is_reported_by_the_checker() {
     let project = project_of(&[(
         "ci/fix",
-        "/** d */\nexport default function fix() { return @../../outside }\n",
+        "import { outside } from \"../../outside\";\n\n/** d */\nexport default function fix() { return outside }\n",
     )]);
     let diags = project.check();
     assert!(
@@ -597,7 +597,7 @@ fn find_root_walks_up_to_main() {
 #[test]
 fn template_called_from_main_is_reachable_and_drawn() {
     let project = project_of(&[
-        ("main", "/** m */\nexport default function main(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return @./tpl(a=`a`, b=`b`) } return @./tpl(b=`d`, a=`c`) \n}\n"),
+        ("main", "import { tpl } from \"./tpl\";\n\n/** m */\nexport default function main(\n  /** C */ c: \"x\" | \"y\",\n) {\n  if (c === \"x\") { return tpl(a=`a`, b=`b`) } return tpl(b=`d`, a=`c`) \n}\n"),
         ("tpl", "/** t */\nexport default function tpl(\n  /** A */ a: string,\n  /** B */ b: string,\n) { return `${a} ${b}` }\n"),
     ]);
     let diags = project.check();
@@ -614,9 +614,9 @@ fn template_called_from_main_is_reachable_and_drawn() {
 #[test]
 fn a_shared_struct_binds_in_every_function_that_names_it() {
     let ticket = "/** A ticket. */\nexport default interface Ticket {\n  /** Title. */\n  title: string;\n  /** VIP? */\n  vip: boolean;\n}\n";
-    let a = "/** A. */\nexport default function a({ title, vip }: @./ticket) {\n  if (vip) { return `VIP ${title}` }\n  return `Plain ${title}`\n}\n";
-    let b = "/** B. */\nexport default function b({ vip, title }: @../ticket) {\n  if (vip) { return `x` }\n  return @../a(title=title)\n}\n";
-    let m = "/** m */\nexport default function main() { return @./sub/b(title=`t`) }\n";
+    let a = "import { Ticket } from \"./ticket.struct\";\n\n/** A. */\nexport default function a({ title, vip }: Ticket) {\n  if (vip) { return `VIP ${title}` }\n  return `Plain ${title}`\n}\n";
+    let b = "import { Ticket } from \"../ticket.struct\";\nimport { a } from \"../a\";\n\n/** B. */\nexport default function b({ vip, title }: Ticket) {\n  if (vip) { return `x` }\n  return a(title=title)\n}\n";
+    let m = "import { b } from \"./sub/b\";\n\n/** m */\nexport default function main() { return b(title=`t`) }\n";
     let project = project_of(&[
         ("ticket.struct", ticket),
         ("a", a),
@@ -723,7 +723,7 @@ fn flow_of(tag: &str, manifest: Option<&str>, long: &str) -> Project {
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("main.rein"),
-        "/** m */\nexport default function main() { return @./long }\n",
+        "import { long } from \"./long\";\n\n/** m */\nexport default function main() { return long }\n",
     )
     .unwrap();
     fs::write(root.join("long.rein"), long).unwrap();
@@ -1002,7 +1002,7 @@ fn a_function_with_one_caller_belongs_in_the_caller_folder() {
 #[test]
 fn a_function_called_only_by_the_entry_belongs_at_the_root() {
     let project = project_of(&[
-        ("main", "/** m */\nexport default function main() { return @./security/review }\n"),
+        ("main", "import { review } from \"./security/review\";\n\n/** m */\nexport default function main() { return review }\n"),
         ("security/review", "/** r */\nexport default function review() { return `ok` }\n"),
     ]);
     let warning = "`security/review` is only called by `main`; move it to `review.rein` so the folders show the process";
@@ -1013,8 +1013,8 @@ fn a_function_called_only_by_the_entry_belongs_at_the_root() {
 #[test]
 fn the_nesting_warning_says_a_move_changes_keys_and_not_program_references() {
     let project = project_of(&[
-        ("main", "/** m */\nexport default function main() { return @./a }\n"),
-        ("a", "/** a */\nexport default function a() { return @./steps/leaf }\n"),
+        ("main", "import { a } from \"./a\";\n\n/** m */\nexport default function main() { return a }\n"),
+        ("a", "import { leaf } from \"./steps/leaf\";\n\n/** a */\nexport default function a() { return leaf }\n"),
         ("steps/leaf", "/** l */\nexport default function leaf() { return `ok` }\n"),
     ]);
     let tail = "The move changes its answer keys";
@@ -1046,7 +1046,7 @@ fn a_named_import_of_a_missing_struct_gives_the_import_error_on_the_path() {
 #[test]
 fn two_callees_with_one_target_name_each_other_and_get_no_move() {
     let project = project_of(&[
-        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("main", "import { a } from \"./a\";\n\n/** m */\nexport default function main() { return a }\n"),
         ("a", &branch("a", "@./x/leaf", "@./y/leaf")),
         ("x/leaf", "/** l */\nexport default function leaf() { return `x` }\n"),
         ("y/leaf", "/** l */\nexport default function leaf() { return `y` }\n"),
@@ -1065,9 +1065,9 @@ fn two_callees_with_one_target_name_each_other_and_get_no_move() {
 fn a_target_path_that_another_file_has_gives_no_warning() {
     // `x/leaf` belongs at `a/leaf`, but `a/leaf` is another function, so `x/leaf` cannot move there.
     let taken = project_of(&[
-        ("main", "/** m */\nexport default function main() { return @./a }\n"),
+        ("main", "import { a } from \"./a\";\n\n/** m */\nexport default function main() { return a }\n"),
         ("a", &branch("a", "@./x/leaf", "@./a/leaf")),
-        ("a/leaf", "/** l */\nexport default function leaf() { return @../y/leaf }\n"),
+        ("a/leaf", "import { leaf as yLeaf } from \"../y/leaf\";\n\n/** l */\nexport default function leaf() { return yLeaf }\n"),
         ("x/leaf", "/** l */\nexport default function leaf() { return `x` }\n"),
         ("y/leaf", "/** l */\nexport default function leaf() { return `y` }\n"),
     ]);
@@ -1082,8 +1082,8 @@ fn a_caller_inside_the_function_folder_gives_no_nesting_warning() {
     // `x` has one caller, `x/y`, which sits in `x/`. Moving `x` to `x/y/x` would move `x/y` along, so the
     // warning would come back one level deeper each time.
     let project = project_of(&[
-        ("main", "/** m */\nexport default function main() { return @./x/y }\n"),
-        ("x/y", "/** y */\nexport default function y() { return @../x }\n"),
+        ("main", "import { y } from \"./x/y\";\n\n/** m */\nexport default function main() { return y }\n"),
+        ("x/y", "import { x } from \"../x\";\n\n/** y */\nexport default function y() { return x }\n"),
         ("x", "/** x */\nexport default function x() { return `x` }\n"),
     ]);
     let diags = project.check();
@@ -1103,8 +1103,8 @@ fn a_function_whose_folder_holds_the_entry_gives_no_nesting_warning() {
         fs::write(p, text).unwrap();
     };
     write("rein.json", r#"{"entry": "app/start.rein"}"#);
-    write("app/start.rein", "/** s */\nexport default function start() { return @../y }\n");
-    write("y.rein", "/** y */\nexport default function y() { return @./app }\n");
+    write("app/start.rein", "import { y } from \"../y\";\n\n/** s */\nexport default function start() { return y }\n");
+    write("y.rein", "import { app } from \"./app\";\n\n/** y */\nexport default function y() { return app }\n");
     write("app.rein", "/** a */\nexport default function app() { return `a` }\n");
     let project = Project::load(&root).unwrap();
     fs::remove_dir_all(&root).unwrap();
@@ -1122,8 +1122,8 @@ fn a_path_the_loader_skips_is_never_a_nesting_target() {
     }
     // `pick` belongs in `target/`, a folder the loader skips, so it would drop out of the project.
     let project = project_of(&[
-        ("main", "/** m */\nexport default function main() { return @./target }\n"),
-        ("target", "/** t */\nexport default function target() { return @./pick }\n"),
+        ("main", "import { target } from \"./target\";\n\n/** m */\nexport default function main() { return target }\n"),
+        ("target", "import { pick } from \"./pick\";\n\n/** t */\nexport default function target() { return pick }\n"),
         ("pick", "/** p */\nexport default function pick() { return `p` }\n"),
     ]);
     assert!(!has(&project.check()["pick"], Severity::Warning, "only called by"), "{:?}", project.check()["pick"]);
@@ -1140,8 +1140,8 @@ fn a_folder_with_its_own_main_is_never_a_nesting_target() {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, text).unwrap();
     };
-    write("main.rein", "/** m */\nexport default function main() { return @./x }\n");
-    write("x.rein", "/** x */\nexport default function x() { return @./pick }\n");
+    write("main.rein", "import { x } from \"./x\";\n\n/** m */\nexport default function main() { return x }\n");
+    write("x.rein", "import { pick } from \"./pick\";\n\n/** x */\nexport default function x() { return pick }\n");
     write("pick.rein", "/** p */\nexport default function pick() { return `p` }\n");
     write("x/main.rein", "/** n */\nexport default function main() { return `n` }\n");
     let project = Project::load(&root).unwrap();
@@ -1164,8 +1164,8 @@ fn the_root_main_never_gets_a_nesting_warning() {
         fs::write(p, text).unwrap();
     };
     write("rein.json", r#"{"entry": "start.rein"}"#);
-    write("start.rein", "/** s */\nexport default function start() { return @./foo }\n");
-    write("foo.rein", "/** f */\nexport default function foo() { return @./main }\n");
+    write("start.rein", "import { foo } from \"./foo\";\n\n/** s */\nexport default function start() { return foo }\n");
+    write("foo.rein", "import { main } from \"./main\";\n\n/** f */\nexport default function foo() { return main }\n");
     write("main.rein", "/** m */\nexport default function main() { return `m` }\n");
     let project = Project::load(&root).unwrap();
     fs::remove_dir_all(&root).unwrap();
@@ -1177,8 +1177,8 @@ fn the_root_main_never_gets_a_nesting_warning() {
 fn unreachable_functions_get_no_nesting_warning() {
     // `u` and `v` only call each other. Each has one caller, but neither is reachable from main.
     let project = project_of(&[
-        ("u", "/** u */\nexport default function u() { return @./v }\n"),
-        ("v", "/** v */\nexport default function v() { return @./u }\n"),
+        ("u", "import { v } from \"./v\";\n\n/** u */\nexport default function u() { return v }\n"),
+        ("v", "import { u } from \"./u\";\n\n/** v */\nexport default function v() { return u }\n"),
     ]);
     let diags = project.check();
     for name in ["u", "v"] {
@@ -1193,16 +1193,16 @@ fn unknown_reachability_gives_no_nesting_warning() {
     // `u` and `v` only call each other. Reachability from main is unknown when main has a syntax error, and
     // also when main is missing. Neither case may tell `u` and `v` to move into each other's folder.
     let broken = project_of(&[
-        ("main", "/** m */\nexport default function main() { return @./u"),
-        ("u", "/** u */\nexport default function u() { return @./v }\n"),
-        ("v", "/** v */\nexport default function v() { return @./u }\n"),
+        ("main", "import { u } from \"./u\";\n\n/** m */\nexport default function main() { return u"),
+        ("u", "import { v } from \"./v\";\n\n/** u */\nexport default function u() { return v }\n"),
+        ("v", "import { u } from \"./u\";\n\n/** v */\nexport default function v() { return u }\n"),
     ]);
     let root = PathBuf::from("/proj");
     let missing = Project::from_sources(
         root.clone(),
         vec![
-            (root.join("u.rein"), "/** u */\nexport default function u() { return @./v }\n".to_string()),
-            (root.join("v.rein"), "/** v */\nexport default function v() { return @./u }\n".to_string()),
+            (root.join("u.rein"), "import { v } from \"./v\";\n\n/** u */\nexport default function u() { return v }\n".to_string()),
+            (root.join("v.rein"), "import { u } from \"./u\";\n\n/** v */\nexport default function v() { return u }\n".to_string()),
         ],
     );
     for project in [&broken, &missing] {
@@ -1225,7 +1225,7 @@ fn reachability_starts_at_the_entry_from_the_manifest() {
     };
     write("rein.json", r#"{"entry": "flow.rein"}"#);
     write("main.rein", "/** m */\nexport default function main() { return `m` }\n");
-    write("flow.rein", "/** f */\nexport default function flow() { return @./step }\n");
+    write("flow.rein", "import { step } from \"./step\";\n\n/** f */\nexport default function flow() { return step }\n");
     write("step.rein", "/** s */\nexport default function step() { return `s` }\n");
     let project = Project::load(&root).unwrap();
     fs::remove_dir_all(&root).unwrap();

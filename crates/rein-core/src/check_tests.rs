@@ -68,7 +68,7 @@ fn resolves(path: &str) -> Result<Kind, String> {
 /// A caller of `./review`, which takes `pr`, `big` and `ci`. `args` are the call's arguments.
 fn review_caller(args: &str) -> String {
     format!(
-        "/** F. */\nexport default async function f(/** PR? */ pr: string) {{\n  /** Big? */\n  const big: boolean = await request(`Count the files.`);\n  /** CI? */\n  const ci: \"green\" | \"red\" = await request(`Read CI.`);\n  return @./review({args});\n}}\n"
+        "import {{ review }} from \"./review\";\n\n/** F. */\nexport default async function f(/** PR? */ pr: string) {{\n  /** Big? */\n  const big: boolean = await request(`Count the files.`);\n  /** CI? */\n  const ci: \"green\" | \"red\" = await request(`Read CI.`);\n  return review({args});\n}}\n"
     )
 }
 
@@ -84,11 +84,11 @@ fn a_call_must_pass_every_parameter_of_the_callee() {
 
 #[test]
 fn a_bare_reference_must_pass_every_parameter() {
-    let src = "/** F. */\nexport default function f() {\n  return @./review;\n}\n";
+    let src = "import { review } from \"./review\";\n\n/** F. */\nexport default function f() {\n  return review;\n}\n";
     expect_diag(src, Severity::Error, "`@./review` takes 3 arguments, got 0; pass `pr`, `big` and `ci`");
-    let typed_only = "/** F. */\nexport default function f() {\n  return @./typed;\n}\n";
+    let typed_only = "import { typed } from \"./typed\";\n\n/** F. */\nexport default function f() {\n  return typed;\n}\n";
     expect_diag(typed_only, MISSING_TYPED_ARG, "`@./typed` takes 1 argument, got 0; pass `ok`");
-    let awaited = "/** F. */\nexport default async function f() {\n  /** Ok? */\n  const ok: boolean = await @./review;\n  if (ok) {\n    return `a`;\n  }\n  return `b`;\n}\n";
+    let awaited = "import { review } from \"./review\";\n\n/** F. */\nexport default async function f() {\n  /** Ok? */\n  const ok: boolean = await review;\n  if (ok) {\n    return `a`;\n  }\n  return `b`;\n}\n";
     expect_diag(awaited, Severity::Error, "`@./review` takes 3 arguments, got 0");
 }
 
@@ -457,7 +457,7 @@ fn code_after_switch_is_an_error() {
 #[test]
 fn reference_that_does_not_resolve_is_an_error_on_the_reference() {
     expect_diag(
-        "/** d */\nexport default function f() { return @./missing; }",
+        "import { missing } from \"./missing\";\n\n/** d */\nexport default function f() { return missing; }",
         Severity::Error,
         "cannot find function `@./missing`",
     );
@@ -518,14 +518,16 @@ fn with(prefix: &str, body: &str) -> String {
 fn template_call_with_literal_and_union_args_is_clean() {
     clean(&with(
         TPL_IMPORT,
-        r#"/** d */
+        r#"import { tpl } from "./tpl";
+
+/** d */
 export default function f(
   /** C */ c: "x" | "y",
 ) {
   if (c === "x") {
-    return @./tpl(a=`one`, b=`x ${c}`);
+    return tpl(a=`one`, b=`x ${c}`);
   }
-  return @./tpl(b=`y ${c}`, a=`two`);
+  return tpl(b=`y ${c}`, a=`two`);
 }"#,
     ));
 }
@@ -547,8 +549,10 @@ fn template_call_missing_argument_is_checked() {
     expect_diag(
         &with(
             TPL_IMPORT,
-            r#"/** d */
-export default function f() { return @./tpl(a=`only one`) }"#,
+            r#"import { tpl } from "./tpl";
+
+/** d */
+export default function f() { return tpl(a=`only one`) }"#,
         ),
         Severity::Error,
         "missing argument `b` in call to `@./tpl`; write `b=value`",
@@ -559,10 +563,12 @@ export default function f() { return @./tpl(a=`only one`) }"#,
 fn hand_off_cannot_be_a_request_argument() {
     // A function is handed off by `return`. Inside `request(...)`, a call argument cannot be a hand-off.
     expect_diag(
-        r#"/** d */
+        r#"import { other } from "./other";
+
+/** d */
 export default async function f() {
   /** Ok? */
-  const ok: boolean = await request(@./other("a"));
+  const ok: boolean = await request(other("a"));
   return `y`
 }"#,
         Severity::Error,
@@ -610,8 +616,10 @@ fn call_of_a_function_without_strings_takes_no_arguments() {
     expect_diag(
         &with(
             "",
-            r#"/** d */
-export default function f() { return @./other("a") }"#,
+            r#"import { other } from "./other";
+
+/** d */
+export default function f() { return other("a") }"#,
         ),
         Severity::Error,
         "`@./other` takes no arguments; return it without a call",
@@ -633,8 +641,10 @@ fn template_returned_without_a_call_is_an_error() {
     expect_diag(
         &with(
             TPL_IMPORT,
-            r#"/** d */
-export default function f() { return @./tpl }"#,
+            r#"import { tpl } from "./tpl";
+
+/** d */
+export default function f() { return tpl }"#,
         ),
         Severity::Error,
         "`@./tpl` is a template; import it, then call it with arguments, like `tpl(...)`",
@@ -670,10 +680,12 @@ fn boolean_cannot_be_a_call_argument() {
     expect_diag(
         &with(
             TPL_IMPORT,
-            r#"/** d */
+            r#"import { tpl } from "./tpl";
+
+/** d */
 export default function f(
   /** A */ a: boolean,
-) { if (a) { return @./tpl(a=`x`, b=`${a}`) } return `y`  }"#,
+) { if (a) { return tpl(a=`x`, b=`${a}`) } return `y`  }"#,
         ),
         Severity::Error,
         "boolean parameter `a` cannot be interpolated",
@@ -788,13 +800,15 @@ export default async function f() { return `x` }"#,
 #[test]
 fn answer_used_as_a_guard_is_clean() {
     clean(
-        r#"/** d */
+        r#"import { tpl } from "./tpl";
+
+/** d */
 export default async function f(
   /** C */ c: "x" | "y",
 ) {
   /** Ok? */
   const ok: boolean = await request(`pick ${c}`);
-  if (!ok) { return @./tpl(a=`a`, b=`b`) }
+  if (!ok) { return tpl(a=`a`, b=`b`) }
   return `y`
 }"#,
     );
@@ -847,7 +861,7 @@ fn struct_answer_is_used_in_a_hand_off_a_template_a_switch_and_a_condition() {
 #[test]
 fn bare_string_answer_is_an_error() {
     expect_diag(
-        "/** d */\nexport default async function f() {\n  /** The link. */\n  const pr: string = await request(`pick a PR`);\n  return @./merge(pr=pr);\n}",
+        "import { merge } from \"./merge\";\n\n/** d */\nexport default async function f() {\n  /** The link. */\n  const pr: string = await request(`pick a PR`);\n  return merge(pr=pr);\n}",
         Severity::Error,
         "a `string` answer is not allowed; answer a struct with a `string` field",
     );
@@ -992,8 +1006,8 @@ fn hand_off_without_arguments_is_an_error() {
 
 #[test]
 fn named_arguments_bind_in_any_order() {
-    clean(&with("", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** d */\nexport default function f({ a, b }: Input) {\n  return @./tpl(b=a, a=b);\n}"));
-    clean(&with("", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** d */\nexport default function f({ a, b }: Input) {\n  return @./tpl(a=a, b=b);\n}"));
+    clean(&with("", "import { tpl } from \"./tpl\";\n\ninterface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** d */\nexport default function f({ a, b }: Input) {\n  return tpl(b=a, a=b);\n}"));
+    clean(&with("", "import { tpl } from \"./tpl\";\n\ninterface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** d */\nexport default function f({ a, b }: Input) {\n  return tpl(a=a, b=b);\n}"));
 }
 
 #[test]
@@ -1038,8 +1052,10 @@ fn missing_named_argument_is_an_error() {
     expect_diag(
         &with(
             TPL_IMPORT,
-            r#"/** d */
-export default function f() { return @./tpl(b=`only two`) }"#,
+            r#"import { tpl } from "./tpl";
+
+/** d */
+export default function f() { return tpl(b=`only two`) }"#,
         ),
         Severity::Error,
         "missing argument `a` in call to `@./tpl`; write `a=value`",
@@ -1054,7 +1070,7 @@ fn hand_off_arguments_to_a_function_without_strings_are_an_error() {
         "`@./other` takes no arguments; return it without a call",
     );
     // A bare reference needs no arguments, so this one is clean.
-    clean("/** d */\nexport default function f() {\n  return @./other;\n}");
+    clean("import { other } from \"./other\";\n\n/** d */\nexport default function f() {\n  return other;\n}");
 }
 
 #[test]
@@ -1223,7 +1239,7 @@ fn struct_file_rules() {
 fn all_string_body_that_is_a_hand_off_is_a_normal_function() {
     // All parameters are `string` but the body is not one template literal, so `b` is an input, not a template parameter.
     expect_diag(
-        "/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return @./merge(pr=a);\n}",
+        "import { merge } from \"./merge\";\n\n/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) {\n  return merge(pr=a);\n}",
         Severity::Warning,
         "unused parameter `b`",
     );
@@ -1318,8 +1334,8 @@ fn an_await_request_line_above_an_if_needs_an_empty_line_before_it() {
 
 #[test]
 fn await_of_a_function_with_its_arguments_is_clean() {
-    clean("/** F. */\nexport default async function f(\n  /** The PR. */\n  pr: string,\n) {\n  /** Merged? */\n  const ok: boolean = await @./merge(pr=pr);\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n");
-    clean("/** F. */\nexport default async function f() {\n  /** Done? */\n  const ok: boolean = await @./other;\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n");
+    clean("import { merge } from \"./merge\";\n\n/** F. */\nexport default async function f(\n  /** The PR. */\n  pr: string,\n) {\n  /** Merged? */\n  const ok: boolean = await merge(pr=pr);\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n");
+    clean("import { other } from \"./other\";\n\n/** F. */\nexport default async function f() {\n  /** Done? */\n  const ok: boolean = await other;\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n");
 }
 
 #[test]
@@ -1337,7 +1353,7 @@ fn await_reports_each_error_of_a_call_with_return() {
     for (line, part) in cases {
         expect_diag(&src(line), Severity::Error, part);
     }
-    let sync = "/** F. */\nexport default function f() {\n  /** Done? */\n  const ok: boolean = await @./other;\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n";
+    let sync = "import { other } from \"./other\";\n\n/** F. */\nexport default function f() {\n  /** Done? */\n  const ok: boolean = await other;\n\n  if (ok) {\n    return `yes`;\n  }\n\n  return `no`;\n}\n";
     expect_diag(sync, Severity::Error, "`await` needs `export default async function`");
 }
 
@@ -1354,7 +1370,7 @@ fn a_literal_of_the_right_type_is_a_typed_argument() {
 
 #[test]
 fn a_bare_hand_off_back_to_a_function_with_a_boolean_is_a_missing_typed_argument() {
-    let src = "/** F. */\nexport default function f() {\n  return @./typed;\n}\n";
+    let src = "import { typed } from \"./typed\";\n\n/** F. */\nexport default function f() {\n  return typed;\n}\n";
     let diags = check_src(src);
     assert!(
         diags.iter().any(|d| d.severity == MISSING_TYPED_ARG && d.message.contains("`@./typed` takes 1 argument, got 0; pass `ok`")),
