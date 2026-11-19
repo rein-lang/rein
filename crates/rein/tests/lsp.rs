@@ -599,6 +599,126 @@ fn reference_completion_replaces_the_whole_token() {
 }
 
 #[test]
+fn a_deprecated_reference_is_tagged_with_its_code_and_docs_link() {
+    let root = temp_project("deprecated-tag");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, START);
+    let diags = server.wait_diagnostics(&start, |d| has_message(d, "is deprecated"));
+    let diag = diags.iter().find(|d| d["code"] == "deprecated-reference").unwrap();
+    assert_eq!(diag["tags"], json!([2]), "{diag}");
+    assert_eq!(diag["codeDescription"]["href"], "https://rein-lang.com/docs/reference/roadmap", "{diag}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn hover_on_a_deprecated_reference_says_when_it_is_removed() {
+    let root = temp_project("deprecated-hover");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // Line 2 is `  return @./target;`. Column 10 is inside the reference.
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, START);
+    let hover = server.request(
+        2,
+        "textDocument/hover",
+        json!({"textDocument": {"uri": start}, "position": {"line": 2, "character": 10}}),
+    );
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("is deprecated"), "{text}");
+    assert!(text.contains("becomes an error on 2026-12-19"), "{text}");
+    assert!(text.contains("import { target } from \"./target\""), "{text}");
+    assert!(text.contains("Target function does X"), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn hover_on_a_default_import_says_when_it_is_removed() {
+    let root = temp_project("deprecated-default");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let uses = uri_of(&root, "uses.rein");
+    server.open(
+        &uses,
+        "import target from \"./target\";\n\n/** Uses. */\nexport default function uses() {\n  return `x`;\n}\n",
+    );
+    let hover = server.request(
+        2,
+        "textDocument/hover",
+        json!({"textDocument": {"uri": uses}, "position": {"line": 0, "character": 8}}),
+    );
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("default imports are deprecated"), "{text}");
+    assert!(text.contains("become an error on 2026-12-19"), "{text}");
+    assert!(text.contains("import { target } from \"./target\""), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn import_completion_offers_the_declared_name_between_the_braces() {
+    let root = temp_project("import-name");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(
+        &start,
+        "import {  } from \"./target\";\n\n/** Start. */\nexport default function start() {\n  return `x`;\n}\n",
+    );
+    // Line 0, column 9 is between the braces.
+    let items = server.request(
+        2,
+        "textDocument/completion",
+        json!({"textDocument": {"uri": start}, "position": {"line": 0, "character": 9}}),
+    );
+    assert_eq!(labels(&items), ["target"], "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn import_completion_offers_project_paths_after_from() {
+    let root = temp_project("import-path");
+    fs::create_dir_all(root.join("ci")).unwrap();
+    fs::write(root.join("ci/fix.rein"), "/** Fix. */\nexport default function fix() {\n  return `f`;\n}\n").unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(
+        &start,
+        "import { target } from \"./\";\n\n/** Start. */\nexport default function start() {\n  return `x`;\n}\n",
+    );
+    // The path starts at column 24, after the quote. Column 26 is after `./`.
+    let items = server.request(
+        2,
+        "textDocument/completion",
+        json!({"textDocument": {"uri": start}, "position": {"line": 0, "character": 26}}),
+    );
+    let got = labels(&items);
+    assert!(got.contains(&"./target".to_string()), "{items}");
+    assert!(got.contains(&"./ci/fix".to_string()), "{items}");
+    assert!(!got.contains(&"./start".to_string()), "{items}");
+    let edit = &items["result"][0]["textEdit"];
+    assert_eq!(edit["range"]["start"]["character"], 24, "{items}");
+    assert_eq!(edit["range"]["end"]["character"], 26, "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn hover_and_completion_know_the_std_library() {
     let root = temp_project("std");
     let mut server = Server::start();

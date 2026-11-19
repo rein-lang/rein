@@ -2,8 +2,9 @@
 
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Range, TextDocumentPositionParams};
 use rein_core::ast::{Binding, Function, Input};
-use rein_core::project::Project;
+use rein_core::project::{Project, SourceFile};
 
+use super::deprecation_hover;
 use super::occurrences::{declaration, symbol_at, Symbol};
 use super::structs::{struct_decl, struct_markdown};
 use super::text::{offset, range, token_at};
@@ -14,29 +15,40 @@ pub fn hover(state: &State, p: &TextDocumentPositionParams) -> Option<Hover> {
     let (project, name) = locate(&state.docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
     let off = offset(&sf.text, p.position);
-    let Some((symbol, span)) = symbol_at(&project, &name, off) else {
+    let note = deprecation_hover::note(&project, &name, off);
+    let target = target_markdown(&project, &name, sf, off);
+    match (note, target) {
+        (None, target) => target.map(|(value, range)| markdown(value, range)),
+        (Some((note, span)), None) => Some(markdown(note, Some(range(&sf.text, span)))),
+        (Some((note, _)), Some((value, range))) => Some(markdown(format!("{note}\n\n---\n\n{value}"), range)),
+    }
+}
+
+/// The markdown of what is under `off`, with its range. `None` when there is nothing to show.
+fn target_markdown(project: &Project, name: &str, sf: &SourceFile, off: usize) -> Option<(String, Option<Range>)> {
+    let Some((symbol, span)) = symbol_at(project, name, off) else {
         // A file with a syntax error has a partial tree. Fall back to the name under the cursor.
         let token = token_at(&sf.text, off)?;
         let value = match sf.function.input(token).or_else(|| sf.function.response(token)) {
             Some(input) => param_markdown(input),
             None => std_markdown(token)?,
         };
-        return Some(markdown(value, None));
+        return Some((value, None));
     };
     let value = match symbol {
         Symbol::Function(target) => {
             let doc = function_markdown(&target, &project.get(&target)?.function);
             match target.strip_prefix('@').and_then(|t| t.split_once('/')) {
-                Some((program, _)) => format!("{}\n\n---\n\n{doc}", program_markdown(&project, program)?),
+                Some((program, _)) => format!("{}\n\n---\n\n{doc}", program_markdown(project, program)?),
                 None => doc,
             }
         }
         Symbol::Param { function, name: n } => param_markdown(declaration(&project.get(&function)?.function, &n)?),
-        Symbol::Struct { file, name: n } => struct_markdown(struct_decl(&project, &file, &n)?),
-        Symbol::Field { file, strukt, name: n } => param_markdown(struct_decl(&project, &file, &strukt)?.field(&n)?),
+        Symbol::Struct { file, name: n } => struct_markdown(struct_decl(project, &file, &n)?),
+        Symbol::Field { file, strukt, name: n } => param_markdown(struct_decl(project, &file, &strukt)?.field(&n)?),
         Symbol::Std(n) => std_markdown(&n)?,
     };
-    Some(markdown(value, Some(range(&sf.text, span))))
+    Some((value, Some(range(&sf.text, span))))
 }
 
 fn markdown(value: String, range: Option<Range>) -> Hover {
