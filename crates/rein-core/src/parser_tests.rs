@@ -172,13 +172,9 @@ fn return_without_value_is_one_error_with_partial_tree() {
 }
 
 #[test]
-fn imports_are_not_in_rein() {
-    let msg =
-        one_error("import a from \"./a\";\n/** d */\nexport default function f() { return @./a }");
-    assert_eq!(
-        msg,
-        "Rein has no imports; reference functions with `@./path` and use std functions directly"
-    );
+fn default_import_parses_and_its_name_is_a_reference() {
+    let f = ok("import a from \"./a\";\n/** d */\nexport default function f() { return a }");
+    assert_eq!(f.imports.len(), 1);
 }
 
 #[test]

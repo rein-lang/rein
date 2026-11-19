@@ -36,6 +36,8 @@ pub enum Tok {
     Semi,
     Pipe,
     Bang,
+    /// A single `*`. Rein has no multiplication; the lexer reads it so `import *` gets its own message.
+    Star,
     /// A single `=`. Rein has no assignment, but the lexer reads it so `const x = 1` gets its own message.
     Assign,
     AndAnd,
@@ -90,6 +92,7 @@ impl Tok {
             Tok::Semi => ";",
             Tok::Pipe => "|",
             Tok::Bang => "!",
+            Tok::Star => "*",
             Tok::Assign => "=",
             Tok::AndAnd => "&&",
             Tok::OrOr => "||",
@@ -394,6 +397,7 @@ fn lex_punct(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
         '!' if rest.starts_with("!==") => (Tok::NotEqEq, 3),
         '!' if rest.starts_with("!=") => (Tok::NotEqEq, 2),
         '!' => (Tok::Bang, 1),
+        '*' => (Tok::Star, 1),
         '/' if rest.starts_with("/*") => {
             return Err(Diagnostic::error(
                 Span::new(pos, pos + 2),
