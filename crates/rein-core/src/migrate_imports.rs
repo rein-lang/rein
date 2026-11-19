@@ -55,7 +55,8 @@ fn migrate_selected(project: &Project, from: &str, src: &str, only: Option<Span>
     let own = parser::parse(src).0;
     let mut taken: BTreeSet<String> = stdlib::names().into_iter().map(String::from).collect();
     taken.extend(own.name.iter().map(|n| n.value.clone()));
-    taken.extend(own.structs.iter().map(|s| s.name.value.clone()));
+    let own_declared: BTreeSet<String> = imports::own_names(&own).into_iter().map(|(name, _)| name).collect();
+    taken.extend(own_declared.iter().cloned());
     taken.extend(existing.iter().map(|(i, _)| i.local.value.clone()));
 
     let mut warnings = Vec::new();
@@ -80,6 +81,15 @@ fn migrate_selected(project: &Project, from: &str, src: &str, only: Option<Span>
             }
         };
         let old = import.local.value.clone();
+        if old == target.declared && own_declared.contains(&target.declared) {
+            // The default name is a parameter, field, const or struct here, and its uses cannot be told apart.
+            let message = format!(
+                "`{}` is not migrated: `{old}` is also a parameter, field, const or struct of this file",
+                import.path.value
+            );
+            warnings.push(Diagnostic::warning(import.path.span, message));
+            continue;
+        }
         if let Some(local) = chosen.get(&target.key).cloned() {
             // The file already names this target: the default line goes, and its uses take that name.
             edits.push((*stmt, String::new()));
