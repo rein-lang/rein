@@ -219,7 +219,7 @@ fn eval_refuses_function_with_errors() {
 #[test]
 fn undocumented_function_does_not_run() {
     let root = temp_dir("nodoc");
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./bare;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "import { bare } from \"./bare\";\n\n/** Entry. */\nexport default function main() {\n  return bare;\n}\n").unwrap();
     fs::write(root.join("bare.rein"), "// A line comment is not a doc comment.\nexport default function bare() {\n  return `x`;\n}\n").unwrap();
     let message = "missing doc comment on `bare`; put /** description */ right before `export default function`";
 
@@ -476,7 +476,7 @@ fn docs_cli_names_every_subcommand_and_stays_hidden() {
 #[test]
 fn named_arguments_bind_in_any_order() {
     let root = temp_dir("named");
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./greet(name=`world`, greeting=`Hello`);\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "import { greet } from \"./greet\";\n\n/** Entry. */\nexport default function main() {\n  return greet(name=`world`, greeting=`Hello`);\n}\n").unwrap();
     fs::write(root.join("greet.rein"), GREET).unwrap();
 
     let out = rein(&["eval", "main", "--root", root.to_str().unwrap()]);

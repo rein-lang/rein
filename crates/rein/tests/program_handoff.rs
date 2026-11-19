@@ -24,21 +24,24 @@ fn program(home: &Path, name: &str, main: &str) {
 
 const TARGET: &str = "interface Input {\n  /** The PR link. */\n  pr: string;\n  /** Is it a draft? */\n  draft: boolean;\n}\n/** Handle a PR. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Skip ${pr}.`;\n  }\n  return `Handle ${pr}.`;\n}\n";
 
-fn caller(call: &str) -> String {
-    format!("/** Handler. */\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {{\n  return {call};\n}}\n")
+/// The named import of the `pr-handling` program's entry.
+const IMPORT_PR: &str = "import { main as prHandling } from \"pr-handling\";\n\n";
+
+fn caller(import: &str, call: &str) -> String {
+    format!("{import}/** Handler. */\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {{\n  return {call};\n}}\n")
 }
 
-fn sandbox(tag: &str, call: &str) -> PathBuf {
+fn sandbox(tag: &str, import: &str, call: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!("rein-handoff-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     program(&home, "pr-handling", TARGET);
-    program(&home, "handler", &caller(call));
+    program(&home, "handler", &caller(import, call));
     home
 }
 
 #[test]
 fn check_step_and_graph_follow_a_program_hand_off() {
-    let home = sandbox("ok", "@pr-handling/main(pr=pr)");
+    let home = sandbox("ok", IMPORT_PR, "prHandling(pr=pr)");
     let handler = home.join("handler");
     let out = rein(&home, &["check", handler.to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -59,7 +62,7 @@ fn check_step_and_graph_follow_a_program_hand_off() {
 
 #[test]
 fn check_rejects_an_unknown_program() {
-    let home = sandbox("unknown", "@pr-handlng/main(pr=pr)");
+    let home = sandbox("unknown", "", "@pr-handlng/main(pr=pr)");
     let out = rein(&home, &["check", home.join("handler").to_str().unwrap()]);
     assert!(!out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
@@ -72,7 +75,7 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     let home = std::env::temp_dir().join(format!("rein-handoff-struct-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     program(&home, "pr-handling", TARGET);
-    program(&home, "picker", "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n}\n/** Picks a PR. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`Pick the next pull request notification.`);\n  return @pr-handling/main(pr=pick.pr);\n}\n");
+    program(&home, "picker", "import { main as prHandling } from \"pr-handling\";\n\ninterface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n}\n/** Picks a PR. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`Pick the next pull request notification.`);\n  return prHandling(pr=pick.pr);\n}\n");
     let out = rein(&home, &["check", home.join("picker").to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 
@@ -173,7 +176,7 @@ fn first_step_names_a_program_missing_from_the_entry() {
 
 #[test]
 fn a_package_reaches_only_the_programs_its_package_json_declares() {
-    let home = sandbox("deps", "@pr-handling/main(pr=pr)");
+    let home = sandbox("deps", IMPORT_PR, "prHandling(pr=pr)");
     let handler = home.join("handler");
     fs::write(handler.join("package.json"), r#"{"name": "handler"}"#).unwrap();
     let out = rein(&home, &["check", handler.to_str().unwrap()]);
@@ -190,7 +193,7 @@ fn a_package_reaches_only_the_programs_its_package_json_declares() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 }
 
-const AWAITER: &str = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR handled? */\n  const handled: boolean = await @pr-handling/main(pr=pr);\n\n  if (handled) {\n    return `Report ${pr} as handled.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
+const AWAITER: &str = "import { main as prHandling } from \"pr-handling\";\n\n/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR handled? */\n  const handled: boolean = await prHandling(pr=pr);\n\n  if (handled) {\n    return `Report ${pr} as handled.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
 
 #[test]
 fn await_of_a_program_follows_the_dependency_rule_and_returns_its_result() {
