@@ -32,8 +32,9 @@ pub fn check(project: &Project, from: &str, f: &Function) -> Vec<Diagnostic> {
     out
 }
 
-/// An error when the local name of `import` is a parameter, a field, a `const` or a struct of the same file. Both
-/// names then read the same, so the message gives an alias.
+/// A warning when the local name of `import` is a parameter, a field, a `const` or a struct of the same file. Both
+/// names then read the same, so the message gives an alias. It is a warning in rein 0.1.x, so installed programs
+/// keep working in a patch release.
 fn shadowed(import: &Import, own: &[(String, &str)]) -> Option<Diagnostic> {
     let local = &import.local.value;
     let (_, kind) = own.iter().find(|(name, _)| name == local)?;
@@ -41,9 +42,9 @@ fn shadowed(import: &Import, own: &[(String, &str)]) -> Option<Diagnostic> {
     let alias = open_name(local);
     let path = &import.path.value;
     let message = format!(
-        "import `{local}` clashes with the {kind} `{local}`; give the import another name, like `import {{ {declared} as {alias} }} from \"{path}\"`"
+        "import `{local}` clashes with the {kind} `{local}`; give the import another name, like `import {{ {declared} as {alias} }} from \"{path}\"`; this becomes an error in rein 0.2.0"
     );
-    Some(Diagnostic::error(import.local.span, message))
+    Some(Diagnostic::warning(import.local.span, message))
 }
 
 /// `open` followed by `name` with its first letter capitalized, such as `openReview` for `review`.

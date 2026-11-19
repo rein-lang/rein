@@ -242,7 +242,7 @@ fn a_migrated_destructured_field_clash_passes_the_import_check() {
     let checked = project(&out.text, &others).check();
     let errors: Vec<_> = checked["main"]
         .iter()
-        .filter(|d| d.severity == crate::diagnostic::Severity::Error)
+        .filter(|d| d.severity == crate::diagnostic::Severity::Error || d.message.contains("clashes"))
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
 }
