@@ -1,5 +1,5 @@
-//! Runs the built `rein migrate imports` on copies of the examples. The migrated project must check the same as before,
-//! run the same steps, and a second run must change nothing.
+//! Runs the built `rein migrate imports` on copies of the examples and on an inline project with `@` references. The
+//! migrated project must check the same as before, run the same steps, and a second run must change nothing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,14 +7,6 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-
-const EXAMPLES: [&str; 5] = [
-    "merge-pr",
-    "incident-triage",
-    "support-ticket",
-    "pr-handling",
-    "priority-work",
-];
 
 fn examples_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -65,6 +57,28 @@ fn copy_example(name: &str, tag: &str) -> PathBuf {
     let dir = temp_dir(tag);
     let root = dir.join(name);
     copy_tree(&examples_root().join(name), &root);
+    root
+}
+
+/// A project with `@` references, written inline into a fresh temp folder that the test removes. Its root is returned.
+fn at_project(tag: &str) -> PathBuf {
+    let root = temp_dir(tag).join("project");
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::write(
+        root.join("main.rein"),
+        "/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return @./fix(pr=pr);\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("fix.rein"),
+        "/** Fix. */\nexport default function fix(\n  /** The link. */\n  pr: string,\n) {\n  return `fixed ${pr}`;\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("sub/next.rein"),
+        "/** Next. */\nexport default function next() {\n  return @../fix(pr=`x`);\n}\n",
+    )
+    .unwrap();
     root
 }
 
@@ -159,37 +173,31 @@ fn trace(root: &Path, inputs: &[&str]) -> Vec<String> {
 
 #[test]
 fn migrate_removes_every_at_reference_and_check_is_unchanged() {
-    for name in EXAMPLES {
-        let root = copy_example(name, "check");
-        let (before_code, before) = check_summary(&root);
-        assert_eq!(before_code, 0, "{name} before: {before}");
+    let root = at_project("check");
+    let (before_code, before) = check_summary(&root);
+    assert_eq!(before_code, 0, "before: {before}");
 
-        let out = migrate(&root, false);
-        assert_eq!(code(&out), 0, "{name}: {}", text(&out.stderr));
-        let last = text(&out.stdout).lines().last().unwrap_or_default().to_string();
-        assert!(last.ends_with("files changed"), "{name}: {last}");
+    let out = migrate(&root, false);
+    assert_eq!(code(&out), 0, "{}", text(&out.stderr));
+    let last = text(&out.stdout).lines().last().unwrap_or_default().to_string();
+    assert!(last.ends_with("files changed"), "{last}");
 
-        for (path, body) in rein_files(&root) {
-            assert!(!body.contains('@'), "{} still has `@`", path.display());
-        }
-        let (after_code, after) = check_summary(&root);
-        assert_eq!(after_code, 0, "{name} after: {after}");
-        assert_eq!(after, before, "{name}: the check summary changed");
-
-        let again = migrate(&root, false);
-        assert_eq!(
-            text(&again.stdout),
-            "0 files changed\n",
-            "{name}: second run must change nothing"
-        );
-        assert_eq!(code(&migrate(&root, true)), 0, "{name}: --check after migrate");
-        fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    for (path, body) in rein_files(&root) {
+        assert!(!body.contains('@'), "{} still has `@`", path.display());
     }
+    let (after_code, after) = check_summary(&root);
+    assert_eq!(after_code, 0, "after: {after}");
+    assert_eq!(after, before, "the check summary changed");
+
+    let again = migrate(&root, false);
+    assert_eq!(text(&again.stdout), "0 files changed\n", "second run must change nothing");
+    assert_eq!(code(&migrate(&root, true)), 0, "--check after migrate");
+    fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
 #[test]
 fn check_lists_changed_files_and_exits_1_without_writing() {
-    let root = copy_example("support-ticket", "check-flag");
+    let root = at_project("check-flag");
     let before = rein_files(&root);
 
     let out = migrate(&root, true);

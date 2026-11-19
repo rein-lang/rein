@@ -1,11 +1,104 @@
 use super::*;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
-/// The `pr-handling` example, which asks for `main.draft`, `main.task` and then the `merge` questions.
+/// The `pr-handling` flow with its `@` references, written inline. It asks for `main.draft`, `main.task` and then the
+/// `merge` questions. The programs that `main` and `merge` call are stubs, because the tests stop at `main` and `merge`.
+const MAIN: &str = r#"interface Input {
+  /** The link of the pull request to handle. */
+  pr: string;
+  /** Is the pull request still a draft? */
+  draft: boolean;
+  /** Which task does the agent do on the pull request? */
+  task: "review" | "address comments" | "fix ci" | "merge";
+}
+
+/**
+ * Decide the next step for a pull request: review it, fix it, or merge it.
+ */
+export default function main({ pr, draft, task }: Input) {
+  if (draft) {
+    return `Stop. The pull request ${pr} is a draft. Wait until the author
+    marks it ready.`;
+  }
+
+  switch (task) {
+    case "review":
+      return @./review(pr=pr);
+    case "address comments":
+      return @./comments/address(pr=pr);
+    case "fix ci":
+      return @./ci/fix(pr=pr);
+    case "merge":
+      return @./merge(pr=pr);
+  }
+}
+"#;
+
+const MERGE: &str = r#"interface Input {
+  /** The link of the pull request to merge. */
+  pr: string;
+  /** What is the CI status of the PR? */
+  ci: "green" | "red" | "pending";
+  /** Does the PR conflict with its base branch? */
+  conflicts: boolean;
+  /** What is the review state of the PR? */
+  review: "approved" | "changes requested" | "no review";
+}
+
+/**
+ * Decide whether a pull request can merge now.
+ */
+export default function merge({ pr, ci, conflicts, review }: Input) {
+  switch (ci) {
+    case "red":
+      return @./ci/fix(pr=pr);
+    case "pending":
+      return `Wait for CI to finish on ${pr}. Then start this program again.`;
+    case "green":
+      if (conflicts) {
+        return `Rebase ${pr} on its base. Push. Then start this program again.`;
+      }
+
+      switch (review) {
+        case "approved":
+          return `Merge the pull request ${pr}. Then delete its branch.`;
+        case "changes requested":
+          return @./comments/address(pr=pr);
+        case "no review":
+          return @./review(pr=pr);
+      }
+  }
+}
+"#;
+
+/// The folder with the inline flow, written once for all tests in this process.
+fn fixture() -> &'static PathBuf {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = std::env::temp_dir().join(format!("rein-dap-flow-{}", std::process::id()));
+        let write = |file: &str, text: &str| {
+            let path = root.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write("main.rein", MAIN);
+        write("merge.rein", MERGE);
+        write("rein.json", "{\n  \"entry\": \"main.rein\"\n}\n");
+        for file in ["review", "comments/address", "ci/fix"] {
+            let name = file.rsplit('/').next().unwrap();
+            write(
+                &format!("{file}.rein"),
+                &format!("/** Stub. */\nexport default function {name}(\n  /** The link. */\n  pr: string,\n) {{\n  return `done ${{pr}}`;\n}}\n"),
+            );
+        }
+        root
+    })
+}
+
+/// The path of `file` in the inline `pr-handling` flow.
 fn example(file: &str) -> String {
-    format!(
-        "{}/../../examples/rein/pr-handling/{file}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    fixture().join(file).display().to_string()
 }
 
 /// The 1-based line of the first line of `file` that contains `needle`.
@@ -201,7 +294,7 @@ fn stack_trace_has_a_frame_per_function_with_its_lines() {
     assert!(frames[0]["source"]["path"]
         .as_str()
         .unwrap()
-        .ends_with("pr-handling/merge.rein"));
+        .ends_with("/merge.rein"));
 }
 
 #[test]
