@@ -1088,9 +1088,158 @@ fn hover_and_completion_know_the_std_library() {
     fs::remove_dir_all(&root).unwrap();
 }
 
-/// The real example program `examples/rein/<name>`, as a canonical path.
-fn example(name: &str) -> PathBuf {
-    fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rein").join(name)).unwrap()
+/// The `support-ticket` program with its `@` references, as it was before named imports.
+const SUPPORT_TICKET: &[(&str, &str)] = &[
+    ("rein.json", r#"{
+  "entry": "main.rein"
+}
+"#),
+    ("package.json", r#"{
+  "name": "support-ticket",
+  "version": "0.1.0",
+  "description": "Decide how the support agent handles a customer ticket.",
+  "license": "MIT",
+  "private": true,
+  "files": ["**/*.rein", "README.md", "rein.json"],
+  "engines": {
+    "rein": "^0.1.0"
+  }
+}
+"#),
+    ("main.rein", r#"interface Ticket {
+  /** What category best fits the ticket? */
+  category: "billing" | "account" | "how_to";
+  /** Is the customer on the VIP plan? */
+  vip: boolean;
+}
+
+/**
+ * Decide how the support agent handles a customer ticket.
+ */
+export default function main({ category, vip }: Ticket) {
+  if (vip) {
+    return @./escalate;
+  }
+
+  switch (category) {
+    case "billing":
+      return @./refund;
+    case "account":
+      return @./escalate;
+    case "how_to":
+      return @./faq;
+  }
+}
+"#),
+    ("escalate.rein", r#"/**
+ * Hand the ticket to a human support engineer.
+ */
+export default function escalate() {
+  return `Assign the ticket to the tier 2 queue. Tell the customer a person
+  will reply within one business day. Do not promise a refund or a fix.`;
+}
+"#),
+    ("faq.rein", r#"/**
+ * Answer a how-to question from the help center.
+ */
+export default async function answerFaq(
+  /** Did you find a help article that answers the question? */
+  article_found: boolean,
+) {
+  if (!article_found) {
+    return @./escalate;
+  }
+
+  /** Did the customer confirm the article solved the problem? */
+  const solved: boolean = await request(
+    `Reply with the help article link and ask the customer if it solved the
+    problem.`,
+  );
+
+  if (solved) {
+    return @./faq/close_ticket(
+      opening=`Glad the help article solved the problem.`,
+      next_step=`Reply to this ticket if it comes back.`,
+    );
+  }
+
+  return @./escalate;
+}
+"#),
+    ("faq/close_ticket.rein", r#"/**
+ * Send the customer a last message, then close the ticket.
+ */
+export default function closeTicket({ opening, next_step }: @../message) {
+  return `Tell the customer: ${opening} ${next_step} Then close the ticket as
+  solved.`;
+}
+"#),
+    ("message.struct.rein", r#"/**
+ * One sentence for the customer: what happened, then what comes next.
+ */
+export default interface Message {
+  /** The first part of the sentence, such as the action taken. */
+  opening: string;
+  /** The next step the customer can expect. */
+  next_step: string;
+}
+"#),
+    ("refund.rein", r#"/**
+ * Process a refund request from a billing ticket.
+ */
+export default function refund(
+  /** Is the requested refund above the agent's limit? */
+  refund_over_limit: boolean,
+) {
+  if (refund_over_limit) {
+    return @./escalate;
+  }
+
+  return @./refund/tell_customer(
+    opening=`Refund the amount the customer asked for and confirm it in the
+    ticket.`,
+    next_step=`Then tell the customer the refund takes 5 business days.`,
+  );
+}
+"#),
+    ("refund/tell_customer.rein", r#"/**
+ * Tell the customer what happens next, in one sentence.
+ */
+export default function tellCustomer({ opening, next_step }: @../message) {
+  return `${opening} ${next_step}`;
+}
+"#),
+];
+
+/// A second program with no `@` references, for the workspace symbol search.
+const PING: &[(&str, &str)] = &[
+    ("package.json", "{\n  \"name\": \"ping\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n"),
+    ("rein.json", "{\n  \"entry\": \"main.rein\"\n}\n"),
+    ("main.rein", "/** Ping the service. */\nexport default function ping() {\n  return `pong`;\n}\n"),
+];
+
+/// A new empty directory named after `tag`. Returns its canonical path.
+fn fresh_dir(tag: &str) -> PathBuf {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::canonicalize(root).unwrap()
+}
+
+/// Writes each `(path, text)` of `files` under `dir`.
+fn write_files(dir: &Path, files: &[(&str, &str)]) {
+    for (file, text) in files {
+        let path = dir.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+}
+
+/// A fresh copy of the support-ticket program. Returns its canonical root.
+fn support_ticket_project(tag: &str) -> PathBuf {
+    let root = fresh_dir(tag);
+    write_files(&root, SUPPORT_TICKET);
+    root
 }
 
 /// Opens `file` of the project at `root` with its text on disk. Returns its URI.
@@ -1131,7 +1280,7 @@ fn at(uri: &str, line: u64, character: u64) -> Value {
     json!({"textDocument": {"uri": uri}, "position": {"line": line, "character": character}})
 }
 
-/// Every `@./escalate` in examples/rein/support-ticket.
+/// Every `@./escalate` in the support-ticket program.
 fn escalate_calls() -> Vec<Spot> {
     vec![
         spot("faq.rein", 8, 11, 8, 22),
@@ -1144,7 +1293,7 @@ fn escalate_calls() -> Vec<Spot> {
 
 #[test]
 fn references_list_every_call_of_a_function() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("references_list_every_call_of_a_function");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -1168,11 +1317,12 @@ fn references_list_every_call_of_a_function() {
     assert_eq!(spots(&root, &refs["result"]), expected, "{refs}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn references_of_a_parameter_include_named_arguments() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("references_of_a_parameter_include_named_arguments");
     let mut server = Server::start();
     initialize(&mut server);
     let refund = open_file(&mut server, &root, "refund.rein");
@@ -1196,11 +1346,12 @@ fn references_of_a_parameter_include_named_arguments() {
     );
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn code_lens_counts_references_and_carries_them() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("code_lens_counts_references_and_carries_them");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -1222,11 +1373,12 @@ fn code_lens_counts_references_and_carries_them() {
     assert_eq!(lenses["result"][0]["command"]["title"], "0 references", "{lenses}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn definition_goes_to_functions_parameters_and_std() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("definition_goes_to_functions_parameters_and_std");
     let mut server = Server::start();
     initialize(&mut server);
     let refund = open_file(&mut server, &root, "refund.rein");
@@ -1255,12 +1407,13 @@ fn definition_goes_to_functions_parameters_and_std() {
     assert!(def["result"].is_null(), "{def}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
     fs::remove_dir_all(&tmp).unwrap();
 }
 
 #[test]
 fn hover_shows_function_docs_and_callee_parameters() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("hover_shows_function_docs_and_callee_parameters");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -1279,6 +1432,7 @@ fn hover_shows_function_docs_and_callee_parameters() {
     assert!(text.contains("The first part of the sentence, such as the action taken."), "{text}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The names and reference spans of call hierarchy calls, under key `item` ("from" or "to").
@@ -1298,7 +1452,7 @@ fn calls_of(root: &Path, result: &Value, item: &str) -> Vec<(String, Vec<Spot>)>
 
 #[test]
 fn call_hierarchy_lists_incoming_and_outgoing_calls() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("call_hierarchy_lists_incoming_and_outgoing_calls");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -1331,11 +1485,12 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     assert_eq!(ranges[1], json!({"start": {"line": 19, "character": 13}, "end": {"line": 19, "character": 24}}));
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn document_symbols_outline_the_function_and_its_names() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("document_symbols_outline_the_function_and_its_names");
     let mut server = Server::start();
     initialize(&mut server);
     let faq = open_file(&mut server, &root, "faq.rein");
@@ -1363,11 +1518,16 @@ fn document_symbols_outline_the_function_and_its_names() {
     );
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn workspace_symbols_search_every_program() {
-    let examples = example("");
+    // Two programs in one workspace folder: `support-ticket` and `ping`.
+    let examples = fresh_dir("workspace_symbols_search_every_program");
+    write_files(&examples.join("support-ticket"), SUPPORT_TICKET);
+    write_files(&examples.join("ping"), PING);
+    let root = examples.join("support-ticket");
     let mut server = Server::start();
     let folders = json!([{"uri": format!("file://{}", examples.display()), "name": "examples"}]);
     let init = server.request(1, "initialize", json!({"capabilities": {}, "processId": null, "workspaceFolders": folders}));
@@ -1380,21 +1540,21 @@ fn workspace_symbols_search_every_program() {
     assert_eq!(found.len(), 2, "{found:?}");
     let refund = found.iter().find(|s| s["name"] == "refund").expect("refund symbol");
     assert_eq!(refund["containerName"], "support-ticket");
-    let root = example("support-ticket");
     assert_eq!(spot_of(&root, &refund["location"]), spot("refund.rein", 3, 24, 3, 30));
     let tell = found.iter().find(|s| s["name"] == "refund/tell_customer").expect("tell_customer symbol");
     assert_eq!(spot_of(&root, &tell["location"]), spot("refund/tell_customer.rein", 3, 24, 3, 36));
 
-    // An empty query lists every function of the five example programs.
+    // An empty query lists every function of both programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
-    assert_eq!(all_symbols.len(), 26, "{all}");
+    assert_eq!(all_symbols.len(), 8, "{all}");
     assert!(
         all_symbols.iter().any(|s| s["name"] == "message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"
     );
 
     server.shutdown();
+    fs::remove_dir_all(&examples).unwrap();
 }
 
 /// Starts a server whose client can rename files in a workspace edit.
@@ -1431,7 +1591,7 @@ fn edits_of(root: &Path, edit: &Value) -> EditSummary {
 
 #[test]
 fn rename_a_parameter_updates_named_arguments() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("rename_a_parameter_updates_named_arguments");
     let mut server = start_with_file_renames();
     let refund = open_file(&mut server, &root, "refund.rein");
 
@@ -1467,11 +1627,12 @@ fn rename_a_parameter_updates_named_arguments() {
     assert_eq!(failed["error"]["code"], -32803, "{failed}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn rename_a_function_renames_its_file_and_references() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("rename_a_function_renames_its_file_and_references");
     let mut server = start_with_file_renames();
     let main = open_file(&mut server, &root, "main.rein");
 
@@ -1504,6 +1665,7 @@ fn rename_a_function_renames_its_file_and_references() {
     assert_eq!(changes.last().unwrap()["kind"], "rename");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -1950,7 +2112,7 @@ fn rename_moves_the_editor_leftovers_of_the_folder_with_it() {
 
 #[test]
 fn rename_a_function_needs_a_client_that_renames_files() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("rename_a_function_needs_a_client_that_renames_files");
     let mut server = Server::start();
     initialize(&mut server);
     let main = open_file(&mut server, &root, "main.rein");
@@ -1961,6 +2123,7 @@ fn rename_a_function_needs_a_client_that_renames_files() {
     assert_eq!(failed["error"]["message"], "this editor cannot rename files, so a function cannot be renamed", "{failed}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The labels of a completion list.
@@ -1974,7 +2137,7 @@ const PARTIAL_CALL: &str =
 
 #[test]
 fn completion_offers_argument_names_and_union_members() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("completion_offers_argument_names_and_union_members");
     let mut server = Server::start();
     initialize(&mut server);
 
@@ -2005,6 +2168,7 @@ fn completion_offers_argument_names_and_union_members() {
     assert_eq!(items["result"][0]["textEdit"]["range"], range);
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
     fs::remove_dir_all(&tmp).unwrap();
 }
 
@@ -2044,7 +2208,7 @@ fn double_equals_has_no_diagnostic_and_completes_members() {
 
 #[test]
 fn signature_help_shows_the_callee_parameters() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("signature_help_shows_the_callee_parameters");
     let mut server = Server::start();
     initialize(&mut server);
     let partial = uri_of(&root, "partial.rein");
@@ -2063,6 +2227,7 @@ fn signature_help_shows_the_callee_parameters() {
     assert_eq!(help["result"]["activeParameter"], 0, "{help}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The quick fix for the first diagnostic of `uri` that contains `part`: its title and its one edit.
@@ -2236,7 +2401,7 @@ fn quick_fix_moves_the_folder_of_nested_functions_with_the_file() {
 
 #[test]
 fn structs_hover_define_reference_rename_and_list() {
-    // Canonical, like `example()`: the server reports renamed files under the canonical path.
+    // Canonical, like `fresh_dir()`: the server reports renamed files under the canonical path.
     let root = fs::canonicalize(temp_project("structs")).unwrap();
     let ticket_text = "/** A support ticket. */\nexport default interface Ticket {\n  /** The ticket title. */\n  title: string;\n  /** Is the customer a VIP? */\n  vip: boolean;\n}\n";
     let a_text = "/** A. */\nexport default function a({ title, vip }: @./ticket) {\n  if (vip) {\n    return `VIP: ${title}`;\n  }\n  return `Answer ${title}`;\n}\n";
