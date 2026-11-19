@@ -718,6 +718,222 @@ fn definition_of_a_named_import_goes_to_its_function() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+const TARGET_SRC: &str = "/** Target function does X. */\nexport default function target() {\n  return `done`;\n}\n";
+const START_NAMED: &str = "import { target } from \"./target\";\n\n/** Start. */\nexport default function start() {\n  return target;\n}\n";
+const ALIAS_NAMED: &str = "import { target as t } from \"./target\";\n\n/** Alias. */\nexport default function alias() {\n  return t;\n}\n";
+
+/// A project with `target.rein` and each of `files`. Returns its canonical root.
+fn import_project(tag: &str, files: &[(&str, &str)]) -> PathBuf {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("target.rein"), TARGET_SRC).unwrap();
+    for (file, text) in files {
+        fs::write(root.join(file), text).unwrap();
+    }
+    fs::canonicalize(root).unwrap()
+}
+
+#[test]
+fn references_of_an_import_name_stay_in_its_file_and_include_the_declaration() {
+    let root = import_project("import-refs", &[("start.rein", START_NAMED)]);
+    let mut server = Server::start();
+    initialize(&mut server);
+    let start = open_file(&mut server, &root, "start.rein");
+
+    // On the name in the import line, and on a use of it in the body.
+    for (id, line, character) in [(2, 0, 9), (3, 4, 9)] {
+        let mut params = at(&start, line, character);
+        params["context"] = json!({"includeDeclaration": false});
+        let refs = server.request(id, "textDocument/references", params);
+        assert_eq!(spots(&root, &refs["result"]), vec![spot("start.rein", 0, 9, 0, 15), spot("start.rein", 4, 9, 4, 15)], "{refs}");
+    }
+
+    let mut params = at(&start, 0, 9);
+    params["context"] = json!({"includeDeclaration": true});
+    let refs = server.request(4, "textDocument/references", params);
+    let mut expected = vec![spot("start.rein", 0, 9, 0, 15), spot("start.rein", 4, 9, 4, 15), spot("target.rein", 1, 24, 1, 30)];
+    expected.sort();
+    assert_eq!(spots(&root, &refs["result"]), expected, "{refs}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn references_of_an_alias_stay_in_its_file() {
+    let root = import_project("alias-refs", &[("alias.rein", ALIAS_NAMED)]);
+    let mut server = Server::start();
+    initialize(&mut server);
+    let alias = open_file(&mut server, &root, "alias.rein");
+
+    for (id, line, character) in [(2, 0, 19), (3, 4, 9)] {
+        let mut params = at(&alias, line, character);
+        params["context"] = json!({"includeDeclaration": false});
+        let refs = server.request(id, "textDocument/references", params);
+        assert_eq!(spots(&root, &refs["result"]), vec![spot("alias.rein", 0, 19, 0, 20), spot("alias.rein", 4, 9, 4, 10)], "{refs}");
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn references_of_a_function_include_the_import_lines_and_uses_of_other_files() {
+    let root = import_project("import-of-refs", &[("start.rein", START_NAMED), ("alias.rein", ALIAS_NAMED)]);
+    let mut server = Server::start();
+    initialize(&mut server);
+    let target = open_file(&mut server, &root, "target.rein");
+
+    let mut params = at(&target, 1, 24);
+    params["context"] = json!({"includeDeclaration": false});
+    let refs = server.request(2, "textDocument/references", params);
+    assert_eq!(
+        spots(&root, &refs["result"]),
+        vec![
+            spot("alias.rein", 0, 9, 0, 15),
+            spot("alias.rein", 4, 9, 4, 10),
+            spot("start.rein", 0, 9, 0, 15),
+            spot("start.rein", 4, 9, 4, 15),
+        ],
+        "{refs}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_an_import_name_without_alias_adds_the_alias() {
+    let root = import_project("import-rename-plain", &[("start.rein", START_NAMED)]);
+    let mut server = start_with_file_renames();
+    let start = open_file(&mut server, &root, "start.rein");
+
+    let prepared = server.request(2, "textDocument/prepareRename", at(&start, 4, 9));
+    assert_eq!(prepared["result"]["placeholder"], "target", "{prepared}");
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 4, "character": 9}, "end": {"line": 4, "character": 15}}));
+
+    let mut params = at(&start, 0, 9);
+    params["newName"] = json!("t");
+    let edit = server.request(3, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("start.rein", 0, 9, 0, 15), "target as t".to_string()),
+                (spot("start.rein", 4, 9, 4, 15), "t".to_string()),
+            ],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_an_alias_changes_the_alias_and_drops_it_for_the_declared_name() {
+    let root = import_project("import-rename-alias", &[("alias.rein", ALIAS_NAMED)]);
+    let mut server = start_with_file_renames();
+    let alias = open_file(&mut server, &root, "alias.rein");
+
+    let mut params = at(&alias, 4, 9);
+    params["newName"] = json!("x");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![(spot("alias.rein", 0, 19, 0, 20), "x".to_string()), (spot("alias.rein", 4, 9, 4, 10), "x".to_string())],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    // The new name is the declared name, so `as` goes: from the end of `target` to the end of the alias.
+    let mut params = at(&alias, 4, 9);
+    params["newName"] = json!("target");
+    let edit = server.request(3, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![(spot("alias.rein", 0, 15, 0, 20), String::new()), (spot("alias.rein", 4, 9, 4, 10), "target".to_string())],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_an_import_name_refuses_a_clash_with_another_name() {
+    let clash = "import { target as t } from \"./target\";\nimport { target as u } from \"./target\";\n\n/** Clash. */\nexport default function clash() {\n  return t;\n}\n";
+    let root = import_project("import-rename-clash", &[("clash.rein", clash)]);
+    let mut server = start_with_file_renames();
+    let file = open_file(&mut server, &root, "clash.rein");
+
+    // Another import holds `u`, and `delegate` is a std name.
+    for (id, new) in [(2, "u"), (3, "delegate")] {
+        let mut params = at(&file, 5, 9);
+        params["newName"] = json!(new);
+        let failed = server.request(id, "textDocument/rename", params);
+        assert_eq!(failed["error"]["code"], -32803, "{failed}");
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_a_function_updates_the_import_lines_of_other_files() {
+    let root = import_project("import-move", &[("start.rein", START_NAMED), ("alias.rein", ALIAS_NAMED)]);
+    let mut server = start_with_file_renames();
+    let target = open_file(&mut server, &root, "target.rein");
+
+    let mut params = at(&target, 1, 24);
+    params["newName"] = json!("fixed");
+    let edit = server.request(2, "textDocument/rename", params);
+    let fixed = |s: Spot| (s, "fixed".to_string());
+    let path = |s: Spot| (s, "./fixed".to_string());
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                fixed(spot("alias.rein", 0, 9, 0, 15)),
+                path(spot("alias.rein", 0, 29, 0, 37)),
+                fixed(spot("start.rein", 0, 9, 0, 15)),
+                path(spot("start.rein", 0, 24, 0, 32)),
+                fixed(spot("start.rein", 4, 9, 4, 15)),
+                fixed(spot("target.rein", 1, 24, 1, 30)),
+            ],
+            vec![("target.rein".to_string(), "fixed.rein".to_string())]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_a_function_refuses_a_name_that_clashes_with_an_import_without_alias() {
+    let both = "import { target } from \"./target\";\nimport { target as t } from \"./target\";\n\n/** Both. */\nexport default function both() {\n  return target;\n}\n";
+    let root = import_project("import-move-clash", &[("both.rein", both)]);
+    let mut server = start_with_file_renames();
+    let target = open_file(&mut server, &root, "target.rein");
+
+    // The import without `as` would take the name `t`, which the other import holds.
+    let mut params = at(&target, 1, 24);
+    params["newName"] = json!("t");
+    let failed = server.request(2, "textDocument/rename", params);
+    assert_eq!(failed["error"]["code"], -32803, "{failed}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn a_deprecated_reference_is_tagged_with_its_code_and_docs_link() {
     let root = temp_project("deprecated-tag");

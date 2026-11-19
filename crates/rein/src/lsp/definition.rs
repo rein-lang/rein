@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use lsp_types::{Location, TextDocumentPositionParams, Url};
 
-use super::import_symbols::import_target;
 use super::occurrences::{declaration, header_span, name_span, symbol_at, Symbol};
 use super::structs::{field_span, struct_decl};
 use super::text::{offset, range};
@@ -16,13 +15,11 @@ use super::workspace::{canonical, locate, location, State};
 pub fn definition(state: &State, p: &TextDocumentPositionParams) -> Option<Location> {
     let (project, name) = locate(&state.docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
-    let off = offset(&sf.text, p.position);
-    if let Some((target, _)) = import_target(&project, &name, &sf.text, &sf.function, off) {
-        return location(&state.docs, &project, &target, header_span(&project, &target));
-    }
-    let (symbol, _) = symbol_at(&project, &name, off)?;
+    let (symbol, _) = symbol_at(&project, &name, offset(&sf.text, p.position))?;
     match symbol {
-        Symbol::Function(target) => location(&state.docs, &project, &target, header_span(&project, &target)),
+        Symbol::Function(target) | Symbol::ImportLocal { target, .. } => {
+            location(&state.docs, &project, &target, header_span(&project, &target))
+        }
         Symbol::Param { function, name: n } => {
             let input = declaration(&project.get(&function)?.function, &n)?;
             location(&state.docs, &project, &function, input.name.span)
