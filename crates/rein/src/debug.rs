@@ -6,7 +6,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
 use clap::Args;
-use rein_core::ast::{walk_stmts, Input, InputType, Stmt};
+use rein_core::ast::{walk_stmts, Input, Stmt};
 use rein_core::graph::{self, NodeKind};
 use rein_core::project::{Project, ENTRY};
 use rein_core::step::{invalid_request, step, type_of, StepRequest};
@@ -134,7 +134,7 @@ fn schema(project: &Project, entry: &str) -> Value {
         let texts: Vec<Value> =
             f.text_inputs().map(|i| json!({"name": i.name.value, "description": i.description.value})).collect();
         inputs.insert(name.clone(), json!(texts));
-        let mut asked: Vec<&Input> = f.inputs.iter().filter(|i| i.ty != InputType::Text).collect();
+        let mut asked: Vec<&Input> = f.inputs.iter().filter(|i| !i.ty.is_text()).collect();
         walk_stmts(&f.body, &mut |s| {
             if let Stmt::Request { response, .. } = s {
                 asked.push(response);

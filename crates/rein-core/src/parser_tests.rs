@@ -369,6 +369,12 @@ fn string_parameter_type_is_text() {
 }
 
 #[test]
+fn format_parameter_type_is_iri() {
+    let f = ok("/** d */\nexport default function f(\n  /** L */ link: IRI,\n) { return \"x\" }");
+    assert_eq!(f.inputs[0].ty, InputType::Format(crate::formats::Format::Iri));
+}
+
+#[test]
 fn request_const_parses_with_its_doc_and_type() {
     let f = ok(r#"/** d */
 export default async function f() {

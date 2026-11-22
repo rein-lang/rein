@@ -165,7 +165,16 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
 /// Each owner comes with the values passed to that visit, so a walk reads a passed `boolean` as `rein step` does.
 pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<(String, BTreeMap<String, String>)> {
     let inputs = project.get(entry).map_or_else(BTreeMap::new, |sf| {
-        sf.function.text_inputs().map(|i| (i.name.value.clone(), format!("<{}>", i.name.value))).collect()
+        sf.function
+            .text_inputs()
+            .map(|i| {
+                let value = match i.ty {
+                    InputType::Format(format) => format.placeholder(&i.name.value),
+                    _ => format!("<{}>", i.name.value),
+                };
+                (i.name.value.clone(), value)
+            })
+            .collect()
     });
     let req = StepRequest { version: PROTOCOL_VERSION, entry: entry.to_string(), answers: answers.clone(), flow: None, inputs };
     let mut owners = Vec::new();
@@ -284,7 +293,7 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<(String, BTreeMap<
                 };
                 // The agent is never asked for a `string` input. The entry's are checked up front, so this
                 // only guards a value that did not reach the function.
-                if input.ty == InputType::Text {
+                if input.ty.is_text() {
                     return failure(missing_input(&name), None, Vec::new(), answers, trace);
                 }
                 let (r#type, options) = type_of(input);
@@ -327,8 +336,13 @@ fn bind(
     for input in &next.function.inputs {
         let name = &input.name.value;
         match given.remove(name) {
-            Some(value) => _ = bound.insert(name.clone(), value),
-            None if input.ty == InputType::Text => return Err(format!("`{target}` is missing argument `{name}`")),
+            Some(value) => {
+                if let InputType::Format(format) = input.ty {
+                    format.check(name, &value).map_err(|msg| format!("`{target}`: {msg}"))?;
+                }
+                _ = bound.insert(name.clone(), value);
+            }
+            None if input.ty.is_text() => return Err(format!("`{target}` is missing argument `{name}`")),
             None => {}
         }
     }
@@ -401,6 +415,7 @@ pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
+        InputType::Format(f) => f.json_name(),
         InputType::Struct(_) => "struct",
     };
     (name.to_string(), options)
@@ -454,11 +469,14 @@ fn check_answers(project: &Project, entry: &str, answers: &Answers) -> Result<()
         let Some((function, input)) = declared(project, entry, key) else {
             return Err((key.clone(), format!("unknown key `{key}`")));
         };
-        if input.ty == InputType::Text {
-            return Err((
-                key.clone(),
-                format!("`{key}` is a string parameter; only a template takes one"),
-            ));
+        if input.ty.is_text() {
+            let message = match input.ty {
+                InputType::Format(_) => {
+                    format!("`{key}` is a parameter of type `{}`; only a caller passes one", input.ty.ts_type())
+                }
+                _ => format!("`{key}` is a string parameter; only a template takes one"),
+            };
+            return Err((key.clone(), message));
         }
         eval::check_value(function, input, raw).map_err(|message| (key.clone(), message))?;
     }
@@ -575,10 +593,15 @@ fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>) -> Res
     if let Some(name) = given.keys().find(|k| !entry.text_inputs().any(|i| i.name.value == **k)) {
         return Err(format!("unknown input `{name}`"));
     }
-    match entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
-        Some(input) => Err(missing_input(&input.name.value)),
-        None => Ok(()),
+    if let Some(input) = entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
+        return Err(missing_input(&input.name.value));
     }
+    for input in entry.text_inputs() {
+        if let (InputType::Format(format), Some(value)) = (&input.ty, given.get(&input.name.value)) {
+            format.check(&input.name.value, value)?;
+        }
+    }
+    Ok(())
 }
 
 /// The answers that belong to `function`, keyed by the bare name the evaluator uses.

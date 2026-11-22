@@ -481,6 +481,7 @@ fn input_json(input: &Input) -> Value {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
+        InputType::Format(f) => f.json_name(),
         InputType::Struct(_) => "struct",
     };
     let mut v = json!({

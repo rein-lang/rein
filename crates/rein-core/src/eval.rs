@@ -124,7 +124,9 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                 let input = declared(env, &subject.value)?;
                 let members = match &input.ty {
                     InputType::Choice(members) => members,
-                    InputType::Text => return Err(Stop::Error(string_in_condition(&subject.value))),
+                    InputType::Text | InputType::Format(_) => {
+                        return Err(Stop::Error(string_in_condition(&subject.value)));
+                    }
                     InputType::Bool => return Err(bool_in_switch(&subject.value)),
                     InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&subject.value))),
                 };
@@ -176,7 +178,7 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
                     }
                     InputType::Choice(members) => check_member(&n.value, members, provided(env, &n.value)?)?,
                     InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&n.value))),
-                    InputType::Text => {}
+                    InputType::Text | InputType::Format(_) => {}
                 }
                 out.push_str(provided(env, &n.value)?);
             }
@@ -200,7 +202,7 @@ fn arg_value(env: &Env, name: &str) -> Eval<String> {
     match &input.ty {
         InputType::Bool => Ok(parse_bool(name, raw)?.to_string()),
         InputType::Choice(members) => check_member(name, members, raw).map(|()| raw.to_string()),
-        InputType::Text | InputType::Struct(_) => Ok(raw.to_string()),
+        InputType::Text | InputType::Format(_) | InputType::Struct(_) => Ok(raw.to_string()),
     }
 }
 
@@ -260,7 +262,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
         Expr::Var(v) => {
             let input = declared(env, &v.value)?;
             match input.ty {
-                InputType::Text => Err(Stop::Error(string_in_condition(&v.value))),
+                InputType::Text | InputType::Format(_) => Err(Stop::Error(string_in_condition(&v.value))),
                 InputType::Struct(_) => Err(Stop::Error(struct_in_use(&v.value))),
                 InputType::Bool => parse_bool(&v.value, provided(env, &v.value)?),
                 InputType::Choice(_) => Err(Stop::Error(format!(
@@ -273,7 +275,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
             let input = declared(env, &var.value)?;
             let InputType::Choice(members) = &input.ty else {
                 return Err(match input.ty {
-                    InputType::Text => Stop::Error(string_in_condition(&var.value)),
+                    InputType::Text | InputType::Format(_) => Stop::Error(string_in_condition(&var.value)),
                     InputType::Struct(_) => Stop::Error(struct_in_use(&var.value)),
                     _ => bool_compared(&var.value),
                 });
@@ -309,6 +311,7 @@ fn check_answer(f: &Function, input: &Input, raw: &str) -> Eval<()> {
         InputType::Bool => parse_bool(name, raw).map(|_| ()),
         InputType::Choice(members) => check_member(name, members, raw),
         InputType::Text => Ok(()),
+        InputType::Format(format) => format.check(name, raw).map_err(Stop::Error),
         InputType::Struct(_) => match f.answer_struct(name) {
             Some(Ok(s)) => struct_values(name, s, raw).map(|_| ()).map_err(Stop::Error),
             Some(Err(msg)) => Err(Stop::Error(msg.clone())),
@@ -341,13 +344,19 @@ pub fn struct_values(name: &str, s: &Struct, raw: &str) -> Result<Vec<(String, S
                 return Err(format!("field `{key}` is empty; give some text"));
             }
             (InputType::Text, serde_json::Value::String(t)) => t.clone(),
+            (InputType::Format(format), serde_json::Value::String(t)) => {
+                format.check(&key, t)?;
+                t.clone()
+            }
             (InputType::Choice(members), serde_json::Value::String(t)) => {
                 if let Err(Stop::Error(m)) = check_member(&key, members, t) {
                     return Err(m);
                 }
                 t.clone()
             }
-            (InputType::Text | InputType::Choice(_), _) => return Err(format!("field `{key}` must be a string")),
+            (InputType::Text | InputType::Format(_) | InputType::Choice(_), _) => {
+                return Err(format!("field `{key}` must be a string"));
+            }
             (InputType::Struct(_), _) => return Err(format!("field `{key}` cannot be a struct")),
         };
         out.push((key, text));

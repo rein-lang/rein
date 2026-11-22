@@ -669,6 +669,53 @@ fn struct_answer_is_validated_field_by_field() {
     }
 }
 
+const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: IRI;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
+
+#[test]
+fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let cases = [
+        ("{\"pr\":\"example.com\"}", "`pick.pr` must be an absolute IRI"),
+        ("{\"pr\":1}", "field `pick.pr` must be a string"),
+    ];
+    for (raw, part) in cases {
+        let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {raw}") };
+        assert!(message.contains(part), "{raw}: {message}");
+        assert_eq!(key.as_deref(), Some("main.pick"));
+    }
+    let ok = "{\"pr\":\"https://example.com/pr/1\"}";
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", ok)])) else { panic!("not done") };
+    assert_eq!(instruction, "Open https://example.com/pr/1.");
+}
+
+const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return `Open ${link}.`;\n}\n";
+
+#[test]
+fn iri_entry_input_must_be_an_absolute_iri() {
+    let p = project(&[("main.rein", IRI_ENTRY)]);
+    let res = step(&p, &req_with("main", &[], &[("link", "https://example.com/a")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert_eq!(instruction, "Open https://example.com/a.");
+    let res = step(&p, &req_with("main", &[], &[("link", "not a link")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("`link` must be an absolute IRI"), "{message}");
+}
+
+#[test]
+fn hand_off_to_an_iri_parameter_checks_the_value() {
+    let files = [
+        ("main.rein", "import { other } from \"./other\";\n\ninterface Pick {\n  /** The link. */\n  link: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The link to open. */\n  const pick: Pick = await request(`pick a link`);\n  return other(link=pick.link);\n}\n"),
+        ("other.rein", "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return `Open ${link}.`;\n}\n"),
+    ];
+    let p = project(&files);
+    let valid = "{\"link\":\"https://example.com/pr/1\"}";
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", valid)])) else { panic!("not done") };
+    assert_eq!(instruction, "Open https://example.com/pr/1.");
+    let invalid = "{\"link\":\"example.com\"}";
+    let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", invalid)])) else { panic!("not an error") };
+    assert!(message.contains("must be an absolute IRI"), "{message}");
+}
+
 #[test]
 fn struct_answer_field_reaches_the_hand_off() {
     let p = crate::program_fixture::with_main(PICKER.to_string());
