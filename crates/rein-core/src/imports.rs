@@ -4,6 +4,7 @@
 use crate::ast::{walk_stmts, Function, Import, Param, Spanned, Stmt, StructRef, STRUCT_SUFFIX};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::Tok;
+use crate::schema_types::{SchemaRef, SCHEMA_SUFFIX};
 use crate::stdlib;
 
 const FORM: &str = "write `import { name } from \"path\";`";
@@ -176,6 +177,9 @@ pub fn reference(imports: &mut [Import], name: &str, span: Span) -> Result<Spann
             format!("`{name}` is a struct, not a function; use it as a parameter type, such as `({{ a }}: {name})`");
         return Err(Diagnostic::error(span, message));
     }
+    if import.is_schema() {
+        return Err(Diagnostic::error(span, schema_not_function(name)));
+    }
     Ok(Spanned {
         value: import.reference().to_string(),
         span,
@@ -192,6 +196,9 @@ pub fn struct_ref(imports: &mut [Import], name: &str, span: Span) -> Result<Stru
         }));
     };
     import.used = true;
+    if import.is_schema() {
+        return Err(Diagnostic::error(span, schema_not_struct(name)));
+    }
     if !import.is_struct() {
         let message =
             format!("`{name}` is a function, not a struct; a parameter type names a struct, such as `{{ a }}: Name`");
@@ -201,6 +208,31 @@ pub fn struct_ref(imports: &mut [Import], name: &str, span: Span) -> Result<Stru
         value: import.reference().to_string(),
         span,
     }))
+}
+
+/// The schema type that the parameter or answer type `name` names: the import of a `.schema` file. Marks the import
+/// used. `name` must be an import, and must not be a struct or a function. `None` when `name` is not a schema import.
+pub fn schema_ref(imports: &mut [Import], name: &str, span: Span) -> Option<SchemaRef> {
+    let import = imports.iter_mut().find(|i| i.local.value == name && i.is_schema())?;
+    import.used = true;
+    Some(SchemaRef {
+        name: Spanned { value: name.to_string(), span },
+        path: import.path.value.clone(),
+        loaded: None,
+    })
+}
+
+/// Whether `name` is the local name of a schema import. Such a name is a type, not a struct.
+pub fn is_schema(imports: &[Import], name: &str) -> bool {
+    imports.iter().any(|i| i.local.value == name && i.is_schema())
+}
+
+fn schema_not_function(name: &str) -> String {
+    format!("`{name}` is a schema type, not a function; use it as a field type, such as `field: {name}`")
+}
+
+fn schema_not_struct(name: &str) -> String {
+    format!("`{name}` is a schema type, not a struct; use it as a field type, such as `field: {name}`")
 }
 
 /// The error for a named struct import whose `.struct.rein` file is missing. It names the import form, and the file to add.
@@ -235,7 +267,7 @@ pub fn path_error(path: &str) -> Option<String> {
         }
         return None;
     }
-    let base = path.strip_suffix(STRUCT_SUFFIX).unwrap_or(path);
+    let base = path.strip_suffix(STRUCT_SUFFIX).or_else(|| path.strip_suffix(SCHEMA_SUFFIX)).unwrap_or(path);
     let segments: Vec<&str> = base.split('/').collect();
     let names = &segments[1..];
     let ok = !names.is_empty()

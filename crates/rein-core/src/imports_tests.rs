@@ -329,6 +329,9 @@ fn name_with_a_dot_is_an_error() {
 fn path_error_names_the_valid_forms() {
     assert_eq!(path_error("./ci/fix"), None);
     assert_eq!(path_error("../escalate"), None);
+    assert_eq!(path_error("./ticket.schema"), None);
+    assert_eq!(path_error("../ci/ticket.schema"), None);
+    assert!(path_error("./ticket.schema.json").is_some());
     assert_eq!(path_error("./message.struct"), None);
     assert_eq!(path_error("pr-handling"), None);
     assert!(path_error("./a.struct.rein").is_some());

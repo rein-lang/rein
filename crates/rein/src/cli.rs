@@ -477,7 +477,7 @@ fn inputs_json(f: &Function) -> Vec<Value> {
 }
 
 fn input_json(input: &Input) -> Value {
-    let kind = match input.ty {
+    let kind = match &input.ty {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",

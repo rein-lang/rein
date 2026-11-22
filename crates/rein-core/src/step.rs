@@ -168,7 +168,7 @@ pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<(String,
         sf.function
             .text_inputs()
             .map(|i| {
-                let value = match i.ty {
+                let value = match &i.ty {
                     InputType::Format(format) => format.placeholder(&i.name.value),
                     _ => format!("<{}>", i.name.value),
                 };
@@ -337,7 +337,7 @@ fn bind(
         let name = &input.name.value;
         match given.remove(name) {
             Some(value) => {
-                if let InputType::Format(format) = input.ty {
+                if let InputType::Format(format) = &input.ty {
                     format.check(name, &value).map_err(|msg| format!("`{target}`: {msg}"))?;
                 }
                 _ = bound.insert(name.clone(), value);
@@ -411,7 +411,7 @@ pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
         .ty
         .options()
         .map(|o| o.into_iter().map(str::to_string).collect());
-    let name = match input.ty {
+    let name = match &input.ty {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
