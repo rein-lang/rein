@@ -459,3 +459,71 @@ fn aliased_import_of_a_destructured_field_name_is_clean() {
         diags["main"]
     );
 }
+
+/// A project loaded from disk, so a `.schema.json` file next to the `.rein` files is read.
+fn project_on_disk(tag: &str, files: &[(&str, &str)]) -> Project {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-import-schema-{tag}-{}-{nanos}", std::process::id()));
+    for (rel, text) in files {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let loaded = Project::load(&root).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    loaded
+}
+
+const TICKET_SCHEMA: &str = "{ \"title\": \"Ticket\", \"type\": \"string\", \"examples\": [\"ABC-123\"] }";
+
+#[test]
+fn schema_import_with_the_declared_title_is_clean() {
+    let project = project_on_disk(
+        "ok",
+        &[
+            ("ticket.schema.json", TICKET_SCHEMA),
+            ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix ${ticket}.`;").replace("export default function main()", "export default function main({ ticket }: { ticket: Ticket })")),
+        ],
+    );
+    let diags = project.check();
+    assert!(!has(&diags["main"], Severity::Error, "declares"), "{:?}", diags["main"]);
+    assert!(!has(&diags["main"], Severity::Error, "cannot find schema"), "{:?}", diags["main"]);
+}
+
+#[test]
+fn schema_import_with_another_title_is_an_error() {
+    let project = project_on_disk(
+        "title",
+        &[
+            ("ticket.schema.json", TICKET_SCHEMA),
+            ("main.rein", &main_with("import { Issue } from \"./ticket.schema\";", "return `Fix.`;")),
+        ],
+    );
+    let diags = project.check();
+    assert!(
+        has(
+            &diags["main"],
+            Severity::Error,
+            "`./ticket.schema` declares `Ticket`, not `Issue`; write `import { Ticket } from \"./ticket.schema\"`"
+        ),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn missing_schema_file_is_an_error() {
+    let project = project_on_disk(
+        "missing",
+        &[("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix.`;"))],
+    );
+    let diags = project.check();
+    assert!(
+        has(&diags["main"], Severity::Error, "cannot find schema `./ticket.schema`; add a `ticket.schema.json` file"),
+        "{:?}",
+        diags["main"]
+    );
+}

@@ -66,7 +66,12 @@ fn wrong_name(project: &Project, from: &str, import: &Import) -> Option<Diagnost
 /// what its target declares. A program that a hand-off reaches checks its imports with this too, so the error reads
 /// the same wherever it is reported.
 pub fn name_problem(project: &Project, from: &str, import: &Import) -> Option<(Span, String)> {
-    let declared = if import.is_struct() {
+    let declared = if import.is_schema() {
+        match project.schema_for(from, &import.path.value) {
+            Ok(schema) => schema.title.clone(),
+            Err(reason) => return Some((import.path.span, reason)),
+        }
+    } else if import.is_struct() {
         match project.struct_for(from, import.reference()) {
             Ok((_, s)) => s.name.value.clone(),
             Err(_) => return Some((import.path.span, missing_struct(import))),

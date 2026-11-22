@@ -1084,3 +1084,50 @@ fn a_passed_union_is_not_a_question_and_an_unpassed_one_is() {
     let StepResponse::Question { key, .. } = res else { panic!("{res:?}") };
     assert_eq!(key, "go.ci");
 }
+
+const TICKET_SCHEMA: &str = "{ \"title\": \"Ticket\", \"type\": \"string\", \"pattern\": \"^[A-Z]+-[0-9]+$\", \"maxLength\": 20, \"examples\": [\"ABC-123\"] }";
+
+const TICKET_ENTRY: &str = "import { Ticket } from \"./ticket.schema\";\n\ninterface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return `Fix ${ticket}.`;\n}\n";
+
+#[test]
+fn schema_entry_input_must_match_the_schema() {
+    let p = project(&[("main.rein", TICKET_ENTRY), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert_eq!(instruction, "Fix ABC-123.");
+    let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+}
+
+#[test]
+fn struct_answer_field_of_a_schema_type_must_match_the_schema() {
+    let picker = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let p = project(&[("main.rein", picker), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", "{\"ticket\":\"abc\"}")])) else {
+        panic!("not an error")
+    };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+    assert_eq!(key.as_deref(), Some("main.pick"));
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", "{\"ticket\":\"ABC-9\"}")])) else {
+        panic!("not done")
+    };
+    assert_eq!(instruction, "Fix ABC-9.");
+}
+
+#[test]
+fn schema_type_field_of_a_shared_struct_checks_the_value() {
+    let struct_file = "import { Ticket } from \"./ticket.schema\";\n\n/** The input. */\nexport default interface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n";
+    let main = "import { Input } from \"./input.struct\";\n\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return `Fix ${ticket}.`;\n}\n";
+    let p = project(&[
+        ("main.rein", main),
+        ("input.struct.rein", struct_file),
+        ("ticket.schema.json", TICKET_SCHEMA),
+    ]);
+    let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert_eq!(instruction, "Fix ABC-123.");
+    let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+}

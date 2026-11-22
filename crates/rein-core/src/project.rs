@@ -4,13 +4,15 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
+use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, InputType, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
 use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
 use crate::imports::missing_struct;
 use crate::parser::parse;
+use crate::schema_types::{FormatType, UserSchema, SCHEMA_FILE_EXT, SCHEMA_SUFFIX};
 
 /// The function every project starts from. It is `main.rein` at the project root.
 pub const ENTRY: &str = "main";
@@ -54,6 +56,8 @@ pub struct Project {
     manifest_diagnostics: Vec<Diagnostic>,
     /// The entry function: `entry` in `rein.json` without `.rein`, else [`ENTRY`].
     entry: String,
+    /// Each schema import, by the function that holds it and its path. Filled when the project loads.
+    schemas: BTreeMap<(String, String), Result<Arc<UserSchema>, String>>,
 }
 
 /// The `rein.json` field that sets the line limit of a function.
@@ -190,9 +194,31 @@ impl Project {
             max_line_length,
             manifest_diagnostics,
             entry,
+            schemas: BTreeMap::new(),
         };
+        project.bind_schemas();
         project.bind_structs();
         project
+    }
+
+    /// Loads each schema import: the `.schema.json` file that its import path names. Each schema type of a file
+    /// gets what its import loaded, so a check later in the run never reads the disk again.
+    fn bind_schemas(&mut self) {
+        for (name, sf) in &self.files {
+            for import in sf.function.imports.iter().filter(|i| i.is_schema()) {
+                let loaded = load_schema(&self.root, name, &import.path.value);
+                self.schemas.insert((name.clone(), import.path.value.clone()), loaded);
+            }
+        }
+        let (schemas, files) = (&self.schemas, &mut self.files);
+        for (name, sf) in files.iter_mut() {
+            sf.function.for_each_input_mut(&mut |input| {
+                if let InputType::Format(FormatType::Schema(r)) = &mut input.ty {
+                    let key = (name.clone(), r.path.clone());
+                    r.loaded = Some(schemas.get(&key).cloned().unwrap_or_else(|| Err(format!("cannot find schema `{}`", r.path))));
+                }
+            });
+        }
     }
 
     /// Binds each `{ ... }: @./name` parameter to the `export default interface` of `name.struct.rein`.
@@ -220,6 +246,14 @@ impl Project {
                     Some(a) => sf.function.bind_answer_struct(&a, s),
                 }
             }
+        }
+    }
+
+    /// The schema type that the import path `path`, written in `from`, names: the `.schema.json` file of that path.
+    pub fn schema_for(&self, from: &str, path: &str) -> Result<Arc<UserSchema>, String> {
+        match self.schemas.get(&(from.to_string(), path.to_string())) {
+            Some(loaded) => loaded.clone(),
+            None => load_schema(&self.root, from, path),
         }
     }
 
@@ -332,7 +366,7 @@ impl Project {
             }
             // A named import of a program reaches it by the same key as `@program`, so the name it gives must match
             // what the entry declares, as `@program/function` must reach the entry. A missing program was reported above.
-            for import in sf.function.imports.iter().filter(|i| i.used && !i.is_struct() && is_program_key(i.reference())) {
+            for import in sf.function.imports.iter().filter(|i| i.used && !i.is_struct() && !i.is_schema() && is_program_key(i.reference())) {
                 if !bindings.contains_key(import.reference()) {
                     continue;
                 }
@@ -730,6 +764,17 @@ pub fn join(from: &str, source: &str) -> Result<String, String> {
         }
     }
     Ok(parts.join("/"))
+}
+
+/// The schema type that the import path `path` of function `from` names. The path has no `.schema.json` extension in
+/// the import, so its file is `<same path>.schema.json` in the project. Errors when the file is missing or invalid.
+fn load_schema(root: &Path, from: &str, path: &str) -> Result<Arc<UserSchema>, String> {
+    let base = path.strip_suffix(SCHEMA_SUFFIX).unwrap_or(path);
+    let file = root.join(format!("{}{SCHEMA_FILE_EXT}", join(from, base)?));
+    let last = base.rsplit('/').next().unwrap_or(base);
+    let text = fs::read_to_string(&file)
+        .map_err(|_| format!("cannot find schema `{path}`; add a `{last}.schema.json` file"))?;
+    UserSchema::load(&text).map(Arc::new)
 }
 
 /// Walks `dir`. `seen` holds canonical directories already visited, so a symlink loop ends.
