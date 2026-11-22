@@ -137,12 +137,15 @@ pub struct ResponseSpec {
 }
 
 /// One field of a struct answer. `type` is `boolean`, `union` or `string`; a union lists its `options`.
+/// `schema` is the JSON Schema of a format type, such as `{"type": "string", "format": "iri"}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldSpec {
     pub name: String,
     pub r#type: String,
     pub options: Option<Vec<String>>,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 /// One error from the checker. `file` is the project path, such as `ci/fix.rein`.
@@ -426,7 +429,13 @@ fn field_specs(s: &Struct) -> Vec<FieldSpec> {
         .iter()
         .map(|f| {
             let (r#type, options) = type_of(f);
-            FieldSpec { name: f.name.value.clone(), r#type, options, description: f.description.value.clone() }
+            FieldSpec {
+                name: f.name.value.clone(),
+                r#type,
+                options,
+                description: f.description.value.clone(),
+                schema: f.ty.json_schema(),
+            }
         })
         .collect()
 }

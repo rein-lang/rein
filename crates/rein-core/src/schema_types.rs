@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use jsonschema::Validator;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::ast::Spanned;
 use crate::formats::Format;
@@ -125,6 +125,17 @@ impl FormatType {
         match self {
             FormatType::Builtin(f) => f.json_name(),
             FormatType::Schema(_) => "string",
+        }
+    }
+
+    /// The JSON Schema of this type, so an agent fills a value that passes it. `None` when a schema type is not loaded.
+    pub fn json_schema(&self) -> Option<Value> {
+        match self {
+            FormatType::Builtin(f) => Some(json!({"type": "string", "format": f.json_name()})),
+            FormatType::Schema(r) => match &r.loaded {
+                Some(Ok(s)) => Some(s.schema().clone()),
+                _ => None,
+            },
         }
     }
 

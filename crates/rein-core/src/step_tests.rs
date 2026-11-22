@@ -652,6 +652,35 @@ fn struct_answer_asks_for_a_json_object_with_the_fields_of_the_struct() {
 }
 
 #[test]
+fn struct_answer_field_of_iri_carries_its_json_schema() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "iri");
+    assert_eq!(fields[0].schema, Some(serde_json::json!({"type": "string", "format": "iri"})));
+}
+
+#[test]
+fn struct_answer_string_field_has_no_schema() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].schema, None);
+    assert_eq!(fields[1].schema, None);
+}
+
+#[test]
+fn struct_answer_field_of_a_schema_type_carries_the_user_schema() {
+    let picker = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let p = project(&[("main.rein", picker), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "string");
+    let schema = fields[0].schema.as_ref().expect("schema of the user type");
+    assert_eq!(schema["pattern"], "^[A-Z]+-[0-9]+$");
+}
+
+#[test]
 fn struct_answer_is_validated_field_by_field() {
     let p = crate::program_fixture::with_main(PICKER.to_string());
     let cases = [
