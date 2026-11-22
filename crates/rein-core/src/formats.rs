@@ -2,6 +2,10 @@
 //! The checker treats a format type as a `string`; the run checks each value against the format.
 //! The checks are the built-in `format` keywords of the jsonschema crate, so no format logic lives here.
 //! Each format has one entry in `Format::spec`, so a new built-in format is one variant and one entry.
+//!
+//! The jsonschema crate keeps its list of formats private, so `Format` repeats it by hand for now.
+//! TODO: replace `Format` and `Format::spec` with `ValidationOptions::known_formats` once it is released:
+//! https://github.com/Stranger6667/jsonschema/pull/2032 (issue https://github.com/Stranger6667/jsonschema/issues/2031).
 
 use std::sync::OnceLock;
 
