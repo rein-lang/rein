@@ -24,7 +24,7 @@ pub fn check(project: &Project, from: &str, sf: &SourceFile) -> Vec<Diagnostic> 
         let struct_type = i > 0 && tokens[i - 1].0 == Tok::Colon;
         out.push(reference_warning(project, from, path, *span, struct_type));
     }
-    for import in sf.function.imports.iter().filter(|i| i.default && !i.is_schema()) {
+    for import in sf.function.imports.iter().filter(|i| i.default) {
         out.push(default_warning(project, from, import));
     }
     out

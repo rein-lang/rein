@@ -205,8 +205,9 @@ impl Project {
     }
 
     /// Loads each schema import: the `.schema.json` file that its import path names. This is the only place that
-    /// reads a schema file. Each schema type of a file gets what its import loaded, so a check later in the run
-    /// never reads the disk again.
+    /// reads a schema file. The read happens once for each importing file, not once per project, so two files that
+    /// import the same schema each read it. Each schema type gets what its import loaded, so a check later in the
+    /// run never reads the disk again.
     fn bind_schemas(&mut self) {
         for (name, sf) in &self.files {
             for import in sf.function.imports.iter().filter(|i| i.is_schema()) {
@@ -803,9 +804,10 @@ fn resolve(from: &str, source: &str) -> Result<String, String> {
 /// the import, so its file is `<same path>.schema.json` in the project. Errors when the file is missing or invalid,
 /// and the error names the file.
 fn load_schema(root: &Path, from: &str, path: &str) -> Result<Arc<UserSchema>, String> {
-    let base = path.strip_suffix(SCHEMA_SUFFIX).unwrap_or(path);
-    check_relative(base)?;
-    let file = format!("{}{SCHEMA_FILE_EXT}", resolve(from, base)?);
+    check_relative(path)?;
+    let resolved = resolve(from, path)?;
+    let base = resolved.strip_suffix(SCHEMA_SUFFIX).unwrap_or(&resolved);
+    let file = format!("{base}{SCHEMA_FILE_EXT}");
     let text = match fs::read_to_string(root.join(&file)) {
         Ok(text) => text,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {

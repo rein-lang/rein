@@ -209,7 +209,7 @@ fn default_import_suggests_the_declared_name() {
 }
 
 #[test]
-fn default_schema_import_is_not_flagged_and_a_default_function_import_still_is() {
+fn default_schema_import_gets_the_named_import_warning_too() {
     let project = project(&[
         ("ticket.schema.json", TICKET_SCHEMA),
         ("ci/fix.rein", FIX),
@@ -219,10 +219,15 @@ fn default_schema_import_is_not_flagged_and_a_default_function_import_still_is()
         ),
     ]);
     let msgs = deprecations(&project);
-    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert_eq!(msgs.len(), 2, "{msgs:?}");
     assert!(
-        msgs[0].starts_with("default imports are deprecated")
-            && msgs[0].contains("write `import { fix } from \"./ci/fix\"`"),
+        msgs.iter().any(|m| m.starts_with("default imports are deprecated")
+            && m.contains("write `import { Ticket } from \"./ticket.schema\"`")),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter().any(|m| m.starts_with("default imports are deprecated")
+            && m.contains("write `import { fix } from \"./ci/fix\"`")),
         "{msgs:?}"
     );
 }
