@@ -584,3 +584,15 @@ fn for_each_input_visits_each_scalar_parameter_once() {
     f.for_each_input_mut(&mut |_| seen += 1);
     assert_eq!(seen, 2);
 }
+
+#[test]
+fn for_each_input_visits_a_local_struct_answer_field_once() {
+    let src = "interface Pair {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** d */\nexport default function f({ a, b }: Pair) { return `${a}${b}` }";
+    let mut f = ok(src);
+    let mut names = Vec::new();
+    f.for_each_input_mut(&mut |i| names.push(i.name.value.clone()));
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(names.len(), unique.len(), "{names:?}");
+}
