@@ -149,10 +149,10 @@ impl Function {
         self.template_literal().is_some()
     }
 
-    /// The template literal of a template: every parameter is `string`, there is at least one, and the body is
-    /// exactly one `return` of a template literal. Any other function is a normal function.
+    /// The template literal of a template: every parameter is `string` or a format type, there is at least one, and
+    /// the body is exactly one `return` of a template literal. Any other function is a normal function.
     pub fn template_literal(&self) -> Option<&TemplateLit> {
-        if self.inputs.is_empty() || self.inputs.iter().any(|i| i.ty != InputType::Text) {
+        if self.inputs.is_empty() || self.inputs.iter().any(|i| !i.ty.is_text()) {
             return None;
         }
         match self.body.as_slice() {

@@ -233,7 +233,11 @@ fn expand_call(env: &Env, call: &Call) -> Eval<String> {
             Piece::Text(t) => out.push_str(t),
             Piece::Name(n) => {
                 let arg = args.iter().find(|(key, _)| *key == n.value).map(|(_, value)| value);
-                out.push_str(arg.ok_or_else(|| Stop::Error(format!("unknown parameter `{}`", n.value)))?);
+                let arg = arg.ok_or_else(|| Stop::Error(format!("unknown parameter `{}`", n.value)))?;
+                if let Some(InputType::Format(format)) = function.input(&n.value).map(|i| &i.ty) {
+                    format.check(&n.value, arg).map_err(Stop::Error)?;
+                }
+                out.push_str(arg);
             }
         }
     }

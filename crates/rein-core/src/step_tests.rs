@@ -669,6 +669,29 @@ fn struct_answer_is_validated_field_by_field() {
     }
 }
 
+#[test]
+fn template_with_an_iri_parameter_behaves_like_a_string_one() {
+    let template = |ty: &str| {
+        let tpl = format!("/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: {ty},\n) {{\n  return `Hi ${{a}}`;\n}}\n");
+        project(&[
+            ("main.rein", "import { tpl } from \"./tpl\";\n\n/** Entry. */\nexport default function main() {\n  return tpl(a=`https://example.com/a`);\n}\n"),
+            ("tpl.rein", tpl.as_str()),
+        ])
+    };
+    let as_string = step(&template("string"), &req("main", &[]));
+    let as_iri = step(&template("IRI"), &req("main", &[]));
+    assert_eq!(
+        as_iri,
+        StepResponse::Done {
+            version: 1,
+            instruction: "Hi https://example.com/a".into(),
+            answers: answers(&[]),
+            trace: trace(&["main"]),
+        }
+    );
+    assert_eq!(as_iri, as_string);
+}
+
 const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: IRI;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
 
 #[test]
@@ -688,14 +711,14 @@ fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
     assert_eq!(instruction, "Open https://example.com/pr/1.");
 }
 
-const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return `Open ${link}.`;\n}\n";
+const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
 
 #[test]
 fn iri_entry_input_must_be_an_absolute_iri() {
     let p = project(&[("main.rein", IRI_ENTRY)]);
     let res = step(&p, &req_with("main", &[], &[("link", "https://example.com/a")]));
     let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
-    assert_eq!(instruction, "Open https://example.com/a.");
+    assert!(instruction.ends_with("Task: Open https://example.com/a."), "{instruction}");
     let res = step(&p, &req_with("main", &[], &[("link", "not a link")]));
     let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
     assert!(message.contains("`link` must be an absolute IRI"), "{message}");
