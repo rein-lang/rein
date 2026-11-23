@@ -10,6 +10,7 @@ use crate::doc::parse_doc;
 use crate::imports;
 use std::collections::HashSet;
 use crate::lexer::{lex, Tok};
+use crate::schema_types::FormatType;
 
 /// Parses one function file. Stops at the first error and returns the
 /// tree built so far, plus that one error.
@@ -344,7 +345,9 @@ impl Parser {
         self.expect(Tok::Colon, "`:`")?;
         let struct_type = match self.peek() {
             Tok::Ref(p) => Some(format!("@{p}")),
-            Tok::Ident(w) if w != "string" && self.format_named(w).is_none() => Some(w.clone()),
+            Tok::Ident(w) if w != "string" && self.format_named(w).is_none() && !imports::is_schema(&self.imports, w) => {
+                Some(w.clone())
+            }
             _ => None,
         };
         if let (true, Some(ty)) = (param, struct_type) {
@@ -367,7 +370,7 @@ impl Parser {
     fn answer_type(&mut self) -> Result<InputType, Diagnostic> {
         match self.peek().clone() {
             Tok::Ref(path) => Ok(InputType::Struct(StructRef::Ref(Spanned { value: path, span: self.bump() }))),
-            Tok::Ident(name) if name != "string" && self.format_named(&name).is_none() => {
+            Tok::Ident(name) if name != "string" && self.format_named(&name).is_none() && !imports::is_schema(&self.imports, &name) => {
                 let span = self.bump();
                 Ok(InputType::Struct(imports::struct_ref(&mut self.imports, &name, span)?))
             }
@@ -388,7 +391,14 @@ impl Parser {
         if let Tok::Ident(w) = self.peek() {
             if let Some(format) = self.format_named(w) {
                 self.bump();
-                return Ok(InputType::Format(format));
+                return Ok(InputType::Format(FormatType::Builtin(format)));
+            }
+        }
+        if let Tok::Ident(w) = self.peek().clone() {
+            let span = self.span();
+            if let Some(schema) = imports::schema_ref(&mut self.imports, &w, span) {
+                self.bump();
+                return Ok(InputType::Format(FormatType::Schema(schema)));
             }
         }
         if *self.peek() == Tok::Pipe {

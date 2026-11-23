@@ -1,6 +1,7 @@
 //! Syntax tree of one function file.
 
 use crate::diagnostic::Span;
+use crate::schema_types::SCHEMA_SUFFIX;
 
 /// A `.struct.rein` file's project path ends with this, such as `ticket.struct` for `ticket.struct.rein`.
 pub const STRUCT_SUFFIX: &str = ".struct";
@@ -77,6 +78,11 @@ impl Import {
     /// True when the path names a `.struct.rein` file.
     pub fn is_struct(&self) -> bool {
         self.path.value.ends_with(STRUCT_SUFFIX)
+    }
+
+    /// True when the path names a schema file, such as `./ticket.schema`: a string type from `ticket.schema.json`.
+    pub fn is_schema(&self) -> bool {
+        self.path.value.ends_with(SCHEMA_SUFFIX)
     }
 
     /// The path the `@` reference of this import would write: `./message` for `./message.struct`, else the path.
@@ -159,6 +165,36 @@ impl Function {
             [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => Some(lit),
             _ => None,
         }
+    }
+
+    /// Calls `f` on every Input value the function holds, including the copies the parser makes (struct parameter
+    /// fields in `inputs`, inline answer fields in `answer_fields`), so a value can be visited more than once. `f`
+    /// must give the same result when called again.
+    pub fn for_each_input_mut(&mut self, f: &mut impl FnMut(&mut Input)) {
+        for p in &mut self.params {
+            if let Param::Scalar(i) = p {
+                f(i);
+            }
+        }
+        for i in &mut self.inputs {
+            f(i);
+        }
+        for s in &mut self.structs {
+            for i in &mut s.fields {
+                f(i);
+            }
+        }
+        // An inline struct answer is parsed into `answer_structs` and copied into `answer_fields`.
+        let found = self.answer_structs.values_mut().chain(self.input_struct.iter_mut());
+        for s in found.filter_map(|r| r.as_mut().ok()) {
+            for i in &mut s.fields {
+                f(i);
+            }
+        }
+        for i in &mut self.answer_fields {
+            f(i);
+        }
+        for_each_answer_mut(&mut self.body, f);
     }
 
     /// The struct parameter, when the function has one.
@@ -312,7 +348,7 @@ pub enum InputType {
     /// `string`. Only a template takes it, and a field of a struct answer.
     Text,
     /// A string with a fixed shape, such as `IRI`. It goes where `string` goes; the run checks each value.
-    Format(crate::formats::Format),
+    Format(crate::schema_types::FormatType),
     /// A struct answer: an inline `interface` or a shared `@./name`. Only a `request` answer has it.
     Struct(StructRef),
 }
@@ -335,7 +371,7 @@ impl InputType {
         match self {
             InputType::Bool => "boolean".to_string(),
             InputType::Text => "string".to_string(),
-            InputType::Format(f) => f.name().to_string(),
+            InputType::Format(f) => f.name(),
             InputType::Struct(r) => r.name().value.clone(),
             InputType::Choice(o) => o.iter().map(|s| format!("\"{}\"", s.value)).collect::<Vec<_>>().join(" | "),
         }
@@ -509,6 +545,22 @@ pub fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                 }
             }
             Stmt::Request { .. } | Stmt::Return(_) => {}
+        }
+    }
+}
+
+/// Calls `f` on the response input of each `const` answer in `stmts`, depth first.
+fn for_each_answer_mut(stmts: &mut [Stmt], f: &mut impl FnMut(&mut Input)) {
+    for s in stmts {
+        match s {
+            Stmt::Request { response, .. } => f(response),
+            Stmt::If { then, .. } => for_each_answer_mut(then, f),
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    for_each_answer_mut(&mut c.body, f);
+                }
+            }
+            Stmt::Return(_) => {}
         }
     }
 }

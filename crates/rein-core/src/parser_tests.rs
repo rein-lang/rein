@@ -371,7 +371,7 @@ fn string_parameter_type_is_text() {
 #[test]
 fn format_parameter_type_is_iri() {
     let f = ok("/** d */\nexport default function f(\n  /** L */ link: IRI,\n) { return \"x\" }");
-    assert_eq!(f.inputs[0].ty, InputType::Format(crate::formats::Format::Iri));
+    assert_eq!(f.inputs[0].ty, InputType::Format(crate::schema_types::FormatType::Builtin(crate::formats::Format::Iri)));
 }
 
 #[test]
@@ -565,4 +565,29 @@ fn await_outside_a_const_answer_gives_the_fix() {
 fn a_doc_comment_before_a_bare_await_gives_the_await_hint() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q? */\n  await @./x;\n  return `y`\n}");
     assert!(msg.contains("const name: Type = await program(...)"), "{msg}");
+}
+
+#[test]
+fn schema_import_as_parameter_type_is_a_schema_format() {
+    let f = ok("import { Ticket } from \"./ticket.schema\";\n/** d */\nexport default function f(\n  /** T */ t: Ticket,\n) { return `${t}` }");
+    assert!(
+        matches!(&f.inputs[0].ty, InputType::Format(crate::schema_types::FormatType::Schema(r)) if r.name.value == "Ticket"),
+        "{:?}",
+        f.inputs[0].ty
+    );
+}
+
+#[test]
+fn for_each_input_visits_every_copy_of_a_struct_field() {
+    // A local struct parameter: the field is in `structs` and its copy is in `inputs`. Both must be visited.
+    let src = "interface Pair {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** d */\nexport default function f({ a, b }: Pair) { return `${a}${b}` }";
+    let mut f = ok(src);
+    let mut visited = 0;
+    f.for_each_input_mut(&mut |i| {
+        visited += 1;
+        i.span = Default::default();
+    });
+    assert!(visited >= 4, "each field has a struct copy and an input copy: {visited}");
+    assert!(f.structs[0].fields.iter().all(|i| i.span == Default::default()));
+    assert!(f.inputs.iter().all(|i| i.span == Default::default()));
 }

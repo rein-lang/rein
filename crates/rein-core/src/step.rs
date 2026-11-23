@@ -414,7 +414,7 @@ pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
         .ty
         .options()
         .map(|o| o.into_iter().map(str::to_string).collect());
-    let name = match input.ty {
+    let name = match &input.ty {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
