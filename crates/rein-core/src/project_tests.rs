@@ -1258,3 +1258,13 @@ fn program_hand_off_passes_every_parameter() {
     let rest: Vec<_> = full.check()["main"].iter().filter(|d| !d.is_deprecated()).cloned().collect();
     assert!(rest.is_empty(), "{:?}", rest);
 }
+
+
+#[test]
+fn schema_path_without_dot_slash_names_the_written_path_in_the_error() {
+    // The parser rejects a bare path before a project binds it, so this checks `load_schema` directly.
+    let err = load_schema(Path::new("/proj"), "main", "ticket.schema")
+        .err()
+        .expect("a path without `./` does not load");
+    assert_eq!(err, "a file path is relative: write `import { name } from \"./ticket.schema\"`");
+}
