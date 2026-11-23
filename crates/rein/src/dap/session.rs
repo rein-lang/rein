@@ -6,6 +6,10 @@
 //!
 //! The walk is synchronous. It runs until it stops, asks, or ends, then returns. A `rein/ask` event waits for a
 //! `rein/answer` request. The answer resumes the walk.
+//!
+//! The `type` of a `rein/ask` event is `string`, `boolean`, `union` or `struct`, or the JSON Schema name of a format
+//! input: `iri`, `email`, `date-time`, `uuid` and so on, as `rein step --json` gives them. A client that knows only
+//! `string` shows a format input as text. Protocol version 1 is unchanged.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
