@@ -648,7 +648,7 @@ impl<'a> Checker<'a> {
                     InputType::Format(f) => self.error(
                         response.name.span,
                         format!(
-                            "{article} `{name}` answer is not allowed; answer a struct with a `{name}` field",
+                            "{article} `{name}` answer is not allowed; answer a struct with {article} `{name}` field",
                             article = f.article(),
                             name = f.name(),
                         ),
