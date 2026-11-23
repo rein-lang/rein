@@ -132,6 +132,10 @@ The docs site and the landing page live in [rein-lang/rein-lang.com](https://git
 
 Enable the repo hooks once with `git config core.hooksPath .githooks`. The pre-push hook needs `linecheck` and runs it. It builds `rein` from the branch and runs `rein check` on every installed program (`scripts/check-installed-programs.sh`). A checker change that breaks an installed program blocks the push. The CLI pages of the site are the output of `rein docs-cli`, copied into rein-lang/rein-lang.com.
 
+## Credits
+
+Thanks to [NOPLAB](https://github.com/NOPLAB) for the `rein` name on crates.io ([sard#37](https://github.com/MechanicalGirlDev/sard/issues/37#issuecomment-7093315427)). Versions 0.1.0 and 0.1.1 of the `rein` crate are their earlier library. That library is now [sard](https://github.com/MechanicalGirlDev/sard).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

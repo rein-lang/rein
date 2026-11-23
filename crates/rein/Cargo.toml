@@ -3,7 +3,9 @@ name = "rein"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "CLI, language server and MCP server for Rein, a language for agent processes."
 
 [dependencies]
 rein-core = { path = "../rein-core" }
