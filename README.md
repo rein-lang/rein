@@ -2,9 +2,28 @@
 
 # Rein
 
+Rein programs are apps for AI agents; skills are manuals.
+
 Status: proof of concept. Syntax can still change.
 
-Rein is a language for agent processes. Other tools manage the harness or a graph that the agent runs in. Rein does not. It gives the agent instructions for what to do. Each function is one file. It returns the next step as text, as a reference to another function, or as a template call. When it needs a fact, it asks the agent. When it needs a step done, it sends the agent a request and waits for the answer.
+Agents skip steps in long skill texts. You cannot see which path they took.
+
+A Rein program asks one question at a time. The agent answers, and the program gives the next step.
+
+- **No skipped steps.** The agent gets the next step only after it answers.
+- **The same result each run.** The same answers lead to the same step.
+- **See what happened.** `rein watch` shows the agents that run now and the step each one waits on. `rein graph` and `rein debug` show the path.
+- **Change it safely.** `rein check` reports each place that needs a new case.
+- **Install, share and update like an app.** `rein install -g <package>`, `rein list` and `rein update`.
+- **The agent finds its apps.** `rein agent-context` and `rein hook` give the agent the list of visible programs. The agent starts the one that matches the task.
+- **Asks a person when it must.** A program can stop, ask a person, and branch on the answer.
+- **Programs call programs.** One program hands off to another.
+
+Skills teach. Programs run the work. Read more at [rein-lang.com](https://rein-lang.com) and [Rein and skills](https://rein-lang.com/docs/rein-vs-skills).
+
+## The language
+
+Each function is one file. It returns the next step as text, as a reference to another function, or as a template call.
 
 Rein mimics TypeScript syntax and types, except `@` references. Imports name the declared function, such as `import { fix } from "./ci/fix";`. There is no `else`, and no `default` in a `switch`. Every function returns on every path. A function takes one parameter: a scalar or a struct, and a shared struct is a `<name>.struct.rein` file.
 
