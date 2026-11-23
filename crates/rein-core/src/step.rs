@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::ast::{walk_stmts, Awaited, Binding, Function, Input, InputType, ReturnValue, Stmt, Struct};
 use crate::diagnostic::{line_col, Severity};
 use crate::eval::{self, Outcome};
+use crate::input_formats::formats_of;
 use crate::project::{Project, ENTRY};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -159,11 +160,12 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     run(project, req, &mut Vec::new())
 }
 
-/// The value that a walk gives an unset `string` or format input: a valid example for a format, else `<name>`.
-pub fn walk_value(input: &Input) -> String {
-    match input.ty {
-        InputType::Format(format) => format.placeholder(&input.name.value),
-        _ => format!("<{}>", input.name.value),
+/// The value that a walk gives an unset `string` or format input: a valid example for the first format the input
+/// must have (see [`formats_of`]), else `<name>`.
+pub fn walk_value(project: &Project, function: &str, input: &Input) -> String {
+    match formats_of(project, function, input).first() {
+        Some(format) => format.placeholder(&input.name.value),
+        None => format!("<{}>", input.name.value),
     }
 }
 
@@ -173,7 +175,7 @@ pub fn walk_value(input: &Input) -> String {
 /// Each owner comes with the values passed to that visit, so a walk reads a passed `boolean` as `rein step` does.
 pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<(String, BTreeMap<String, String>)> {
     let inputs = project.get(entry).map_or_else(BTreeMap::new, |sf| {
-        sf.function.text_inputs().map(|i| (i.name.value.clone(), walk_value(i))).collect()
+        sf.function.text_inputs().map(|i| (i.name.value.clone(), walk_value(project, entry, i))).collect()
     });
     let req = StepRequest { version: PROTOCOL_VERSION, entry: entry.to_string(), answers: answers.clone(), flow: None, inputs };
     let mut owners = Vec::new();

@@ -752,6 +752,35 @@ fn hand_off_to_an_iri_parameter_checks_the_value() {
     assert!(message.contains("must be an absolute IRI"), "{message}");
 }
 
+/// `main` passes its `string` input `link` to a parameter of another kind. `call` is the return statement.
+fn text_to_iri(import: &str, call: &str, target: &str) -> Project {
+    let main = format!("{import}\n/** Entry. */\nexport default function main(\n  /** The link. */\n  link: string,\n) {{\n  return {call};\n}}\n");
+    project(&[("main.rein", main.as_str()), ("target.rein", target)])
+}
+
+#[test]
+fn unset_string_input_passed_to_an_iri_parameter_walks_without_error() {
+    let hand_off = text_to_iri(
+        "import { other } from \"./target\";",
+        "other(link=link)",
+        "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return `Open ${link}.`;\n}\n",
+    );
+    let template = text_to_iri(
+        "import { tpl } from \"./target\";",
+        "tpl(a=link)",
+        "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: IRI,\n) {\n  return `Hi ${a}`;\n}\n",
+    );
+    for p in [&hand_off, &template] {
+        let input = p.get("main").unwrap().function.input("link").unwrap();
+        let value = walk_value(p, "main", input);
+        assert_eq!(value, "urn:rein:link");
+        let request = StepRequest { inputs: BTreeMap::from([("link".to_string(), value.clone())]), ..req("main", &[]) };
+        assert!(matches!(step(p, &request), StepResponse::Done { .. }), "{:?}", step(p, &request));
+        let walked = owners(p, "main", &answers(&[]));
+        assert_eq!(walked.last().map(|(_, passed)| passed.get("link")), Some(Some(&value)), "{walked:?}");
+    }
+}
+
 #[test]
 fn struct_answer_field_reaches_the_hand_off() {
     let p = crate::program_fixture::with_main(PICKER.to_string());

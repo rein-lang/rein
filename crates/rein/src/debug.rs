@@ -172,7 +172,7 @@ fn walk(project: &Project, entry: &str, body: &str) -> Value {
                 for i in sf.function.text_inputs() {
                     let name = &i.name.value;
                     if request.inputs.get(name).is_none_or(|v| v.is_empty()) {
-                        request.inputs.insert(name.clone(), walk_value(i));
+                        request.inputs.insert(name.clone(), walk_value(project, &request.entry, i));
                         placeholders.push(name.clone());
                     }
                 }

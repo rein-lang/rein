@@ -189,6 +189,22 @@ fn walk_with_an_unset_iri_input_uses_a_valid_example() {
 }
 
 #[test]
+fn walk_with_an_unset_string_input_passed_to_an_iri_uses_a_valid_example() {
+    let root = std::env::temp_dir().join(format!("rein-debug-text-iri-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let main = "import { other } from \"./other\";\n\n/** Entry. */\nexport default function main(\n  /** The link. */\n  link: string,\n) {\n  return other(link=link);\n}\n";
+    let other = "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return `Open ${link}.`;\n}\n";
+    std::fs::write(root.join("main.rein"), main).unwrap();
+    std::fs::write(root.join("other.rein"), other).unwrap();
+    let project = Project::load(&root).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    let out = walk(&project, "main", "{}");
+    assert_eq!(out["step"]["kind"], "done", "{out}");
+    assert!(out["step"]["instruction"].as_str().unwrap().contains("Open urn:rein:link."), "{out}");
+    assert_eq!(out["placeholders"], json!(["link"]));
+}
+
+#[test]
 fn full_walk_with_the_input_unset_ends_with_the_placeholder() {
     let answers = json!({
         "main.draft": "no",
