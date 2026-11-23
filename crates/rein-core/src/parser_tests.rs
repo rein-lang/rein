@@ -566,3 +566,13 @@ fn a_doc_comment_before_a_bare_await_gives_the_await_hint() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q? */\n  await @./x;\n  return `y`\n}");
     assert!(msg.contains("const name: Type = await program(...)"), "{msg}");
 }
+
+#[test]
+fn schema_import_as_parameter_type_is_a_schema_format() {
+    let f = ok("import { Ticket } from \"./ticket.schema\";\n/** d */\nexport default function f(\n  /** T */ t: Ticket,\n) { return `${t}` }");
+    assert!(
+        matches!(&f.inputs[0].ty, InputType::Format(crate::schema_types::FormatType::Schema(r)) if r.name.value == "Ticket"),
+        "{:?}",
+        f.inputs[0].ty
+    );
+}
