@@ -105,7 +105,7 @@ A call follows each reference in the same call. The `trace` lists the functions 
 
 ```sh
 git submodule update --init             # fetch examples/
-cargo install --git https://github.com/rein-lang/rein --tag v0.1.5 --locked rein  # puts `rein` on PATH
+cargo install --git https://github.com/rein-lang/rein --tag v0.1.6 --locked rein  # puts `rein` on PATH
 cd examples
 rein list                               # the programs visible from here
 rein run support-ticket                 # run one program by name, answer on stdin
