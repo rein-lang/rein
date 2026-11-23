@@ -64,18 +64,18 @@ impl Drop for Sandbox {
 }
 
 /// The folder the sandboxes go in. Rein takes the nearest `rein/` folder above the working directory, and otherwise the
-/// nearest `.git` folder. So the folder and each of its parents must hold neither. The shared temp folder and a
-/// checkout can both hold one.
+/// nearest `.git` folder. So the folder and each of its parents must hold neither. Tries the cargo target temp folder,
+/// then `$HOME/.cache/rein-test` (absolute `HOME` only), then the shared temp folder.
 fn sandbox_root() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|h| h.is_absolute())
         .map(|h| h.join(".cache/rein-test"));
-    [Some(PathBuf::from(env!("CARGO_TARGET_TMPDIR"))), home]
+    [Some(PathBuf::from(env!("CARGO_TARGET_TMPDIR"))), home, Some(std::env::temp_dir())]
         .into_iter()
         .flatten()
         .find(|root| root.ancestors().all(|d| !d.join("rein").is_dir() && !d.join(".git").exists()))
-        .expect("no clean folder: CARGO_TARGET_TMPDIR and $HOME/.cache/rein-test both sit under a `rein/` or `.git`")
+        .expect("no clean folder: none of the target temp, $HOME/.cache/rein-test or the temp folder is free of `rein/` and `.git`")
 }
 
 fn write(path: &Path, text: &str) {
