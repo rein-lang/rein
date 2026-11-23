@@ -344,7 +344,7 @@ pub fn struct_values(name: &str, s: &Struct, raw: &str) -> Result<Vec<(String, S
         let text = match (&field.ty, value) {
             (InputType::Bool, serde_json::Value::Bool(b)) => b.to_string(),
             (InputType::Bool, _) => return Err(format!("field `{key}` must be true or false")),
-            (InputType::Text, serde_json::Value::String(t)) if t.is_empty() => {
+            (InputType::Text | InputType::Format(_), serde_json::Value::String(t)) if t.is_empty() => {
                 return Err(format!("field `{key}` is empty; give some text"));
             }
             (InputType::Text, serde_json::Value::String(t)) => t.clone(),
