@@ -1,0 +1,34 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # crates.io trusted publishing (OIDC): no stored token
+    env:
+      RUSTUP_TOOLCHAIN: "1.100.0" # keep equal to the pin in ci.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      # rein depends on rein-core, so rein-core goes first.
+      - run: cargo publish -p rein-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - run: cargo publish -p rein
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
