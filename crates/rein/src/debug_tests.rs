@@ -12,6 +12,7 @@ fn first(answers: &[(&str, &str)]) -> StepRequest {
         answers: answers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
         flow: None,
         inputs: [("pr".to_string(), "https://x/pr/1".to_string())].into(),
+        walk: false,
     }
 }
 
@@ -167,6 +168,41 @@ fn unset_input_shows_as_a_placeholder_and_a_set_one_fills_the_text() {
     let out = walk_with(&[("main.draft", "yes")]);
     assert!(out["step"]["instruction"].as_str().unwrap().contains("The pull request https://x/pr/1 is a draft"), "{out}");
     assert_eq!(out["placeholders"], json!([]));
+}
+
+/// A project whose entry takes one `IRI` parameter and asks nothing.
+fn iri_entry_project() -> Project {
+    let root = std::env::temp_dir().join(format!("rein-debug-iri-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    std::fs::write(root.join("main.rein"), source).unwrap();
+    let project = Project::load(&root).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    project
+}
+
+#[test]
+fn walk_with_an_unset_iri_input_passes_the_stand_in_without_a_format_check() {
+    let out = walk(&iri_entry_project(), "main", "{}");
+    assert_eq!(out["step"]["kind"], "done", "{out}");
+    assert!(out["step"]["instruction"].as_str().unwrap().contains("Task: Open <link>."), "{out}");
+    assert_eq!(out["placeholders"], json!(["link"]));
+}
+
+#[test]
+fn walk_of_an_unset_string_input_handed_to_an_iri_has_no_error() {
+    let root = std::env::temp_dir().join(format!("rein-debug-text-iri-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  s: string,\n) {\n  return @./other(link=s);\n}\n";
+    let other = "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    std::fs::write(root.join("main.rein"), main).unwrap();
+    std::fs::write(root.join("other.rein"), other).unwrap();
+    let project = Project::load(&root).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    let out = walk(&project, "main", "{}");
+    assert_eq!(out["step"]["kind"], "done", "{out}");
+    assert!(out["step"]["instruction"].as_str().unwrap().contains("Open <s>."), "{out}");
+    assert_eq!(out["placeholders"], json!(["s"]));
 }
 
 #[test]

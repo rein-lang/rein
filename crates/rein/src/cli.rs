@@ -13,7 +13,7 @@ use rein_core::project::{Project, ENTRY};
 
 use crate::run_log;
 use crate::scopes;
-use rein_core::step::{invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
+use rein_core::step::{check_formats, invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 
 const OK: u8 = 0;
@@ -91,8 +91,11 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
         Ok(i) => i,
         Err(msg) => return fail(json, &msg),
     };
+    if let Err(msg) = check_formats(&sf.function, |name| inputs.get(name).map(String::as_str)) {
+        return fail(json, &msg);
+    }
     let bindings = project.bindings(function);
-    match eval::run(&sf.function, &inputs, &bindings) {
+    match eval::run(&sf.function, &inputs, &bindings, false) {
         Err(msg) => fail(json, &msg),
         Ok(Outcome::Request { instruction, response }) => request(&sf.function, &instruction, &response, json),
         Ok(Outcome::Text(value)) => {
@@ -141,7 +144,7 @@ pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, 
 
 /// The request that a failed `rein step` logs, when the request itself could not be read.
 fn empty_request() -> StepRequest {
-    StepRequest { version: PROTOCOL_VERSION, entry: ENTRY.to_string(), answers: Default::default(), flow: None, inputs: Default::default() }
+    StepRequest { version: PROTOCOL_VERSION, entry: ENTRY.to_string(), answers: Default::default(), flow: None, inputs: Default::default(), walk: false }
 }
 
 /// The project and its entry function for `--root DIR`, a program name or `.rein` path, or the nearest root from
@@ -201,6 +204,7 @@ pub(crate) fn build_request(entry: Option<String>, answers: &[String], inputs: &
         answers: map,
         flow: None,
         inputs: given,
+        walk: false,
     })
 }
 
@@ -481,6 +485,7 @@ fn input_json(input: &Input) -> Value {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
+        InputType::Format(f) => f.json_name(),
         InputType::Struct(_) => "struct",
     };
     let mut v = json!({

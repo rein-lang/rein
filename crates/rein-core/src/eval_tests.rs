@@ -20,7 +20,7 @@ fn no_bindings() -> BTreeMap<String, Binding<'static>> {
 }
 
 fn run_plain(f: &Function, pairs: &[(&str, &str)]) -> Result<Outcome, String> {
-    run(f, &inputs(pairs), &no_bindings())
+    run(f, &inputs(pairs), &no_bindings(), false)
 }
 
 fn std_binding(name: &str) -> (String, Binding<'static>) {
@@ -41,7 +41,7 @@ fn ref_return_resolves_the_import_to_its_project_path() {
     let f = func("import { fix } from \"./ci/fix\";\n\n/** d */\nexport default function f() { return fix }");
     let bindings = BTreeMap::from([("./ci/fix".to_string(), Binding::Function("ci/fix".into()))]);
     assert_eq!(
-        run(&f, &inputs(&[]), &bindings),
+        run(&f, &inputs(&[]), &bindings, false),
         Ok(Outcome::Ref {
             target: "ci/fix".into(),
             args: vec![]
@@ -174,13 +174,13 @@ export default function f(
     );
     let bindings = BTreeMap::from([std_binding("delegate")]);
     assert_eq!(
-        run(&f, &inputs(&[("c", "x")]), &bindings),
+        run(&f, &inputs(&[("c", "x")]), &bindings, false),
         Ok(Outcome::Text(
             "Delegate this task to a subagent.\nModel: use opus model\nTask: code review x".into()
         ))
     );
     assert_eq!(
-        run(&f, &inputs(&[("c", "y")]), &bindings),
+        run(&f, &inputs(&[("c", "y")]), &bindings, false),
         Ok(Outcome::Text(
             "Delegate this task to a subagent.\nModel: use haiku model\nTask: code review the pr"
                 .into()
@@ -215,7 +215,7 @@ export default function f() {
         },
     )]);
     assert_eq!(
-        run(&f, &inputs(&[]), &bindings),
+        run(&f, &inputs(&[]), &bindings, false),
         Ok(Outcome::Text("one then two".into()))
     );
 }
@@ -280,7 +280,7 @@ export default async function f() {
     );
     let bindings = BTreeMap::from([std_binding("delegate")]);
     assert_eq!(
-        run(&f, &inputs(&[]), &bindings),
+        run(&f, &inputs(&[]), &bindings, false),
         Ok(Outcome::Request {
             instruction:
                 "Delegate this task to a subagent.\nModel: use opus model\nTask: code review the pr"
@@ -376,7 +376,7 @@ export default function f(
         run(
             &f,
             &inputs(&[("pr", "https://example.com/pr/1")]),
-            &bindings
+            &bindings, false
         ),
         Ok(Outcome::Ref {
             target: "merge".into(),
@@ -408,7 +408,7 @@ fn string_input_is_a_bare_argument_of_a_std_template() {
     let f = func("/** d */\nexport default function f(\n  /** Link */ pr: string,\n) {\n  return delegate(model=`use opus model`, task=pr);\n}");
     let bindings = BTreeMap::from([std_binding("delegate")]);
     assert_eq!(
-        run(&f, &inputs(&[("pr", "L")]), &bindings),
+        run(&f, &inputs(&[("pr", "L")]), &bindings, false),
         Ok(Outcome::Text(
             "Delegate this task to a subagent.\nModel: use opus model\nTask: L".into()
         ))

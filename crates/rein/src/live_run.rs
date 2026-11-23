@@ -21,7 +21,7 @@ pub struct Run {
 
 impl Run {
     pub fn start(project: Project, entry: String) -> Run {
-        let request = StepRequest { version: PROTOCOL_VERSION, entry, answers: Answers::new(), flow: None, inputs: Default::default() };
+        let request = StepRequest { version: PROTOCOL_VERSION, entry, answers: Answers::new(), flow: None, inputs: Default::default(), walk: false };
         let last = step(&project, &request);
         Run { project, request, last }
     }

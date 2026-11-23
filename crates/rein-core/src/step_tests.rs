@@ -38,6 +38,7 @@ fn req(entry: &str, pairs: &[(&str, &str)]) -> StepRequest {
         answers: answers(pairs),
         flow: None,
         inputs: BTreeMap::new(),
+        walk: false,
     }
 }
 
@@ -445,6 +446,7 @@ fn request_defaults_to_version_one_and_main() {
             answers: answers(&[]),
             flow: None,
             inputs: BTreeMap::new(),
+            walk: false,
         }
     );
 }
@@ -667,6 +669,136 @@ fn struct_answer_is_validated_field_by_field() {
         assert!(message.contains(part), "{raw}: {message}");
         assert_eq!(key.as_deref(), Some("main.pick"));
     }
+}
+
+#[test]
+fn empty_format_field_is_rejected_like_an_empty_string_field() {
+    for ty in ["Regex", "JSONPointer"] {
+        let source = format!(
+            "interface Pick {{\n  /** The value. */\n  value: {ty};\n  /** The name. */\n  name: string;\n}}\n/** Entry. */\nexport default async function main() {{\n  /** The pick. */\n  const pick: Pick = await request(`pick`);\n  return `done`;\n}}\n"
+        );
+        let p = crate::program_fixture::with_main(source);
+        let raw = "{\"value\":\"\",\"name\":\"x\"}";
+        let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {ty}") };
+        assert_eq!(message, "field `pick.value` is empty; give some text", "{ty}");
+    }
+}
+
+#[test]
+fn template_with_an_iri_parameter_behaves_like_a_string_one() {
+    let template = |ty: &str| {
+        let tpl = format!("/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: {ty},\n) {{\n  return `Hi ${{a}}`;\n}}\n");
+        project(&[
+            ("main.rein", "import { tpl } from \"./tpl\";\n\n/** Entry. */\nexport default function main() {\n  return tpl(a=`https://example.com/a`);\n}\n"),
+            ("tpl.rein", tpl.as_str()),
+        ])
+    };
+    let as_string = step(&template("string"), &req("main", &[]));
+    let as_iri = step(&template("IRI"), &req("main", &[]));
+    assert_eq!(
+        as_iri,
+        StepResponse::Done {
+            version: 1,
+            instruction: "Hi https://example.com/a".into(),
+            answers: answers(&[]),
+            trace: trace(&["main"]),
+        }
+    );
+    assert_eq!(as_iri, as_string);
+}
+
+const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: IRI;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
+
+#[test]
+fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let cases = [
+        ("{\"pr\":\"example.com\"}", "`pick.pr` must be an absolute IRI"),
+        ("{\"pr\":1}", "field `pick.pr` must be a string"),
+    ];
+    for (raw, part) in cases {
+        let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {raw}") };
+        assert!(message.contains(part), "{raw}: {message}");
+        assert_eq!(key.as_deref(), Some("main.pick"));
+    }
+    let ok = "{\"pr\":\"https://example.com/pr/1\"}";
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", ok)])) else { panic!("not done") };
+    assert_eq!(instruction, "Open https://example.com/pr/1.");
+}
+
+const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+
+#[test]
+fn iri_entry_input_must_be_an_absolute_iri() {
+    let p = project(&[("main.rein", IRI_ENTRY)]);
+    let res = step(&p, &req_with("main", &[], &[("link", "https://example.com/a")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Open https://example.com/a."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("link", "not a link")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("`link` must be an absolute IRI"), "{message}");
+}
+
+#[test]
+fn hand_off_to_an_iri_parameter_checks_the_value() {
+    let files = [
+        ("main.rein", "import { other } from \"./other\";\n\ninterface Pick {\n  /** The link. */\n  link: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The link to open. */\n  const pick: Pick = await request(`pick a link`);\n  return other(link=pick.link);\n}\n"),
+        ("other.rein", "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return `Open ${link}.`;\n}\n"),
+    ];
+    let p = project(&files);
+    let valid = "{\"link\":\"https://example.com/pr/1\"}";
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", valid)])) else { panic!("not done") };
+    assert_eq!(instruction, "Open https://example.com/pr/1.");
+    let invalid = "{\"link\":\"example.com\"}";
+    let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", invalid)])) else { panic!("not an error") };
+    assert!(message.contains("must be an absolute IRI"), "{message}");
+}
+
+/// `main` has a `string` input `s` and passes it with `call`, its return statement, to a function in `target`.
+fn text_to_iri(import: &str, call: &str, target: &str) -> Project {
+    let main = format!("{import}\n/** Entry. */\nexport default function main(\n  /** The link. */\n  s: string,\n) {{\n  return {call};\n}}\n");
+    project(&[("main.rein", main.as_str()), ("target.rein", target)])
+}
+
+/// The walk of `p` from `main` with its unset `string` input `s`: the stand-in value, and the walk flag.
+fn walk_of_s(p: &Project) -> StepRequest {
+    let value = walk_value(p.get("main").unwrap().function.input("s").unwrap());
+    StepRequest { inputs: BTreeMap::from([("s".to_string(), value)]), walk: true, ..req("main", &[]) }
+}
+
+/// A hand-off target with an `IRI` parameter. It is not a template, so a walk hands off to it.
+const OPEN_IRI: &str = "/** Open a link. */\nexport default function target(\n  /** The link. */ link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+
+#[test]
+fn walk_of_a_string_handed_to_an_iri_parameter_has_no_error() {
+    let p = text_to_iri("", "@./target(link=s)", OPEN_IRI);
+    let walked = owners(&p, "main", &answers(&[]));
+    assert!(walked.iter().any(|(owner, passed)| owner == "target" && passed.get("link").map(String::as_str) == Some("<s>")), "{walked:?}");
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn walk_of_a_string_in_a_template_literal_argument_has_no_error() {
+    let p = text_to_iri("", "@./target(link=`${s}`)", OPEN_IRI);
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn walk_of_a_string_in_a_template_call_has_no_error() {
+    let tpl = "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: IRI,\n) {\n  return `Hi ${a}`;\n}\n";
+    let p = text_to_iri("import { tpl } from \"./target\";", "tpl(a=s)", tpl);
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn real_run_of_a_string_handed_to_an_iri_parameter_checks_the_value() {
+    let p = text_to_iri("", "@./target(link=s)", OPEN_IRI);
+    let res = step(&p, &req_with("main", &[], &[("s", "not-a-link")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("must be an absolute IRI"), "{message}");
 }
 
 #[test]
@@ -1036,4 +1168,32 @@ fn a_passed_union_is_not_a_question_and_an_unpassed_one_is() {
     let res = step(&project, &req("main", &[("main.account", "home")]));
     let StepResponse::Question { key, .. } = res else { panic!("{res:?}") };
     assert_eq!(key, "go.ci");
+}
+
+const DATE_ANSWER: &str = "interface Date {\n  /** The day. */\n  day: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The day to plan. */\n  const d: Date = await request(`pick a day`);\n  return `Plan ${d.day}.`;\n}\n";
+
+#[test]
+fn local_interface_named_like_a_format_shadows_the_format() {
+    let p = crate::program_fixture::with_main(DATE_ANSWER.to_string());
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.d", "{\"day\":\"Monday\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Plan Monday.");
+}
+
+#[test]
+fn imported_struct_named_like_a_format_is_a_struct() {
+    let main = "import { Email } from \"./email.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The address to write to. */\n  const e: Email = await request(`pick an address`);\n  return `Write ${e.address}.`;\n}\n";
+    let shared = "/** A mail address. */\nexport default interface Email {\n  /** The address. */\n  address: string;\n}\n";
+    let p = project(&[("main.rein", main), ("email.struct.rein", shared)]);
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.e", "{\"address\":\"a@b.c\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Write a@b.c.");
+}
+
+#[test]
+fn format_without_a_local_declaration_still_checks_its_value() {
+    let src = "interface Input {\n  /** The day. */\n  day: Date;\n}\n/** Entry. */\nexport default function main({ day }: Input) {\n  return delegate(model=`x`, task=`Plan ${day}.`);\n}\n";
+    let p = project(&[("main.rein", src)]);
+    let StepResponse::Error { message, .. } = step(&p, &req_with("main", &[], &[("day", "2026-13-45")])) else { panic!("not an error") };
+    assert!(message.contains("`day`"), "{message}");
+    let StepResponse::Done { instruction, .. } = step(&p, &req_with("main", &[], &[("day", "2026-11-23")])) else { panic!("not done") };
+    assert!(instruction.ends_with("Task: Plan 2026-11-23."), "{instruction}");
 }

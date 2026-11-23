@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, InputType, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
+use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
 use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
@@ -867,7 +867,7 @@ struct Edge {
 /// not edges, and a program is another project, not an edge.
 fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<Edge> {
     let mut out = Vec::new();
-    let asked = f.inputs.iter().any(|i| i.ty != InputType::Text);
+    let asked = f.inputs.iter().any(|i| !i.ty.is_text());
     sites_in(&f.body, asked, bindings, &mut out);
     out
 }

@@ -149,10 +149,10 @@ impl Function {
         self.template_literal().is_some()
     }
 
-    /// The template literal of a template: every parameter is `string`, there is at least one, and the body is
-    /// exactly one `return` of a template literal. Any other function is a normal function.
+    /// The template literal of a template: every parameter is `string` or a format type, there is at least one, and
+    /// the body is exactly one `return` of a template literal. Any other function is a normal function.
     pub fn template_literal(&self) -> Option<&TemplateLit> {
-        if self.inputs.is_empty() || self.inputs.iter().any(|i| i.ty != InputType::Text) {
+        if self.inputs.is_empty() || self.inputs.iter().any(|i| !i.ty.is_text()) {
             return None;
         }
         match self.body.as_slice() {
@@ -188,9 +188,9 @@ impl Function {
         self.input_struct = Some(found);
     }
 
-    /// The `string` parameters, in declaration order. Their values come from the caller.
+    /// The `string` and format parameters, in declaration order. Their values come from the caller.
     pub fn text_inputs(&self) -> impl Iterator<Item = &Input> {
-        self.inputs.iter().filter(|i| i.ty == InputType::Text)
+        self.inputs.iter().filter(|i| i.ty.is_text())
     }
 }
 
@@ -311,6 +311,8 @@ pub enum InputType {
     Choice(Vec<Spanned<String>>),
     /// `string`. Only a template takes it, and a field of a struct answer.
     Text,
+    /// A string with a fixed shape, such as `IRI`. It goes where `string` goes; the run checks each value.
+    Format(crate::formats::Format),
     /// A struct answer: an inline `interface` or a shared `@./name`. Only a `request` answer has it.
     Struct(StructRef),
 }
@@ -318,9 +320,14 @@ pub enum InputType {
 impl InputType {
     pub fn options(&self) -> Option<Vec<&str>> {
         match self {
-            InputType::Bool | InputType::Text | InputType::Struct(_) => None,
+            InputType::Bool | InputType::Text | InputType::Format(_) | InputType::Struct(_) => None,
             InputType::Choice(o) => Some(o.iter().map(|s| s.value.as_str()).collect()),
         }
+    }
+
+    /// `string` or a format type: a value the caller passes as text.
+    pub fn is_text(&self) -> bool {
+        matches!(self, InputType::Text | InputType::Format(_))
     }
 
     /// The type as TypeScript writes it: `boolean`, `string`, or `"a" | "b"`.
@@ -328,6 +335,7 @@ impl InputType {
         match self {
             InputType::Bool => "boolean".to_string(),
             InputType::Text => "string".to_string(),
+            InputType::Format(f) => f.name().to_string(),
             InputType::Struct(r) => r.name().value.clone(),
             InputType::Choice(o) => o.iter().map(|s| format!("\"{}\"", s.value)).collect::<Vec<_>>().join(" | "),
         }

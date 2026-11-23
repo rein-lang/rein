@@ -295,6 +295,21 @@ fn rein_eval_set_gives_a_string_parameter_its_value() {
 }
 
 #[test]
+fn rein_eval_set_checks_an_iri_value_against_its_format() {
+    let flow = Flow::new(&[(
+        "main.rein",
+        "interface Input {\n  /** The link. */\n  link: IRI;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ link, ok }: Input) {\n  if (ok) {\n    return `Open ${link}.`;\n  }\n  return `none`;\n}\n",
+    )]);
+    let bad = rein(&["eval", "main", "--root", flow.path(), "--set", "link=not-a-link", "--set", "ok=yes"], None);
+    assert_eq!(code(&bad), 1, "{}{}", stdout(&bad), stderr(&bad));
+    assert!(stderr(&bad).contains("must be an absolute IRI"), "{}", stderr(&bad));
+
+    let good = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("link={LINK}"), "--set", "ok=yes"], None);
+    assert_eq!(code(&good), 0, "{}{}", stdout(&good), stderr(&good));
+    assert_eq!(stdout(&good).trim(), format!("Open {LINK}."));
+}
+
+#[test]
 fn rein_eval_asks_for_a_missing_string_value() {
     let flow = Flow::new(&[(
         "main.rein",

@@ -275,6 +275,7 @@ fn step_of(project: &Project, pairs: &[(&str, &str)]) -> StepResponse {
             answers: answers(pairs),
             flow: None,
             inputs: BTreeMap::new(),
+            walk: false,
         },
     )
 }

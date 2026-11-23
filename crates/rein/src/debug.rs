@@ -6,10 +6,10 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 
 use clap::Args;
-use rein_core::ast::{walk_stmts, Input, InputType, Stmt};
+use rein_core::ast::{walk_stmts, Input, Stmt};
 use rein_core::graph::{self, NodeKind};
 use rein_core::project::{Project, ENTRY};
-use rein_core::step::{invalid_request, step, type_of, StepRequest};
+use rein_core::step::{invalid_request, step, type_of, walk_value, StepRequest};
 use serde_json::{json, Value};
 
 use crate::{cli, graph as graph_cmd, http};
@@ -134,7 +134,7 @@ fn schema(project: &Project, entry: &str) -> Value {
         let texts: Vec<Value> =
             f.text_inputs().map(|i| json!({"name": i.name.value, "description": i.description.value})).collect();
         inputs.insert(name.clone(), json!(texts));
-        let mut asked: Vec<&Input> = f.inputs.iter().filter(|i| i.ty != InputType::Text).collect();
+        let mut asked: Vec<&Input> = f.inputs.iter().filter(|i| !i.ty.is_text()).collect();
         walk_stmts(&f.body, &mut |s| {
             if let Stmt::Request { response, .. } = s {
                 asked.push(response);
@@ -158,7 +158,7 @@ fn schema(project: &Project, entry: &str) -> Value {
 
 /// The answer to `POST /walk`: the real step response, the graph with the walk marked as Mermaid text, the answer
 /// key of each question node (so a click on one can focus its control), and the `string` inputs left unset.
-/// An unset input is walked as the placeholder `<name>`, so the page always has a step to show. `entry` is the
+/// An unset input is walked with [`walk_value`], so the page always has a step to show. `entry` is the
 /// default entry.
 fn walk(project: &Project, entry: &str, body: &str) -> Value {
     let mut placeholders = Vec::new();
@@ -168,11 +168,13 @@ fn walk(project: &Project, entry: &str, body: &str) -> Value {
             if request.entry == ENTRY {
                 request.entry = entry.to_string();
             }
+            // The unset inputs get stand-in values, so this is a walk: it checks no format.
+            request.walk = true;
             if let Some(sf) = project.get(&request.entry) {
                 for i in sf.function.text_inputs() {
                     let name = &i.name.value;
                     if request.inputs.get(name).is_none_or(|v| v.is_empty()) {
-                        request.inputs.insert(name.clone(), format!("<{name}>"));
+                        request.inputs.insert(name.clone(), walk_value(i));
                         placeholders.push(name.clone());
                     }
                 }

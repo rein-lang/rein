@@ -5,8 +5,10 @@ use crate::ast::{
     Stmt, Struct, StructParam, StructRef, TemplateLit, Value,
 };
 use crate::diagnostic::{Diagnostic, Span};
+use crate::formats::Format;
 use crate::doc::parse_doc;
 use crate::imports;
+use std::collections::HashSet;
 use crate::lexer::{lex, Tok};
 
 /// Parses one function file. Stops at the first error and returns the
@@ -17,7 +19,8 @@ pub fn parse(src: &str) -> (Function, Vec<Diagnostic>) {
         Ok(toks) => toks,
         Err(d) => return (f, vec![d]),
     };
-    let mut p = Parser { toks, pos: 0, imports: Vec::new(), items: false };
+    let local_types = interface_names(&toks);
+    let mut p = Parser { toks, pos: 0, imports: Vec::new(), items: false, local_types };
     let diags = match p.file(&mut f) {
         Ok(()) => vec![],
         Err(d) => vec![d],
@@ -33,6 +36,18 @@ struct Parser {
     imports: Vec<Import>,
     /// True once the file has a doc block, an interface or an export. An `import` after that is an error.
     items: bool,
+    /// The names of the file's `interface`s, found before parsing, so a use can come before its declaration.
+    local_types: HashSet<String>,
+}
+
+/// The names that follow an `interface` keyword anywhere in the file.
+fn interface_names(toks: &[(Tok, Span)]) -> HashSet<String> {
+    toks.windows(2)
+        .filter_map(|w| match (&w[0].0, &w[1].0) {
+            (Tok::Ident(kw), Tok::Ident(name)) if kw == "interface" => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 const IMPORTS_FIRST: &str = "imports come first; move this `import` above the doc comment and the declarations";
@@ -226,6 +241,15 @@ impl Parser {
         Ok(())
     }
 
+    /// The built-in format a name stands for. A file's own `interface` or import of that name wins: a local
+    /// type shadows a built-in format, as in TypeScript.
+    fn format_named(&self, word: &str) -> Option<Format> {
+        if self.local_types.contains(word) || imports::is_import(&self.imports, word) {
+            return None;
+        }
+        Format::from_name(word)
+    }
+
     fn is_word(&self, word: &str) -> bool {
         matches!(self.peek(), Tok::Ident(w) if w == word)
     }
@@ -320,7 +344,7 @@ impl Parser {
         self.expect(Tok::Colon, "`:`")?;
         let struct_type = match self.peek() {
             Tok::Ref(p) => Some(format!("@{p}")),
-            Tok::Ident(w) if w != "string" => Some(w.clone()),
+            Tok::Ident(w) if w != "string" && self.format_named(w).is_none() => Some(w.clone()),
             _ => None,
         };
         if let (true, Some(ty)) = (param, struct_type) {
@@ -343,7 +367,7 @@ impl Parser {
     fn answer_type(&mut self) -> Result<InputType, Diagnostic> {
         match self.peek().clone() {
             Tok::Ref(path) => Ok(InputType::Struct(StructRef::Ref(Spanned { value: path, span: self.bump() }))),
-            Tok::Ident(name) if name != "string" => {
+            Tok::Ident(name) if name != "string" && self.format_named(&name).is_none() => {
                 let span = self.bump();
                 Ok(InputType::Struct(imports::struct_ref(&mut self.imports, &name, span)?))
             }
@@ -351,7 +375,7 @@ impl Parser {
         }
     }
 
-    /// `boolean`, or a union of strings with an optional leading `|`.
+    /// `boolean`, `string`, a format type such as `IRI`, or a union of strings with an optional leading `|`.
     fn param_type(&mut self) -> Result<InputType, Diagnostic> {
         if *self.peek() == Tok::Boolean {
             self.bump();
@@ -361,10 +385,18 @@ impl Parser {
             self.bump();
             return Ok(InputType::Text);
         }
+        if let Tok::Ident(w) = self.peek() {
+            if let Some(format) = self.format_named(w) {
+                self.bump();
+                return Ok(InputType::Format(format));
+            }
+        }
         if *self.peek() == Tok::Pipe {
             self.bump();
         }
-        let mut members = vec![self.string("`boolean` or a string type, like \"green\"")?];
+        let example = crate::formats::Format::ALL[0].name();
+        let expected = format!("`boolean`, `string`, a format type like `{example}`, or a string type, like \"green\"");
+        let mut members = vec![self.string(&expected)?];
         while *self.peek() == Tok::Pipe {
             self.bump();
             members.push(self.string("a string type, like \"green\"")?);
