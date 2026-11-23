@@ -576,3 +576,11 @@ fn schema_import_as_parameter_type_is_a_schema_format() {
         f.inputs[0].ty
     );
 }
+
+#[test]
+fn for_each_input_visits_each_scalar_parameter_once() {
+    let mut f = ok("/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) { return `${a}${b}` }");
+    let mut seen = 0;
+    f.for_each_input_mut(&mut |_| seen += 1);
+    assert_eq!(seen, 2);
+}

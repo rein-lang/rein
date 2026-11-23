@@ -169,11 +169,7 @@ impl Function {
 
     /// Calls `f` on each input that the file types: each scalar parameter, each struct field, and each `const` answer.
     pub fn for_each_input_mut(&mut self, f: &mut impl FnMut(&mut Input)) {
-        for p in &mut self.params {
-            if let Param::Scalar(i) = p {
-                f(i);
-            }
-        }
+        // Each scalar parameter is in `inputs` and in `params`. `inputs` alone visits it once.
         for i in &mut self.inputs {
             f(i);
         }
