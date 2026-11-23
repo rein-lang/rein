@@ -699,7 +699,9 @@ fn struct_answer_is_validated_field_by_field() {
         ("{\"pr\":\"u/1\",\"task\":\"nope\"}", "invalid value `nope` for `pick.task`"),
         ("{\"pr\":\"\",\"task\":\"merge\"}", "field `pick.pr` is empty"),
         ("{\"pr\":1,\"task\":\"merge\"}", "field `pick.pr` must be a string"),
-        ("not json", "must be a JSON object"),
+        ("not json", "the answer `pick` is not valid JSON (expected ident at line 1 column 2): `not json`"),
+        ("{\"pr\":\"u/1\",}", "the answer `pick` is not valid JSON (trailing comma at line 1 column 13): `{\"pr\":\"u/1\",}`"),
+        ("[1]", "must be a JSON object, like {\"pr\": ..., \"task\": ...}; got `[1]`"),
     ];
     for (raw, part) in cases {
         let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {raw}") };

@@ -64,8 +64,8 @@ function mark(g, id) {
 }
 
 // React Flow nodes and edges for a rein graph. A function with steps is a group box around them. `keys` maps a
-// question node to its answer key. Returns the center of each node too, to scroll to the current one.
-function layout(g, keys) {
+// question node to its answer key. `entries` lists the functions a click can make the entry. Returns the center of each node too, to scroll to the current one.
+function layout(g, keys, entries) {
   const d = new dagre.graphlib.Graph({ compound: true, multigraph: true });
   d.setGraph({ rankdir: "TB", nodesep: 40, ranksep: 56, marginx: 24, marginy: 24 });
   d.setDefaultEdgeLabel(() => ({}));
@@ -116,10 +116,11 @@ function layout(g, keys) {
     const b = box[n.id], gid = parent[n.id];
     const at = gid ? { x: b.x - groupAt[gid].x, y: b.y - groupAt[gid].y } : { x: b.x, y: b.y };
     const key = keys[n.id];
-    const title = [`${n.kind} in ${n.function}.rein`, n.name ? `name: ${n.name}` : "", n.type ? `type: ${n.type}` : "", key ? "Click to set this answer." : ""].filter(Boolean).join("\n");
+    const pick = n.kind === "function" && !n.entry && entries.includes(n.function);
+    const title = [`${n.kind} in ${n.function}.rein`, n.name ? `name: ${n.name}` : "", n.type ? `type: ${n.type}` : "", key ? "Click to set this answer." : "", pick ? "Click to start from this function." : ""].filter(Boolean).join("\n");
     nodes.push({
       id: n.id, type: "step", position: at, ...(gid ? { parentId: gid } : {}),
-      data: { kind: n.kind, label: n.label, entry: !!n.entry, mark: mark(g, n.id), key, title },
+      data: { kind: n.kind, fn: n.function, label: n.label, entry: !!n.entry, mark: mark(g, n.id), key, pick, title },
       style: { width: b.w, height: b.h },
     });
   }
@@ -136,7 +137,7 @@ function layout(g, keys) {
 // ---- Graph components ----
 
 function StepNode({ data }) {
-  const cls = ["flow-node", data.kind, data.entry ? "entry" : "", data.mark, data.key ? "clickable" : ""].join(" ");
+  const cls = ["flow-node", data.kind, data.entry ? "entry" : "", data.mark, data.key || data.pick ? "clickable" : ""].join(" ");
   return html`<div className=${cls} title=${data.title} data-kind=${data.kind}>
     <${Handle} type="target" position=${Position.Top} isConnectable=${false} />
     <div className="kind">${data.entry ? "entry" : data.kind}${data.mark === "current" ? " · current" : ""}</div>
@@ -151,7 +152,7 @@ function GroupNode({ data }) {
 
 const nodeTypes = { step: StepNode, fn: GroupNode };
 
-function Graph({ graph, keys, theme, onPick }) {
+function Graph({ graph, keys, entries, theme, onPick, onEntry }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const flow = useReactFlow();
@@ -166,12 +167,12 @@ function Graph({ graph, keys, theme, onPick }) {
 
   useEffect(() => {
     if (!graph) return;
-    const out = layout(graph, keys);
+    const out = layout(graph, keys, entries);
     centers.current = out.centers;
     setNodes(out.nodes);
     setEdges(out.edges);
     document.body.dataset.renders = String(Number(document.body.dataset.renders || 0) + 1);
-  }, [graph, keys]);
+  }, [graph, keys, entries]);
 
   // After the nodes are in, scroll to the node the walk stopped on.
   useEffect(() => {
@@ -184,7 +185,7 @@ function Graph({ graph, keys, theme, onPick }) {
   return html`<${ReactFlow}
       nodes=${nodes} edges=${edges} nodeTypes=${nodeTypes}
       onNodesChange=${onNodesChange} onEdgesChange=${onEdgesChange}
-      onNodeClick=${(_, n) => n.data.key && onPick(n.data.key)}
+      onNodeClick=${(_, n) => (n.data.key ? onPick(n.data.key) : n.data.pick && onEntry(n.data.fn))}
       nodesConnectable=${false} colorMode=${colorMode} minZoom=${0.1} maxZoom=${4}>
     <${Background} gap=${20} />
     <${Controls} showInteractive=${false} />
@@ -199,7 +200,7 @@ function Graph({ graph, keys, theme, onPick }) {
 // ---- Controls and step ----
 
 // One control per key: yes/no buttons, a list of the options, or a text box. A text box sets on Enter or blur.
-function Control({ item, value, onChange, focused, needed }) {
+function Control({ item, value, onChange, focused, needed, invalid }) {
   const id = "c-" + item.key;
   let field;
   if (item.type === "boolean") {
@@ -217,7 +218,7 @@ function Control({ item, value, onChange, focused, needed }) {
       onBlur=${commit} onKeyDown=${(e) => e.key === "Enter" && commit(e)} />`;
   }
   const kind = item.type === "string" || item.type === "struct" ? ` (${item.type})` : "";
-  const cls = ["control", value ? "set" : "", focused ? "focus" : "", needed ? "needed" : ""].join(" ");
+  const cls = ["control", value ? "set" : "", focused ? "focus" : "", needed ? "needed" : "", invalid ? "invalid" : ""].join(" ");
   return html`<div className=${cls} data-key=${item.key}>
     <label htmlFor=${id}>${item.key}</label><small>${item.description + kind}</small>${field}
   </div>`;
@@ -330,6 +331,8 @@ function App({ schema }) {
   const placeholders = (out && out.placeholders) || [];
   const inputs = schema.inputs[state.entry] || [];
   const keys = useMemo(() => (out && out.keys) || {}, [out]);
+  // The answer the error names, so its control is marked.
+  const bad = out && out.step && out.step.kind === "error" ? out.step.key : null;
   return html`
     <header>
       <h1>rein debug</h1>
@@ -354,14 +357,14 @@ function App({ schema }) {
         })}
         <h2>Answers</h2>
         ${schema.answers.map((a) => html`<${Control} key=${a.key} item=${a} value=${state.answers[a.key]}
-          onChange=${(v) => setAnswer(a.key, v)} focused=${focus === a.key} />`)}
+          onChange=${(v) => setAnswer(a.key, v)} focused=${focus === a.key} invalid=${bad === a.key} />`)}
       </aside>
       <section>
         <${Step} step=${out && out.step} schema=${schema} placeholders=${placeholders} onAnswer=${setAnswer} />
-        <p className="legend"><span><i className="taken"></i>taken</span><span><i className="current"></i>current</span><span><i className="dimmed"></i>not taken</span><span className="trace">Drag to pan, scroll to zoom, click a question to set it.</span></p>
+        <p className="legend"><span><i className="taken"></i>taken</span><span><i className="current"></i>current</span><span><i className="dimmed"></i>not taken</span><span className="trace">Drag to pan, scroll to zoom, click a question to set it, or a function to start from it.</span></p>
         <div id="diagram">
           <${ReactFlowProvider}>
-            <${Graph} graph=${out && out.graph} keys=${keys} theme=${theme} onPick=${setFocus} />
+            <${Graph} graph=${out && out.graph} keys=${keys} entries=${schema.functions} theme=${theme} onPick=${setFocus} onEntry=${pickEntry} />
           <//>
         </div>
       </section>
