@@ -530,11 +530,11 @@ fn import_path_errors() {
     // From ci/fix the directory is `ci`; two steps up leaves the root.
     assert_eq!(
         project.resolve("ci/fix", "../../top").unwrap_err(),
-        "`@../../top` leaves the project root"
+        "the import path \"../../top\" leaves the project root"
     );
     assert_eq!(
         project.resolve("top", "../top").unwrap_err(),
-        "`@../top` leaves the project root"
+        "the import path \"../top\" leaves the project root"
     );
 }
 

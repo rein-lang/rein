@@ -31,6 +31,16 @@ fn a_schema_needs_a_title() {
 }
 
 #[test]
+fn a_schema_title_must_be_a_name() {
+    for title in ["", "Ticket Type", "a/b", "1Ticket", "for"] {
+        let e = load_err(&format!(r#"{{ "title": "{title}", "type": "string" }}"#));
+        assert!(e.contains("`title` must be a name such as `Ticket`"), "{title}: {e}");
+    }
+    let ok = UserSchema::load(r#"{ "title": "_Ticket2", "type": "string" }"#).unwrap();
+    assert_eq!(ok.title, "_Ticket2");
+}
+
+#[test]
 fn a_schema_must_be_an_object_and_valid_json() {
     assert!(load_err("[1]").contains("JSON object"));
     assert!(load_err("{").contains("cannot read schema"));

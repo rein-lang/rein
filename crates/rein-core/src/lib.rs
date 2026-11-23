@@ -17,6 +17,8 @@ pub mod parser;
 pub mod project;
 #[cfg(test)]
 mod program_fixture;
+#[cfg(test)]
+mod project_fixture;
 pub mod schema_types;
 pub mod stdlib;
 pub mod step;

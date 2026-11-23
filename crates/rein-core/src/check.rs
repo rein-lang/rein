@@ -237,7 +237,7 @@ fn has_request(stmts: &[Stmt]) -> bool {
     found
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.split('/').all(|seg| {
             let mut chars = seg.chars();
