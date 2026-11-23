@@ -43,7 +43,7 @@ pub struct GraphArgs {
     /// Walk the process with this answer, as key=value, such as `main.task=merge`. Repeat for each answer.
     #[arg(long = "answer", value_name = "KEY=VALUE", conflicts_with = "refs")]
     answer: Vec<String>,
-    /// Walk the process with this value of a `string` parameter of the entry, as name=value. Repeat for each input.
+    /// Walk the process with this value of a `string`, format or schema parameter of the entry, as name=value. Repeat for each input.
     #[arg(long = "input", value_name = "NAME=VALUE", conflicts_with = "refs")]
     input: Vec<String>,
     /// Output format. Default: `html` for a `.html` FILE or with --open, else `mermaid`.
