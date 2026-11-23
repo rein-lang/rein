@@ -64,7 +64,7 @@ pub struct StepRequest {
     /// passes a root instead. The stepping itself ignores it: it runs on the project it is given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<String>,
-    /// The values of the entry function's `string` parameters, by name. The agent is never asked for them.
+    /// The values of the entry function's `string`, format and schema parameters, by name. The agent is never asked for them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, String>,
     /// True for a walk with stand-in input values, such as rein graph or the debug walk: format checks are skipped,
