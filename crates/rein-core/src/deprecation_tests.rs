@@ -233,6 +233,21 @@ fn default_schema_import_gets_the_named_import_warning_too() {
 }
 
 #[test]
+fn default_schema_import_with_another_name_suggests_the_title() {
+    let project = project(&[
+        ("ticket.schema.json", TICKET_SCHEMA),
+        ("main.rein", &main_with("import Issue from \"./ticket.schema\";", "return `go`;")),
+    ]);
+    let msgs = deprecations(&project);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].contains("write `import { Ticket } from \"./ticket.schema\"`"),
+        "{msgs:?}"
+    );
+    assert!(!msgs[0].contains("Issue"), "{msgs:?}");
+}
+
+#[test]
 fn deprecated_diagnostic_is_a_warning_and_other_diagnostics_are_not() {
     let warning = Diagnostic::warning(Span::default(), "w");
     let error = Diagnostic::error(Span::default(), "e");
