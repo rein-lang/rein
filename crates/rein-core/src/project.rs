@@ -270,6 +270,14 @@ impl Project {
             .unwrap_or_else(|| Err(format!("cannot find schema `{path}`")))
     }
 
+    /// The project path of the schema file that the import path `path`, written in `from`, names, such as
+    /// `ticket.schema`. Two import paths that name one file give the same key. Unlike [`Project::schema_for`], it
+    /// reads no loaded schema, so it works for a path that has no schema.
+    pub fn schema_key(&self, from: &str, path: &str) -> Result<String, String> {
+        check_relative(path)?;
+        resolve(from, path)
+    }
+
     /// The struct that the parameter type `@<source>`, written in `from`, names: the `export default interface`
     /// of `<source>.struct.rein`. Returns the project path of that file, such as `ticket.struct`, and the struct.
     pub fn struct_for(&self, from: &str, source: &str) -> Result<(String, &Struct), String> {

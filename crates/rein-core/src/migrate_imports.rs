@@ -12,6 +12,7 @@ use crate::imports;
 use crate::lexer::{lex, Tok};
 use crate::parser;
 use crate::project::Project;
+use crate::schema_types::SCHEMA_SUFFIX;
 use crate::stdlib;
 
 /// The result of migrating one file.
@@ -201,10 +202,20 @@ struct Target {
 }
 
 /// Resolves an import path, as written in `from`, to the name it declares. A path that starts with `./` or `../` is a
-/// file of the project. A `.struct` path is a struct file. Any other path names an installed program.
+/// file of the project. A `.struct` path is a struct file. A `.schema` path is a schema file. Any other path names an
+/// installed program.
 fn resolve(project: &Project, from: &str, import_path: &str) -> Result<Target, String> {
     if !(import_path.starts_with("./") || import_path.starts_with("../")) {
         return resolve_program(project, import_path);
+    }
+    if import_path.ends_with(SCHEMA_SUFFIX) {
+        // A schema is not a function, so its key is the schema file. The declared name is the schema title.
+        let key = project.schema_key(from, import_path)?;
+        let schema = project.schema_for(from, import_path)?;
+        return Ok(Target {
+            key,
+            declared: schema.title.clone(),
+        });
     }
     if let Some(base) = import_path.strip_suffix(STRUCT_SUFFIX) {
         let (key, s) = project.struct_for(from, base)?;
@@ -261,9 +272,12 @@ fn import_line(declared: &str, local: &str, path: &str) -> String {
 }
 
 /// The camelCase name of a path: `./ci/fix` gives `ciFix`, `pr-handling` gives `prHandling`, `../message.struct`
-/// gives `message`.
+/// gives `message`, and `./ticket.schema` gives `ticket`.
 fn local_base(path: &str) -> String {
-    let base = path.strip_suffix(STRUCT_SUFFIX).unwrap_or(path);
+    let base = path
+        .strip_suffix(STRUCT_SUFFIX)
+        .or_else(|| path.strip_suffix(SCHEMA_SUFFIX))
+        .unwrap_or(path);
     let mut out = String::new();
     for segment in base
         .split(['/', '-', '.'])
