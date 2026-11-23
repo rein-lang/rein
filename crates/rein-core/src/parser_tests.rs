@@ -578,21 +578,16 @@ fn schema_import_as_parameter_type_is_a_schema_format() {
 }
 
 #[test]
-fn for_each_input_visits_each_scalar_parameter_once() {
-    let mut f = ok("/** d */\nexport default function f(\n  /** A */ a: string,\n  /** B */ b: string,\n) { return `${a}${b}` }");
-    let mut seen = 0;
-    f.for_each_input_mut(&mut |_| seen += 1);
-    assert_eq!(seen, 2);
-}
-
-#[test]
-fn for_each_input_visits_a_local_struct_answer_field_once() {
+fn for_each_input_visits_every_copy_of_a_struct_field() {
+    // A local struct parameter: the field is in `structs` and its copy is in `inputs`. Both must be visited.
     let src = "interface Pair {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** d */\nexport default function f({ a, b }: Pair) { return `${a}${b}` }";
     let mut f = ok(src);
-    let mut names = Vec::new();
-    f.for_each_input_mut(&mut |i| names.push(i.name.value.clone()));
-    let mut unique = names.clone();
-    unique.sort();
-    unique.dedup();
-    assert_eq!(names.len(), unique.len(), "{names:?}");
+    let mut visited = 0;
+    f.for_each_input_mut(&mut |i| {
+        visited += 1;
+        i.span = Default::default();
+    });
+    assert!(visited >= 4, "each field has a struct copy and an input copy: {visited}");
+    assert!(f.structs[0].fields.iter().all(|i| i.span == Default::default()));
+    assert!(f.inputs.iter().all(|i| i.span == Default::default()));
 }

@@ -167,32 +167,32 @@ impl Function {
         }
     }
 
-    /// Calls `f` on each input that the file types, once each: each scalar parameter, each struct field, and each
-    /// `const` answer. A local struct is copied into `input_struct` and `answer_structs`, and its fields into
-    /// `answer_fields`. Those copies are skipped, so the local struct's fields are visited once, in `structs`.
+    /// Calls `f` on every Input value the function holds, including the copies the parser makes (struct parameter
+    /// fields in `inputs`, inline answer fields in `answer_fields`), so a value can be visited more than once. `f`
+    /// must give the same result when called again.
     pub fn for_each_input_mut(&mut self, f: &mut impl FnMut(&mut Input)) {
-        // A scalar parameter is a `Param::Scalar`. `inputs` also holds the fields of a struct parameter, which the
-        // struct loops below visit, so `inputs` is not walked.
         for p in &mut self.params {
             if let Param::Scalar(i) = p {
                 f(i);
             }
         }
-        let local: Vec<String> = self.structs.iter().map(|s| s.name.value.clone()).collect();
+        for i in &mut self.inputs {
+            f(i);
+        }
         for s in &mut self.structs {
             for i in &mut s.fields {
                 f(i);
             }
         }
-        // An imported struct has no copy in `structs`, so its fields are visited here.
+        // An inline struct answer is parsed into `answer_structs` and copied into `answer_fields`.
         let found = self.answer_structs.values_mut().chain(self.input_struct.iter_mut());
         for s in found.filter_map(|r| r.as_mut().ok()) {
-            if local.contains(&s.name.value) {
-                continue;
-            }
             for i in &mut s.fields {
                 f(i);
             }
+        }
+        for i in &mut self.answer_fields {
+            f(i);
         }
         for_each_answer_mut(&mut self.body, f);
     }
