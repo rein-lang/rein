@@ -340,3 +340,15 @@ fn path_error_names_the_valid_forms() {
     assert!(path_error("./a/").is_some());
     assert!(path_error("-x").is_some());
 }
+
+#[test]
+fn schema_import_cannot_be_called_or_a_struct_parameter() {
+    let msg = error_of(&function_with(
+        "import { Ticket } from \"./ticket.schema\";",
+        "return Ticket(a=`x`);",
+    ));
+    assert!(msg.contains("`Ticket` is a schema type, not a function"), "{msg}");
+    let src = "import { Ticket } from \"./ticket.schema\";\n/** d */\nexport default function main({ a }: Ticket) { return `x`; }\n";
+    let msg = error_of(src);
+    assert!(msg.contains("`Ticket` is a schema type, not a struct"), "{msg}");
+}
