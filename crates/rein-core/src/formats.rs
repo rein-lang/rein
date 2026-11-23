@@ -2,6 +2,7 @@
 //! The checker treats a format type as a `string`; the run checks each value against the format.
 //! The checks are the built-in `format` keywords of the jsonschema crate, so no format logic lives here.
 //! A new built-in format needs four edits: a variant in `Format`, an entry in `Format::ALL`, an entry in `Format::spec`, and an arm in `Format::placeholder`.
+//! The compiler checks the variant, the `spec` entry and the `placeholder` arm. Nothing checks the `Format::ALL` entry.
 //!
 //! The jsonschema crate keeps its list of formats private, so `Format` repeats it by hand for now.
 //! TODO: replace `Format` and `Format::spec` with `ValidationOptions::known_formats` once it is released:
