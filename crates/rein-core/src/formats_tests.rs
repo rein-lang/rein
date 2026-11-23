@@ -39,12 +39,6 @@ fn iri_rejects_relative_and_malformed_values() {
 }
 
 #[test]
-fn the_placeholder_is_a_valid_value() {
-    let p = Format::Iri.placeholder("link");
-    assert_eq!(Format::Iri.check("link", &p), Ok(()));
-}
-
-#[test]
 fn every_format_round_trips_by_name_and_names_are_unique() {
     for f in Format::ALL {
         assert_eq!(Format::from_name(f.name()), Some(f), "{}", f.name());
@@ -65,6 +59,24 @@ fn every_placeholder_passes_its_own_check() {
     for f in Format::ALL {
         let p = f.placeholder("x");
         assert_eq!(f.check("x", &p), Ok(()), "{} with `{p}`", f.name());
+    }
+}
+
+/// A value that the format must reject. A regex accepts plain text, so it gets an unbalanced group.
+fn invalid_value(format: Format) -> &'static str {
+    match format {
+        Format::Regex => "(",
+        _ => "not valid !!",
+    }
+}
+
+#[test]
+fn every_format_rejects_an_invalid_value() {
+    for f in Format::ALL {
+        let raw = invalid_value(f);
+        let err = f.check("x", raw).unwrap_err();
+        let prefix = format!("`x` must be {}", f.expected());
+        assert!(err.starts_with(&prefix), "{}: {err}", f.name());
     }
 }
 
