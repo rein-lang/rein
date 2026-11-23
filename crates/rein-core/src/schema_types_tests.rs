@@ -102,6 +102,11 @@ fn json_schema_of_a_schema_type_that_failed_to_load_is_none() {
 
 #[test]
 fn json_schema_of_a_loaded_schema_type_is_the_file_schema() {
-    let loaded = ticket_ref(Some(Ok(Arc::new(UserSchema::load(TICKET).unwrap()))));
-    assert_eq!(loaded.json_schema(), Some(UserSchema::load(TICKET).unwrap().schema().clone()));
+    // A file text no other fixture uses, so the expected value below cannot come from another schema.
+    const ORDER: &str = r#"{ "title": "Order", "type": "string", "pattern": "^ORD-[0-9]{4}$", "minLength": 8, "maxLength": 8 }"#;
+    let loaded = ticket_ref(Some(Ok(Arc::new(UserSchema::load(ORDER).unwrap()))));
+    assert_eq!(
+        loaded.json_schema(),
+        Some(json!({"title": "Order", "type": "string", "pattern": "^ORD-[0-9]{4}$", "minLength": 8, "maxLength": 8}))
+    );
 }

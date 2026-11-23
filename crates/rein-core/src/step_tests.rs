@@ -656,7 +656,7 @@ fn struct_answer_field_of_a_schema_type_carries_the_user_schema() {
     let fields = response.fields.unwrap();
     assert_eq!(fields[0].r#type, "string");
     let schema = fields[0].schema.as_ref().expect("schema of the user type");
-    assert_eq!(schema["pattern"], "^[A-Z]+-[0-9]+$");
+    assert_eq!(schema, &serde_json::json!({"title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20, "examples": ["ABC-123"]}));
 }
 
 #[test]
@@ -669,7 +669,7 @@ fn struct_file_schema_field_carries_the_schema_its_own_file_imports() {
     let fields = response.fields.unwrap();
     assert_eq!(fields[0].r#type, "string");
     let schema = fields[0].schema.as_ref().expect("schema of the user type from the struct file");
-    assert_eq!(schema["pattern"], "^[A-Z]+-[0-9]+$");
+    assert_eq!(schema, &serde_json::json!({"title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20, "examples": ["ABC-123"]}));
 }
 
 #[test]
