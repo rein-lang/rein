@@ -1,7 +1,10 @@
 use super::*;
+use crate::ast::InputType;
 use crate::diagnostic::Severity;
 use crate::graph;
 use crate::program_fixture::with_main;
+use crate::project_fixture::{project, TICKET_SCHEMA};
+use crate::schema_types::FormatType;
 use crate::step::Answers;
 use crate::step::{step, StepRequest, StepResponse, PROTOCOL_VERSION};
 use std::collections::BTreeMap;
@@ -462,14 +465,162 @@ fn aliased_import_of_a_destructured_field_name_is_clean() {
 }
 
 #[test]
-fn schema_import_has_no_name_error() {
-    let project = project_of(&[(
-        "main",
-        &main_with("import { Ticket } from \"./ticket.schema\";", "return `x`;"),
+fn schema_import_with_the_declared_title_is_clean() {
+    let main = "import { Ticket } from \"./ticket.schema\";\n\n/** Entry. */\nexport default function main(\n  /** The ticket. */\n  ticket: Ticket,\n) {\n  return `Fix ${ticket}.`;\n}\n";
+    let project = project(&[("ticket.schema.json", TICKET_SCHEMA), ("main.rein", main)]);
+    let diags = project.check();
+    assert!(
+        diags["main"].iter().all(|d| d.severity != Severity::Error),
+        "{:?}",
+        diags["main"]
+    );
+    let function = &project.get("main").unwrap().function;
+    assert!(
+        function.inputs.iter().any(|i| i.name.value == "ticket"
+            && matches!(&i.ty, InputType::Format(FormatType::Schema(r)) if matches!(&r.loaded, Some(Ok(s)) if s.title == "Ticket"))),
+        "{:?}",
+        function.inputs
+    );
+}
+
+#[test]
+fn schema_path_that_leaves_the_root_names_the_written_path() {
+    let project = project(&[
+        ("ticket.schema.json", TICKET_SCHEMA),
+        ("main.rein", &main_with("import { Ticket } from \"../ticket.schema\";", "return `Fix.`;")),
+    ]);
+    assert!(
+        has(
+            &project.check()["main"],
+            Severity::Error,
+            "the path \"../ticket.schema\" leaves the project root"
+        ),
+        "{:?}",
+        project.check()["main"]
+    );
+}
+
+#[test]
+fn schema_with_an_invalid_keyword_is_an_error_naming_the_file() {
+    let project = project(&[
+        ("ticket.schema.json", "{ \"title\": \"Ticket\", \"type\": \"string\", \"maxLength\": -1 }"),
+        ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix.`;")),
+    ]);
+    assert!(
+        has(&project.check()["main"], Severity::Error, "`ticket.schema.json`: invalid schema:"),
+        "{:?}",
+        project.check()["main"]
+    );
+}
+
+#[test]
+fn aliased_schema_import_is_used_as_a_type_by_its_local_name() {
+    let main = "import { Ticket as Issue } from \"./ticket.schema\";\n\n/** Entry. */\nexport default function main(\n  /** The ticket. */\n  ticket: Issue,\n) {\n  return `Fix ${ticket}.`;\n}\n";
+    let project = project(&[("ticket.schema.json", TICKET_SCHEMA), ("main.rein", main)]);
+    assert!(
+        project.check()["main"].iter().all(|d| d.severity != Severity::Error),
+        "{:?}",
+        project.check()["main"]
+    );
+}
+
+#[test]
+fn schema_import_with_another_title_is_an_error() {
+    let project = project(
+        &[
+            ("ticket.schema.json", TICKET_SCHEMA),
+            ("main.rein", &main_with("import { Issue } from \"./ticket.schema\";", "return `Fix.`;")),
+        ],
+    );
+    let diags = project.check();
+    assert!(
+        has(
+            &diags["main"],
+            Severity::Error,
+            "`./ticket.schema` declares `Ticket`, not `Issue`; write `import { Ticket } from \"./ticket.schema\"`"
+        ),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn missing_schema_file_is_an_error() {
+    let project = project(&[(
+        "main.rein",
+        &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix.`;"),
     )]);
     let diags = project.check();
     assert!(
-        !diags["main"].iter().any(|d| d.severity == Severity::Error),
+        has(&diags["main"], Severity::Error, "cannot find schema `./ticket.schema`; add a `ticket.schema.json` file"),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn schema_path_with_a_dot_is_only_the_path_error() {
+    // Import path names allow letters, digits and `_` only. The schema file loads, so the only error is the path's.
+    let project = project(&[
+        ("x.v2.schema.json", TICKET_SCHEMA),
+        ("main.rein", &main_with("import { Ticket } from \"./x.v2.schema\";", "return `x`;")),
+    ]);
+    let errors: Vec<String> = project.check()["main"]
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(
+        !errors.is_empty() && errors.iter().all(|m| m.starts_with("a path is `\"./path\"`")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn missing_schema_in_a_folder_names_the_full_path() {
+    let project = project(&[(
+        "main.rein",
+        &main_with("import { Ticket } from \"./sub/ticket.schema\";", "return `Fix.`;"),
+    )]);
+    let diags = project.check();
+    assert!(
+        has(
+            &diags["main"],
+            Severity::Error,
+            "cannot find schema `./sub/ticket.schema`; add a `sub/ticket.schema.json` file"
+        ),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn schema_title_that_is_not_a_name_is_an_error_naming_the_file() {
+    let project = project(&[
+        ("bad.schema.json", "{ \"title\": \"Ticket Type\", \"type\": \"string\" }"),
+        ("main.rein", &main_with("import { Ticket } from \"./bad.schema\";", "return `Fix.`;")),
+    ]);
+    let diags = project.check();
+    assert!(
+        has(
+            &diags["main"],
+            Severity::Error,
+            "`bad.schema.json`: a schema `title` must be a name such as `Ticket`"
+        ),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn unreadable_schema_file_is_an_error_naming_the_file() {
+    let project = project(&[
+        ("ticket.schema.json", "{"),
+        ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix.`;")),
+    ]);
+    let diags = project.check();
+    assert!(
+        has(&diags["main"], Severity::Error, "`ticket.schema.json`: cannot read schema"),
         "{:?}",
         diags["main"]
     );

@@ -17,8 +17,7 @@ pub const SCHEMA_SUFFIX: &str = ".schema";
 /// The file of a schema type: the import path plus this, such as `ticket.schema.json`.
 pub const SCHEMA_FILE_EXT: &str = ".schema.json";
 
-/// A JSON Schema file that defines a string type. Its `title` is the type name the import should use. This PR does
-/// not check that the two match.
+/// A JSON Schema file that defines a string type. Its `title` is the type name the import should use.
 pub struct UserSchema {
     /// The name the schema declares, such as `Ticket`.
     pub title: String,
@@ -39,6 +38,12 @@ impl UserSchema {
         let Some(title) = object.get("title").and_then(Value::as_str) else {
             return Err("a schema type needs a string `title`, such as `\"title\": \"Ticket\"`".into());
         };
+        // The title is the name an import uses, so it follows the rule of the other names: one identifier.
+        if title.contains('/') || !crate::check::valid_name(title) {
+            return Err(format!(
+                "a schema `title` must be a name such as `Ticket`: letters, digits and `_`, not a keyword; found `{title}`"
+            ));
+        }
         let validator = jsonschema::options()
             .should_validate_formats(true)
             .build(&schema)

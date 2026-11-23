@@ -1,28 +1,5 @@
 use super::*;
-use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
-/// Writes `files` into a unique temp project, loads it, and removes the directory.
-fn project(files: &[(&str, &str)]) -> Project {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!("rein-step-{}-{nanos}-{n}", std::process::id()));
-    fs::create_dir_all(&root).unwrap();
-    for (rel, text) in files {
-        let path = root.join(rel);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
-    }
-    let loaded = Project::load(&root).unwrap();
-    fs::remove_dir_all(&root).unwrap();
-    loaded
-}
+use crate::project_fixture::{project, TICKET_SCHEMA};
 
 fn answers(pairs: &[(&str, &str)]) -> Answers {
     pairs
@@ -1168,6 +1145,69 @@ fn a_passed_union_is_not_a_question_and_an_unpassed_one_is() {
     let res = step(&project, &req("main", &[("main.account", "home")]));
     let StepResponse::Question { key, .. } = res else { panic!("{res:?}") };
     assert_eq!(key, "go.ci");
+}
+
+const TICKET_ENTRY: &str = "import { Ticket } from \"./ticket.schema\";\n\ninterface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
+
+#[test]
+fn schema_entry_input_must_match_the_schema() {
+    let p = project(&[("main.rein", TICKET_ENTRY), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+}
+
+#[test]
+fn struct_answer_field_of_a_schema_type_must_match_the_schema() {
+    let picker = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let p = project(&[("main.rein", picker), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", "{\"ticket\":\"abc\"}")])) else {
+        panic!("not an error")
+    };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+    assert_eq!(key.as_deref(), Some("main.pick"));
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", "{\"ticket\":\"ABC-9\"}")])) else {
+        panic!("not done")
+    };
+    assert_eq!(instruction, "Fix ABC-9.");
+}
+
+#[test]
+fn schema_type_field_of_a_shared_struct_checks_the_value() {
+    let struct_file = "import { Ticket } from \"./ticket.schema\";\n\n/** The input. */\nexport default interface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n";
+    let main = "import { Input } from \"./input.struct\";\n\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
+    let p = project(&[
+        ("main.rein", main),
+        ("input.struct.rein", struct_file),
+        ("ticket.schema.json", TICKET_SCHEMA),
+    ]);
+    let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+}
+
+#[test]
+fn hand_off_to_a_schema_parameter_checks_the_value() {
+    // `main` passes its string input to `target`, which takes a `Ticket`. The hand-off checks the passed value.
+    let main = "import { target } from \"./target\";\n\n/** Entry. */\nexport default function main(\n  /** The ticket. */\n  s: string,\n) {\n  return target(ticket=s);\n}\n";
+    let target = "import { Ticket } from \"./ticket.schema\";\n\n/** Fix a ticket. */\nexport default function target(\n  /** The ticket. */\n  ticket: Ticket,\n) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
+    let p = project(&[
+        ("main.rein", main),
+        ("target.rein", target),
+        ("ticket.schema.json", TICKET_SCHEMA),
+    ]);
+    let res = step(&p, &req_with("main", &[], &[("s", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("s", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
 }
 
 const DATE_ANSWER: &str = "interface Date {\n  /** The day. */\n  day: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The day to plan. */\n  const d: Date = await request(`pick a day`);\n  return `Plan ${d.day}.`;\n}\n";

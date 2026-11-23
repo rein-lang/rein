@@ -1,5 +1,6 @@
 use super::*;
 use crate::diagnostic::{Severity, DEPRECATED_CODE};
+use crate::project_fixture::{project, TICKET_SCHEMA};
 use std::path::PathBuf;
 
 /// A project of the given (name, source) files, all in `/proj`.
@@ -205,6 +206,45 @@ fn default_import_suggests_the_declared_name() {
         msgs[0].contains("write `import { fixCi } from \"./ci/fix\"`"),
         "{msgs:?}"
     );
+}
+
+#[test]
+fn default_schema_import_gets_the_named_import_warning_too() {
+    let project = project(&[
+        ("ticket.schema.json", TICKET_SCHEMA),
+        ("ci/fix.rein", FIX),
+        (
+            "main.rein",
+            &main_with("import Ticket from \"./ticket.schema\";\nimport fix from \"./ci/fix\";", "return fix;"),
+        ),
+    ]);
+    let msgs = deprecations(&project);
+    assert_eq!(msgs.len(), 2, "{msgs:?}");
+    assert!(
+        msgs.iter().any(|m| m.starts_with("default imports are deprecated")
+            && m.contains("write `import { Ticket } from \"./ticket.schema\"`")),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter().any(|m| m.starts_with("default imports are deprecated")
+            && m.contains("write `import { fix } from \"./ci/fix\"`")),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn default_schema_import_with_another_name_suggests_the_title() {
+    let project = project(&[
+        ("ticket.schema.json", TICKET_SCHEMA),
+        ("main.rein", &main_with("import Issue from \"./ticket.schema\";", "return `go`;")),
+    ]);
+    let msgs = deprecations(&project);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].contains("write `import { Ticket } from \"./ticket.schema\"`"),
+        "{msgs:?}"
+    );
+    assert!(!msgs[0].contains("Issue"), "{msgs:?}");
 }
 
 #[test]

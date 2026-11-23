@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::program_fixture::with_main;
+use crate::project_fixture::TICKET_SCHEMA;
 
 const FIX: &str = "export default function fix() {\n  return `ok`;\n}\n";
 const MESSAGE: &str = "export default interface Message {\n  /** Opening. */\n  opening: string;\n}\n";
@@ -245,4 +246,41 @@ fn a_migrated_destructured_field_clash_passes_the_import_check() {
         .filter(|d| d.severity == crate::diagnostic::Severity::Error || d.message.contains("clashes"))
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
+}
+
+const TICKET_IMPORT: &str = "import Ticket from \"./ticket.schema\";\n\n/** Go. */\nexport default function main() {\n  return `go`;\n}\n";
+
+fn schema_project(main: &str) -> Project {
+    crate::project_fixture::project(&[("ticket.schema.json", TICKET_SCHEMA), ("main.rein", main)])
+}
+
+#[test]
+fn a_default_schema_import_becomes_a_named_schema_import() {
+    let out = migrate_text(&schema_project(TICKET_IMPORT), "main", TICKET_IMPORT);
+    assert_eq!(
+        out.text,
+        "import { Ticket } from \"./ticket.schema\";\n\n/** Go. */\nexport default function main() {\n  return `go`;\n}\n"
+    );
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
+#[test]
+fn a_default_schema_import_renames_its_uses_to_the_title() {
+    let main = "import Issue from \"./ticket.schema\";\n\n/** Go. */\nexport default function main(\n  /** The ticket. */\n  ticket: Issue,\n) {\n  return `go`;\n}\n";
+    let out = migrate_text(&schema_project(main), "main", main);
+    assert_eq!(
+        out.text,
+        "import { Ticket } from \"./ticket.schema\";\n\n/** Go. */\nexport default function main(\n  /** The ticket. */\n  ticket: Ticket,\n) {\n  return `go`;\n}\n"
+    );
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
+#[test]
+fn a_default_schema_import_next_to_a_named_one_reuses_the_name() {
+    let main = "import { Ticket } from \"./ticket.schema\";\nimport Issue from \"./ticket.schema\";\n\n/** Go. */\nexport default function main(\n  /** The ticket. */\n  ticket: Issue,\n) {\n  return `go`;\n}\n";
+    let out = migrate_text(&schema_project(main), "main", main);
+    assert!(!out.text.contains("import Issue"), "{}", out.text);
+    assert!(out.text.contains("ticket: Ticket,"), "{}", out.text);
+    assert_eq!(out.text.matches("ticket.schema").count(), 1, "{}", out.text);
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }

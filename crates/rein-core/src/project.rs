@@ -4,13 +4,18 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
+use crate::ast::{
+    is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, InputType, ReturnValue,
+    Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX,
+};
 use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
 use crate::imports::missing_struct;
 use crate::parser::parse;
+use crate::schema_types::{FormatType, UserSchema, SCHEMA_FILE_EXT, SCHEMA_SUFFIX};
 
 /// The function every project starts from. It is `main.rein` at the project root.
 pub const ENTRY: &str = "main";
@@ -54,6 +59,8 @@ pub struct Project {
     manifest_diagnostics: Vec<Diagnostic>,
     /// The entry function: `entry` in `rein.json` without `.rein`, else [`ENTRY`].
     entry: String,
+    /// Each schema import, by the function that holds it and its path. Filled when the project loads.
+    schemas: BTreeMap<(String, String), Result<Arc<UserSchema>, String>>,
 }
 
 /// The `rein.json` field that sets the line limit of a function.
@@ -190,9 +197,39 @@ impl Project {
             max_line_length,
             manifest_diagnostics,
             entry,
+            schemas: BTreeMap::new(),
         };
+        project.bind_schemas();
         project.bind_structs();
         project
+    }
+
+    /// Loads each schema import: the `.schema.json` file that its import path names. This is the only place that
+    /// reads a schema file. The read happens once for each importing file, not once per project, so two files that
+    /// import the same schema each read it. Each schema type gets what its import loaded, so a check later in the
+    /// run never reads the disk again.
+    fn bind_schemas(&mut self) {
+        for (name, sf) in &self.files {
+            for import in sf.function.imports.iter().filter(|i| i.is_schema()) {
+                let loaded = load_schema(&self.root, name, &import.path.value);
+                self.schemas
+                    .insert((name.clone(), import.path.value.clone()), loaded);
+            }
+        }
+        let (schemas, files) = (&self.schemas, &mut self.files);
+        for (name, sf) in files.iter_mut() {
+            sf.function.for_each_input_mut(&mut |input| {
+                if let InputType::Format(FormatType::Schema(r)) = &mut input.ty {
+                    let key = (name.clone(), r.path.clone());
+                    r.loaded = Some(
+                        schemas
+                            .get(&key)
+                            .cloned()
+                            .unwrap_or_else(|| Err(format!("cannot find schema `{}`", r.path))),
+                    );
+                }
+            });
+        }
     }
 
     /// Binds each `{ ... }: @./name` parameter to the `export default interface` of `name.struct.rein`.
@@ -221,6 +258,24 @@ impl Project {
                 }
             }
         }
+    }
+
+    /// The schema type that the import path `path`, written in `from`, names: the `.schema.json` file of that path.
+    /// It reads the schemas that [`Project::bind_schemas`] loaded when the project loaded, and never the disk. A
+    /// `from` that is not a file of this project, or a path it does not import, has no schema.
+    pub fn schema_for(&self, from: &str, path: &str) -> Result<Arc<UserSchema>, String> {
+        self.schemas
+            .get(&(from.to_string(), path.to_string()))
+            .cloned()
+            .unwrap_or_else(|| Err(format!("cannot find schema `{path}`")))
+    }
+
+    /// The project path of the schema file that the import path `path`, written in `from`, names, such as
+    /// `ticket.schema`. Two import paths that name one file give the same key. Unlike [`Project::schema_for`], it
+    /// reads no loaded schema, so it works for a path that has no schema.
+    pub fn schema_key(&self, from: &str, path: &str) -> Result<String, String> {
+        check_relative(path)?;
+        resolve(from, path)
     }
 
     /// The struct that the parameter type `@<source>`, written in `from`, names: the `export default interface`
@@ -332,7 +387,7 @@ impl Project {
             }
             // A named import of a program reaches it by the same key as `@program`, so the name it gives must match
             // what the entry declares, as `@program/function` must reach the entry. A missing program was reported above.
-            for import in sf.function.imports.iter().filter(|i| i.used && !i.is_struct() && is_program_key(i.reference())) {
+            for import in sf.function.imports.iter().filter(|i| i.used && !i.is_struct() && !i.is_schema() && is_program_key(i.reference())) {
                 if !bindings.contains_key(import.reference()) {
                     continue;
                 }
@@ -709,12 +764,31 @@ fn callers_of(adj: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String, BTre
 /// The project path that `@<source>`, written in function `from`, points to. The path starts with `./` or
 /// `../`, has no extension, is relative to the folder of `from`, and stays inside the root.
 pub fn join(from: &str, source: &str) -> Result<String, String> {
-    if !(source.starts_with("./") || source.starts_with("../")) {
-        return Err(format!("a file path is relative: write `import {{ name }} from \"./{source}\"`"));
-    }
-    if source.rsplit('/').next().is_some_and(|last| last.contains('.') && last != "..") {
+    check_relative(source)?;
+    if source
+        .rsplit('/')
+        .next()
+        .is_some_and(|last| last.contains('.') && last != "..")
+    {
         return Err("references have no extension".into());
     }
+    resolve(from, source)
+}
+
+/// Errors unless the import path `source` starts with `./` or `../`.
+fn check_relative(source: &str) -> Result<(), String> {
+    if source.starts_with("./") || source.starts_with("../") {
+        Ok(())
+    } else {
+        Err(format!(
+            "a file path is relative: write `import {{ name }} from \"./{source}\"`"
+        ))
+    }
+}
+
+/// The project path that the relative import path `source` names, written in function `from`. Unlike [`join`], it
+/// allows dots in the last segment, so `./x.v2` gives `x.v2`. It errors when the path leaves the root.
+fn resolve(from: &str, source: &str) -> Result<String, String> {
     // The importing file's directory, as name segments. `ci/fix` starts in `ci`.
     let mut parts: Vec<&str> = from.split('/').collect();
     parts.pop();
@@ -723,13 +797,35 @@ pub fn join(from: &str, source: &str) -> Result<String, String> {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    return Err(format!("`@{source}` leaves the project root"));
+                    return Err(format!(
+                        "the path \"{source}\" leaves the project root"
+                    ));
                 }
             }
             s => parts.push(s),
         }
     }
     Ok(parts.join("/"))
+}
+
+/// The schema type that the import path `path` of function `from` names. The path has no `.schema.json` extension in
+/// the import, so its file is `<same path>.schema.json` in the project. Errors when the file is missing or invalid,
+/// and the error names the file.
+fn load_schema(root: &Path, from: &str, path: &str) -> Result<Arc<UserSchema>, String> {
+    check_relative(path)?;
+    let resolved = resolve(from, path)?;
+    let base = resolved.strip_suffix(SCHEMA_SUFFIX).unwrap_or(&resolved);
+    let file = format!("{base}{SCHEMA_FILE_EXT}");
+    let text = match fs::read_to_string(root.join(&file)) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("cannot find schema `{path}`; add a `{file}` file"));
+        }
+        Err(e) => return Err(format!("cannot read schema `{file}`: {e}")),
+    };
+    UserSchema::load(&text)
+        .map(Arc::new)
+        .map_err(|e| format!("`{file}`: {e}"))
 }
 
 /// Walks `dir`. `seen` holds canonical directories already visited, so a symlink loop ends.
