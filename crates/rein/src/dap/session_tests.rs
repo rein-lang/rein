@@ -270,6 +270,35 @@ fn invalid_format_answer_is_refused_and_asked_again() {
 }
 
 #[test]
+fn string_answer_that_reaches_an_iri_is_refused_and_asked_again() {
+    let root = std::env::temp_dir().join(format!("rein-dap-text-iri-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let main = "import { other } from \"./other\";\n\n/** Entry. */\nexport default function main(\n  /** The link. */\n  link: string,\n) {\n  return other(link=link);\n}\n";
+    let other = "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return `Open ${link}.`;\n}\n";
+    fs::write(root.join("main.rein"), main).unwrap();
+    fs::write(root.join("other.rein"), other).unwrap();
+    fs::write(root.join("rein.json"), "{\n  \"entry\": \"main.rein\"\n}\n").unwrap();
+    let mut session = Session::default();
+    session.handle(&request("initialize", json!({})));
+    let program = root.join("main.rein").display().to_string();
+    let out = session.handle(&request("launch", json!({"program": program})));
+    assert!(out[0]["success"].as_bool().unwrap(), "{out:?}");
+    let out = session.handle(&request("configurationDone", json!({})));
+    assert_eq!(asked(&out), "link");
+
+    let out = answer(&mut session, "link", "example.com");
+    assert_eq!(out[0]["success"], false, "{out:?}");
+    assert!(out[0]["message"].as_str().unwrap().contains("`link` must be an absolute IRI"), "{out:?}");
+    assert!(events(&out, "terminated").is_empty(), "{out:?}");
+    assert!(events(&out, "output").is_empty(), "{out:?}");
+
+    let out = answer(&mut session, "link", "https://example.com/a");
+    assert_eq!(out[0]["success"], true, "{out:?}");
+    assert_eq!(events(&out, "terminated").len(), 1, "{out:?}");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn stop_on_entry_stops_before_the_first_question() {
     let mut session = started(json!({"stopOnEntry": true}));
     let out = session.handle(&request("configurationDone", json!({})));
