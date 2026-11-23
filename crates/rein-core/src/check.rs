@@ -279,9 +279,14 @@ pub fn struct_in_use(name: &str) -> String {
     format!("`{name}` is a struct answer; read one of its fields, like `{name}.field`")
 }
 
-/// A `string` input cannot decide a branch. A condition and a switch subject both give this error.
-pub fn string_in_condition(name: &str) -> String {
-    format!("`{name}` is a string input; a condition cannot read it")
+/// A `string` or format input cannot decide a branch. A condition and a switch subject both give this error.
+/// The input's kind is `a string`, or the format name with its article, such as `an IRI`.
+pub fn string_in_condition(name: &str, ty: &InputType) -> String {
+    let kind = match ty {
+        InputType::Format(f) => format!("{} {}", f.article(), f.name()),
+        _ => "a string".to_string(),
+    };
+    format!("`{name}` is {kind} input; a condition cannot read it")
 }
 
 fn members_text(members: &[Spanned<String>]) -> String {
@@ -642,7 +647,11 @@ impl<'a> Checker<'a> {
                     }
                     InputType::Format(f) => self.error(
                         response.name.span,
-                        format!("a `{0}` answer is not allowed; answer a struct with a `{0}` field", f.name()),
+                        format!(
+                            "{article} `{name}` answer is not allowed; answer a struct with a `{name}` field",
+                            article = f.article(),
+                            name = f.name(),
+                        ),
                     ),
                     InputType::Bool | InputType::Choice(_) => {}
                 }
@@ -861,7 +870,7 @@ impl<'a> Checker<'a> {
                             format!("union parameter `{n}` needs a comparison, like `{n} === \"...\"`"),
                         );
                     }
-                    Some(InputType::Text | InputType::Format(_)) => self.error(v.span, string_in_condition(&v.value)),
+                    Some(ty @ (InputType::Text | InputType::Format(_))) => self.error(v.span, string_in_condition(&v.value, &ty)),
                     Some(InputType::Struct(_)) => self.error(v.span, struct_in_use(&v.value)),
                     Some(InputType::Bool) => {}
                 }
@@ -876,7 +885,7 @@ impl<'a> Checker<'a> {
                         format!("boolean parameter `{n}` cannot be compared; use `if ({n})` or `if (!{n})`"),
                     ),
                     Some(InputType::Choice(members)) => self.check_member(n, value, &members),
-                    Some(InputType::Text | InputType::Format(_)) => self.error(var.span, string_in_condition(n)),
+                    Some(ty @ (InputType::Text | InputType::Format(_))) => self.error(var.span, string_in_condition(n, &ty)),
                     Some(InputType::Struct(_)) => self.error(var.span, struct_in_use(n)),
                 }
             }
@@ -907,7 +916,7 @@ impl<'a> Checker<'a> {
                 subject.span,
                 format!("boolean parameter `{n}` cannot be used in a switch; use `if ({n})` or `if (!{n})`"),
             ),
-            Some(InputType::Text | InputType::Format(_)) => self.error(subject.span, string_in_condition(n)),
+            Some(ty @ (InputType::Text | InputType::Format(_))) => self.error(subject.span, string_in_condition(n, &ty)),
             Some(InputType::Struct(_)) => self.error(subject.span, struct_in_use(n)),
             Some(InputType::Choice(members)) => {
                 let mut seen: Vec<&str> = Vec::new();

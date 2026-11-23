@@ -120,6 +120,18 @@ impl FormatType {
         }
     }
 
+    /// The article before the type name in a message: `an` for `IRI`, `a` for `Ticket`. A schema type takes `an`
+    /// when its name starts with a vowel letter.
+    pub fn article(&self) -> &'static str {
+        match self {
+            FormatType::Builtin(f) => f.article(),
+            FormatType::Schema(r) => match r.name.value.chars().next() {
+                Some('A' | 'E' | 'I' | 'O' | 'U' | 'a' | 'e' | 'i' | 'o' | 'u') => "an",
+                _ => "a",
+            },
+        }
+    }
+
     /// The type name in JSON, such as the `type` of a question or a field. A schema type is a `string`.
     pub fn json_name(&self) -> &str {
         match self {

@@ -40,7 +40,7 @@ fn a_quoted_string_as_text_is_an_error() {
 }
 
 /// Test resolver: `./tpl` is a template with parameters `a` and `b`, paths with `missing` do not resolve,
-/// `./merge` is a function with one `string` parameter `pr`, `./review` takes `pr: string`, `big: boolean` and
+/// `./merge` is a function with one `string` parameter `pr`, `./iri` takes `link: IRI`, `./review` takes `pr: string`, `big: boolean` and
 /// `ci: "green" | "red"`, `./typed` takes `ok: boolean`, and every other path is a function with none.
 fn resolves(path: &str) -> Result<Kind, String> {
     if path == "./tpl" {
@@ -61,6 +61,9 @@ fn resolves(path: &str) -> Result<Kind, String> {
     }
     if path == "./typed" {
         return Ok(Kind::Function { params: vec![("ok".into(), InputType::Bool)] });
+    }
+    if path == "./iri" {
+        return Ok(Kind::Function { params: vec![("link".into(), InputType::Format(crate::schema_types::FormatType::Builtin(crate::formats::Format::Iri)))] });
     }
     Ok(Kind::Function { params: Vec::new() })
 }
@@ -868,6 +871,16 @@ fn bare_string_answer_is_an_error() {
 }
 
 #[test]
+fn format_answer_is_an_error_with_its_article() {
+    let answer = |ty: &str| {
+        format!("/** d */\nexport default async function f() {{\n  /** The link. */\n  const pr: {ty} = await request(`pick a PR`);\n  return `x`;\n}}")
+    };
+    expect_diag(&answer("IRI"), Severity::Error, "an `IRI` answer is not allowed; answer a struct with a `IRI` field");
+    expect_diag(&answer("Email"), Severity::Error, "an `Email` answer is not allowed");
+    expect_diag(&answer("URI"), Severity::Error, "a `URI` answer is not allowed");
+}
+
+#[test]
 fn unknown_field_of_a_struct_answer_is_an_error() {
     let msg = "`z` is not a field of `Pick`; fields are pr, task, urgent";
     expect_diag(&format!("{PICK}  return @./merge(pr=pick.z);\n}}"), Severity::Error, msg);
@@ -987,6 +1000,27 @@ fn string_input_cannot_be_a_switch_subject() {
         Severity::Error,
         "`pr` is a string input; a condition cannot read it",
     );
+}
+
+#[test]
+fn format_input_cannot_be_a_condition_or_a_switch_subject() {
+    let with_link = |ret: &str| {
+        format!("/** d */\nexport default function f(\n  /** Link */ link: IRI,\n) {{\n  {ret}\n}}")
+    };
+    for cond in ["if (link) { return `a` }", "if (link === \"x\") { return `a` }", "if (!link) { return `a` }"] {
+        expect_diag(&with_link(&format!("{cond}\n  return `b`")), Severity::Error, "`link` is an IRI input; a condition cannot read it");
+    }
+    expect_diag(
+        &with_link("switch (link) { case \"x\": return `a`; case \"y\": return `b` }"),
+        Severity::Error,
+        "`link` is an IRI input; a condition cannot read it",
+    );
+}
+
+#[test]
+fn union_cannot_be_passed_to_a_format_parameter() {
+    let src = "import { iri } from \"./iri\";\n\n/** F. */\nexport default function f(\n  /** Which? */\n  pick: \"a\" | \"b\",\n) {\n  return iri(link=pick);\n}\n";
+    expect_diag(src, Severity::Error, "`pick` is not a string input");
 }
 
 #[test]
