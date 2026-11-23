@@ -13,7 +13,7 @@ use rein_core::project::{Project, ENTRY};
 
 use crate::run_log;
 use crate::scopes;
-use rein_core::step::{invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
+use rein_core::step::{check_formats, invalid_request, step as step_flow, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 
 const OK: u8 = 0;
@@ -91,6 +91,9 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
         Ok(i) => i,
         Err(msg) => return fail(json, &msg),
     };
+    if let Err(msg) = check_formats(&sf.function, |name| inputs.get(name).map(String::as_str)) {
+        return fail(json, &msg);
+    }
     let bindings = project.bindings(function);
     match eval::run(&sf.function, &inputs, &bindings, false) {
         Err(msg) => fail(json, &msg),
