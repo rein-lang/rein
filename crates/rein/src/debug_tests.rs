@@ -169,6 +169,25 @@ fn unset_input_shows_as_a_placeholder_and_a_set_one_fills_the_text() {
     assert_eq!(out["placeholders"], json!([]));
 }
 
+/// A project whose entry takes one `IRI` parameter and asks nothing.
+fn iri_entry_project() -> Project {
+    let root = std::env::temp_dir().join(format!("rein-debug-iri-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    std::fs::write(root.join("main.rein"), source).unwrap();
+    let project = Project::load(&root).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    project
+}
+
+#[test]
+fn walk_with_an_unset_iri_input_uses_a_valid_example() {
+    let out = walk(&iri_entry_project(), "main", "{}");
+    assert_eq!(out["step"]["kind"], "done", "{out}");
+    assert!(out["step"]["instruction"].as_str().unwrap().contains("Task: Open urn:rein:link."), "{out}");
+    assert_eq!(out["placeholders"], json!(["link"]));
+}
+
 #[test]
 fn full_walk_with_the_input_unset_ends_with_the_placeholder() {
     let answers = json!({
