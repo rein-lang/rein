@@ -40,7 +40,7 @@ fn a_quoted_string_as_text_is_an_error() {
 }
 
 /// Test resolver: `./tpl` is a template with parameters `a` and `b`, paths with `missing` do not resolve,
-/// `./merge` is a function with one `string` parameter `pr`, `./review` takes `pr: string`, `big: boolean` and
+/// `./merge` is a function with one `string` parameter `pr`, `./iri` takes `link: IRI`, `./review` takes `pr: string`, `big: boolean` and
 /// `ci: "green" | "red"`, `./typed` takes `ok: boolean`, and every other path is a function with none.
 fn resolves(path: &str) -> Result<Kind, String> {
     if path == "./tpl" {

@@ -375,6 +375,17 @@ fn format_parameter_type_is_iri() {
 }
 
 #[test]
+fn imported_template_named_like_a_format_shadows_the_format() {
+    // Any import of the name shadows the format, whatever the imported thing is. A template import is no exception.
+    let src = "import { Email } from \"./email\";\n\n/** d */\nexport default function f(\n  /** The address. */ mail: Email,\n) { return Email(a=`x`) }";
+    let (_, diags) = parse(src);
+    assert!(
+        diags.iter().any(|d| d.message.contains("a struct parameter is destructured") && d.message.contains("Email")),
+        "{diags:?}"
+    );
+}
+
+#[test]
 fn request_const_parses_with_its_doc_and_type() {
     let f = ok(r#"/** d */
 export default async function f() {
