@@ -38,12 +38,16 @@ struct Env<'a> {
     answers: RefCell<Vec<&'a Input>>,
     /// What each import name refers to, from `Project::bindings`.
     bindings: &'a BTreeMap<String, Binding<'a>>,
+    /// True for a walk with stand-in values, which checks no format of a template argument.
+    walk: bool,
 }
 
+/// Runs `f`. `walk` is true for a walk with stand-in input values, which checks no format of a template argument.
 pub fn run(
     f: &Function,
     inputs: &HashMap<String, String>,
     bindings: &BTreeMap<String, Binding<'_>>,
+    walk: bool,
 ) -> Result<Outcome, String> {
     if f.is_template() {
         return Err("templates are called from functions, not run".to_string());
@@ -54,7 +58,7 @@ pub fn run(
         return Err(format!("unknown input `{name}`"));
     }
     let expanded = with_struct_fields(f, inputs);
-    let env = Env { f, inputs: &expanded, bindings, answers: RefCell::new(Vec::new()) };
+    let env = Env { f, inputs: &expanded, bindings, answers: RefCell::new(Vec::new()), walk };
     match exec(&env, &f.body) {
         Ok(Some(out)) => Ok(out),
         Ok(None) => Err("no return reached; every path must return".to_string()),
@@ -81,7 +85,8 @@ pub fn with_struct_fields(f: &Function, inputs: &HashMap<String, String>) -> Has
 pub fn holds(f: &Function, cond: &Expr, inputs: &HashMap<String, String>) -> Option<bool> {
     let bindings = BTreeMap::new();
     let answers = inputs.keys().filter_map(|k| f.response(k)).collect();
-    let env = Env { f, inputs, bindings: &bindings, answers: RefCell::new(answers) };
+    // A condition has no template argument, so no format check runs here.
+    let env = Env { f, inputs, bindings: &bindings, answers: RefCell::new(answers), walk: false };
     eval(&env, cond).ok()
 }
 
@@ -234,7 +239,7 @@ fn expand_call(env: &Env, call: &Call) -> Eval<String> {
             Piece::Name(n) => {
                 let arg = args.iter().find(|(key, _)| *key == n.value).map(|(_, value)| value);
                 let arg = arg.ok_or_else(|| Stop::Error(format!("unknown parameter `{}`", n.value)))?;
-                if let Some(InputType::Format(format)) = function.input(&n.value).map(|i| &i.ty) {
+                if let (false, Some(InputType::Format(format))) = (env.walk, function.input(&n.value).map(|i| &i.ty)) {
                     format.check(&n.value, arg).map_err(Stop::Error)?;
                 }
                 out.push_str(arg);

@@ -38,6 +38,7 @@ fn req(entry: &str, pairs: &[(&str, &str)]) -> StepRequest {
         answers: answers(pairs),
         flow: None,
         inputs: BTreeMap::new(),
+        walk: false,
     }
 }
 
@@ -445,6 +446,7 @@ fn request_defaults_to_version_one_and_main() {
             answers: answers(&[]),
             flow: None,
             inputs: BTreeMap::new(),
+            walk: false,
         }
     );
 }
@@ -749,6 +751,53 @@ fn hand_off_to_an_iri_parameter_checks_the_value() {
     assert_eq!(instruction, "Open https://example.com/pr/1.");
     let invalid = "{\"link\":\"example.com\"}";
     let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", invalid)])) else { panic!("not an error") };
+    assert!(message.contains("must be an absolute IRI"), "{message}");
+}
+
+/// `main` has a `string` input `s` and passes it with `call`, its return statement, to a function in `target`.
+fn text_to_iri(import: &str, call: &str, target: &str) -> Project {
+    let main = format!("{import}\n/** Entry. */\nexport default function main(\n  /** The link. */\n  s: string,\n) {{\n  return {call};\n}}\n");
+    project(&[("main.rein", main.as_str()), ("target.rein", target)])
+}
+
+/// The walk of `p` from `main` with its unset `string` input `s`: the stand-in value, and the walk flag.
+fn walk_of_s(p: &Project) -> StepRequest {
+    let value = walk_value(p.get("main").unwrap().function.input("s").unwrap());
+    StepRequest { inputs: BTreeMap::from([("s".to_string(), value)]), walk: true, ..req("main", &[]) }
+}
+
+/// A hand-off target with an `IRI` parameter. It is not a template, so a walk hands off to it.
+const OPEN_IRI: &str = "/** Open a link. */\nexport default function target(\n  /** The link. */ link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+
+#[test]
+fn walk_of_a_string_handed_to_an_iri_parameter_has_no_error() {
+    let p = text_to_iri("", "@./target(link=s)", OPEN_IRI);
+    let walked = owners(&p, "main", &answers(&[]));
+    assert!(walked.iter().any(|(owner, passed)| owner == "target" && passed.get("link").map(String::as_str) == Some("<s>")), "{walked:?}");
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn walk_of_a_string_in_a_template_literal_argument_has_no_error() {
+    let p = text_to_iri("", "@./target(link=`${s}`)", OPEN_IRI);
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn walk_of_a_string_in_a_template_call_has_no_error() {
+    let tpl = "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: IRI,\n) {\n  return `Hi ${a}`;\n}\n";
+    let p = text_to_iri("import { tpl } from \"./target\";", "tpl(a=s)", tpl);
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn real_run_of_a_string_handed_to_an_iri_parameter_checks_the_value() {
+    let p = text_to_iri("", "@./target(link=s)", OPEN_IRI);
+    let res = step(&p, &req_with("main", &[], &[("s", "not-a-link")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
     assert!(message.contains("must be an absolute IRI"), "{message}");
 }
 

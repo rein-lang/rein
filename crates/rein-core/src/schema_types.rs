@@ -2,7 +2,7 @@
 //! `import { Ticket } from "./ticket.schema";`. A schema type goes where `string` goes. The checker treats it as a
 //! `string`; the run checks each value against the schema, with the `jsonschema` crate.
 //! A built-in format type and a schema type are both [`FormatType`]: the rest of the code asks one type for its name,
-//! its JSON name, its placeholder and its check.
+//! its article, its JSON name and its check.
 
 use std::sync::Arc;
 
@@ -21,14 +21,12 @@ pub const SCHEMA_FILE_EXT: &str = ".schema.json";
 pub struct UserSchema {
     /// The name the schema declares, such as `Ticket`.
     pub title: String,
-    /// A valid value, the first string of `examples`. Stands in for a real value when a walk has none.
-    pub example: String,
     schema: Value,
     validator: Validator,
 }
 
 impl UserSchema {
-    /// Reads the text of a schema file. The schema must be a string type with a `title` and an example that passes it.
+    /// Reads the text of a schema file. The schema must be a string type with a `title`.
     pub fn load(text: &str) -> Result<UserSchema, String> {
         let schema: Value = serde_json::from_str(text).map_err(|e| format!("cannot read schema: {e}"))?;
         let Some(object) = schema.as_object() else {
@@ -40,25 +38,12 @@ impl UserSchema {
         let Some(title) = object.get("title").and_then(Value::as_str) else {
             return Err("a schema type needs a string `title`, such as `\"title\": \"Ticket\"`".into());
         };
-        let example = object
-            .get("examples")
-            .and_then(Value::as_array)
-            .and_then(|list| list.iter().find_map(Value::as_str));
-        let Some(example) = example else {
-            return Err(
-                "a schema type needs `examples` with at least one string, such as `\"examples\": [\"ABC-123\"]`".into(),
-            );
-        };
         let validator = jsonschema::options()
             .should_validate_formats(true)
             .build(&schema)
             .map_err(|e| format!("invalid schema: {e}"))?;
-        if let Some(e) = validator.iter_errors(&Value::String(example.to_owned())).next() {
-            return Err(format!("the example `{example}` does not match the schema: {e}"));
-        }
         Ok(UserSchema {
             title: title.to_owned(),
-            example: example.to_owned(),
             schema,
             validator,
         })
@@ -137,17 +122,6 @@ impl FormatType {
         match self {
             FormatType::Builtin(f) => f.json_name(),
             FormatType::Schema(_) => "string",
-        }
-    }
-
-    /// A valid value that stands in for a real one when a walk has no value, such as `rein graph`.
-    pub fn placeholder(&self, name: &str) -> String {
-        match self {
-            FormatType::Builtin(f) => f.placeholder(name),
-            FormatType::Schema(r) => match &r.loaded {
-                Some(Ok(s)) => s.example.clone(),
-                _ => name.to_owned(),
-            },
         }
     }
 
