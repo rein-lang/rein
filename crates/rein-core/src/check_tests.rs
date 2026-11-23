@@ -875,8 +875,7 @@ fn format_answer_is_an_error_with_its_article() {
     let answer = |ty: &str| {
         format!("/** d */\nexport default async function f() {{\n  /** The link. */\n  const pr: {ty} = await request(`pick a PR`);\n  return `x`;\n}}")
     };
-    expect_diag(&answer("IRI"), Severity::Error, "an `IRI` answer is not allowed; answer a struct with a `IRI` field");
-    expect_diag(&answer("Email"), Severity::Error, "an `Email` answer is not allowed");
+    expect_diag(&answer("IRI"), Severity::Error, "an `IRI` answer is not allowed; answer a struct with an `IRI` field");    expect_diag(&answer("Email"), Severity::Error, "an `Email` answer is not allowed");
     expect_diag(&answer("URI"), Severity::Error, "a `URI` answer is not allowed");
 }
 
