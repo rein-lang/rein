@@ -670,6 +670,19 @@ fn struct_answer_is_validated_field_by_field() {
 }
 
 #[test]
+fn empty_format_field_is_rejected_like_an_empty_string_field() {
+    for ty in ["Regex", "JSONPointer"] {
+        let source = format!(
+            "interface Pick {{\n  /** The value. */\n  value: {ty};\n  /** The name. */\n  name: string;\n}}\n/** Entry. */\nexport default async function main() {{\n  /** The pick. */\n  const pick: Pick = await request(`pick`);\n  return `done`;\n}}\n"
+        );
+        let p = crate::program_fixture::with_main(source);
+        let raw = "{\"value\":\"\",\"name\":\"x\"}";
+        let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {ty}") };
+        assert_eq!(message, "field `pick.value` is empty; give some text", "{ty}");
+    }
+}
+
+#[test]
 fn template_with_an_iri_parameter_behaves_like_a_string_one() {
     let template = |ty: &str| {
         let tpl = format!("/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: {ty},\n) {{\n  return `Hi ${{a}}`;\n}}\n");
