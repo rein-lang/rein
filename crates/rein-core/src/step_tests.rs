@@ -669,6 +669,29 @@ fn struct_answer_is_validated_field_by_field() {
     }
 }
 
+#[test]
+fn template_with_an_iri_parameter_behaves_like_a_string_one() {
+    let template = |ty: &str| {
+        let tpl = format!("/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: {ty},\n) {{\n  return `Hi ${{a}}`;\n}}\n");
+        project(&[
+            ("main.rein", "import { tpl } from \"./tpl\";\n\n/** Entry. */\nexport default function main() {\n  return tpl(a=`https://example.com/a`);\n}\n"),
+            ("tpl.rein", tpl.as_str()),
+        ])
+    };
+    let as_string = step(&template("string"), &req("main", &[]));
+    let as_iri = step(&template("IRI"), &req("main", &[]));
+    assert_eq!(
+        as_iri,
+        StepResponse::Done {
+            version: 1,
+            instruction: "Hi https://example.com/a".into(),
+            answers: answers(&[]),
+            trace: trace(&["main"]),
+        }
+    );
+    assert_eq!(as_iri, as_string);
+}
+
 const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: IRI;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
 
 #[test]
@@ -688,14 +711,14 @@ fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
     assert_eq!(instruction, "Open https://example.com/pr/1.");
 }
 
-const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return `Open ${link}.`;\n}\n";
+const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
 
 #[test]
 fn iri_entry_input_must_be_an_absolute_iri() {
     let p = project(&[("main.rein", IRI_ENTRY)]);
     let res = step(&p, &req_with("main", &[], &[("link", "https://example.com/a")]));
     let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
-    assert_eq!(instruction, "Open https://example.com/a.");
+    assert!(instruction.ends_with("Task: Open https://example.com/a."), "{instruction}");
     let res = step(&p, &req_with("main", &[], &[("link", "not a link")]));
     let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
     assert!(message.contains("`link` must be an absolute IRI"), "{message}");
@@ -1087,14 +1110,14 @@ fn a_passed_union_is_not_a_question_and_an_unpassed_one_is() {
 
 const TICKET_SCHEMA: &str = "{ \"title\": \"Ticket\", \"type\": \"string\", \"pattern\": \"^[A-Z]+-[0-9]+$\", \"maxLength\": 20, \"examples\": [\"ABC-123\"] }";
 
-const TICKET_ENTRY: &str = "import { Ticket } from \"./ticket.schema\";\n\ninterface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return `Fix ${ticket}.`;\n}\n";
+const TICKET_ENTRY: &str = "import { Ticket } from \"./ticket.schema\";\n\ninterface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
 
 #[test]
 fn schema_entry_input_must_match_the_schema() {
     let p = project(&[("main.rein", TICKET_ENTRY), ("ticket.schema.json", TICKET_SCHEMA)]);
     let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
     let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
-    assert_eq!(instruction, "Fix ABC-123.");
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
     let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
     let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
     assert!(message.contains("does not match `Ticket`"), "{message}");
@@ -1118,7 +1141,7 @@ fn struct_answer_field_of_a_schema_type_must_match_the_schema() {
 #[test]
 fn schema_type_field_of_a_shared_struct_checks_the_value() {
     let struct_file = "import { Ticket } from \"./ticket.schema\";\n\n/** The input. */\nexport default interface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n";
-    let main = "import { Input } from \"./input.struct\";\n\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return `Fix ${ticket}.`;\n}\n";
+    let main = "import { Input } from \"./input.struct\";\n\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
     let p = project(&[
         ("main.rein", main),
         ("input.struct.rein", struct_file),
@@ -1126,8 +1149,36 @@ fn schema_type_field_of_a_shared_struct_checks_the_value() {
     ]);
     let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
     let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
-    assert_eq!(instruction, "Fix ABC-123.");
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
     let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
     let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
     assert!(message.contains("does not match `Ticket`"), "{message}");
+}
+
+const DATE_ANSWER: &str = "interface Date {\n  /** The day. */\n  day: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The day to plan. */\n  const d: Date = await request(`pick a day`);\n  return `Plan ${d.day}.`;\n}\n";
+
+#[test]
+fn local_interface_named_like_a_format_shadows_the_format() {
+    let p = crate::program_fixture::with_main(DATE_ANSWER.to_string());
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.d", "{\"day\":\"Monday\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Plan Monday.");
+}
+
+#[test]
+fn imported_struct_named_like_a_format_is_a_struct() {
+    let main = "import { Email } from \"./email.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The address to write to. */\n  const e: Email = await request(`pick an address`);\n  return `Write ${e.address}.`;\n}\n";
+    let shared = "/** A mail address. */\nexport default interface Email {\n  /** The address. */\n  address: string;\n}\n";
+    let p = project(&[("main.rein", main), ("email.struct.rein", shared)]);
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.e", "{\"address\":\"a@b.c\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Write a@b.c.");
+}
+
+#[test]
+fn format_without_a_local_declaration_still_checks_its_value() {
+    let src = "interface Input {\n  /** The day. */\n  day: Date;\n}\n/** Entry. */\nexport default function main({ day }: Input) {\n  return delegate(model=`x`, task=`Plan ${day}.`);\n}\n";
+    let p = project(&[("main.rein", src)]);
+    let StepResponse::Error { message, .. } = step(&p, &req_with("main", &[], &[("day", "2026-13-45")])) else { panic!("not an error") };
+    assert!(message.contains("`day`"), "{message}");
+    let StepResponse::Done { instruction, .. } = step(&p, &req_with("main", &[], &[("day", "2026-11-23")])) else { panic!("not done") };
+    assert!(instruction.ends_with("Task: Plan 2026-11-23."), "{instruction}");
 }
