@@ -167,9 +167,15 @@ impl Function {
         }
     }
 
-    /// Calls `f` on each input that the file types: each scalar parameter, each struct field, and each `const` answer.
+    /// Calls `f` on every Input value the function holds, including the copies the parser makes (struct parameter
+    /// fields in `inputs`, inline answer fields in `answer_fields`), so a value can be visited more than once. `f`
+    /// must give the same result when called again.
     pub fn for_each_input_mut(&mut self, f: &mut impl FnMut(&mut Input)) {
-        // Each scalar parameter is in `inputs` and in `params`. `inputs` alone visits it once.
+        for p in &mut self.params {
+            if let Param::Scalar(i) = p {
+                f(i);
+            }
+        }
         for i in &mut self.inputs {
             f(i);
         }
