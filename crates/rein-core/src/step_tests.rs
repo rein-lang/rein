@@ -640,11 +640,29 @@ fn struct_answer_field_of_iri_carries_its_json_schema() {
 }
 
 #[test]
-fn struct_answer_string_field_has_no_schema() {
+fn struct_answer_plain_string_field_has_no_schema() {
     let p = crate::program_fixture::with_main(PICKER.to_string());
     let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
     let fields = response.fields.unwrap();
+    assert_eq!((fields[0].name.as_str(), fields[0].r#type.as_str()), ("pr", "string"));
     assert_eq!(fields[0].schema, None);
+}
+
+#[test]
+fn plain_string_field_spec_serializes_without_a_schema_key() {
+    let field = FieldSpec { name: "pr".into(), r#type: "string".into(), options: None, description: "The PR link.".into(), schema: None };
+    let value = serde_json::to_value(&field).unwrap();
+    let object = value.as_object().unwrap();
+    assert!(!object.contains_key("schema"), "{value}");
+    assert_eq!(value["type"], "string");
+}
+
+#[test]
+fn struct_answer_union_field_has_no_schema() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!((fields[1].name.as_str(), fields[1].r#type.as_str()), ("task", "union"));
     assert_eq!(fields[1].schema, None);
 }
 
@@ -852,6 +870,17 @@ fn struct_answer_is_a_json_object_on_the_wire() {
     assert_eq!(request.answers["main.ci"], "green");
     let back = serde_json::to_string(&request).unwrap();
     assert!(back.contains(r#""main.pick":{"pr":"u/1","task":"merge"}"#) && back.contains(r#""main.ci":"green""#), "{back}");
+}
+
+#[test]
+fn built_in_format_field_serializes_its_schema_in_the_step_json() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let res = step(&p, &req("main", &[]));
+    let value = serde_json::to_value(&res).unwrap();
+    assert_eq!(value["kind"], "request");
+    assert_eq!(value["response"]["fields"][0]["name"], "pr");
+    assert_eq!(value["response"]["fields"][0]["type"], "iri");
+    assert_eq!(value["response"]["fields"][0]["schema"], serde_json::json!({"type": "string", "format": "iri"}));
 }
 
 #[test]
