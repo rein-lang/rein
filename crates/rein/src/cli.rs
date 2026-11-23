@@ -92,7 +92,7 @@ pub fn eval(function: &str, root: Option<PathBuf>, sets: &[String], json: bool) 
         Err(msg) => return fail(json, &msg),
     };
     let bindings = project.bindings(function);
-    match eval::run(&sf.function, &inputs, &bindings) {
+    match eval::run(&sf.function, &inputs, &bindings, false) {
         Err(msg) => fail(json, &msg),
         Ok(Outcome::Request { instruction, response }) => request(&sf.function, &instruction, &response, json),
         Ok(Outcome::Text(value)) => {
@@ -141,7 +141,7 @@ pub fn step(entry: Option<String>, root: Option<PathBuf>, flow: Option<String>, 
 
 /// The request that a failed `rein step` logs, when the request itself could not be read.
 fn empty_request() -> StepRequest {
-    StepRequest { version: PROTOCOL_VERSION, entry: ENTRY.to_string(), answers: Default::default(), flow: None, inputs: Default::default() }
+    StepRequest { version: PROTOCOL_VERSION, entry: ENTRY.to_string(), answers: Default::default(), flow: None, inputs: Default::default(), walk: false }
 }
 
 /// The project and its entry function for `--root DIR`, a program name or `.rein` path, or the nearest root from
@@ -201,6 +201,7 @@ pub(crate) fn build_request(entry: Option<String>, answers: &[String], inputs: &
         answers: map,
         flow: None,
         inputs: given,
+        walk: false,
     })
 }
 

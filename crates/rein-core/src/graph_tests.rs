@@ -131,6 +131,7 @@ fn walk_follows_a_compound_condition_and_stops_at_a_missing_answer() {
         answers: Default::default(),
         flow: None,
         inputs: Default::default(),
+        walk: false,
     };
     req.answers.insert("main.a".into(), "yes".into());
     req.answers.insert("main.b".into(), "no".into());
@@ -178,6 +179,7 @@ fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
             answers: Default::default(),
             flow: None,
             inputs: Default::default(),
+            walk: false,
         };
         for (k, v) in pairs {
             req.answers.insert(k.to_string(), v.to_string());
@@ -270,6 +272,7 @@ fn a_walk_reads_a_passed_value_and_marks_its_branch() {
         answers: Default::default(),
         flow: None,
         inputs: Default::default(),
+        walk: false,
     };
     for go in ["no", "yes"] {
         req.answers.insert("main.go".into(), go.into());

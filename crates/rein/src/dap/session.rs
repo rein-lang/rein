@@ -535,6 +535,7 @@ impl Session {
             answers: self.answers.clone(),
             flow: None,
             inputs: self.inputs.clone(),
+            walk: false,
         }
     }
 }
