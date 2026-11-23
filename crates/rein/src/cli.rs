@@ -496,6 +496,9 @@ fn input_json(input: &Input) -> Value {
     if let Some(options) = input.ty.options() {
         v["options"] = json!(options);
     }
+    if let Some(schema) = input.ty.json_schema() {
+        v["schema"] = schema;
+    }
     v
 }
 

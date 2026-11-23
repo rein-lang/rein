@@ -77,3 +77,36 @@ fn a_schema_type_is_a_string_for_json() {
         Err("schema type `Ticket` is not loaded".into())
     );
 }
+
+fn ticket_ref(loaded: Option<Result<Arc<UserSchema>, String>>) -> FormatType {
+    FormatType::Schema(SchemaRef {
+        name: Spanned {
+            value: "Ticket".into(),
+            span: Default::default(),
+        },
+        path: "./ticket.schema".into(),
+        loaded,
+    })
+}
+
+#[test]
+fn json_schema_of_a_schema_type_not_loaded_is_none() {
+    assert_eq!(ticket_ref(None).json_schema(), None);
+}
+
+#[test]
+fn json_schema_of_a_schema_type_that_failed_to_load_is_none() {
+    let failed = ticket_ref(Some(Err("cannot read `./ticket.schema`".into())));
+    assert_eq!(failed.json_schema(), None);
+}
+
+#[test]
+fn json_schema_of_a_loaded_schema_type_is_the_file_schema() {
+    // A file text no other fixture uses, so the expected value below cannot come from another schema.
+    const ORDER: &str = r#"{ "title": "Order", "type": "string", "pattern": "^ORD-[0-9]{4}$", "minLength": 8, "maxLength": 8 }"#;
+    let loaded = ticket_ref(Some(Ok(Arc::new(UserSchema::load(ORDER).unwrap()))));
+    assert_eq!(
+        loaded.json_schema(),
+        Some(json!({"title": "Order", "type": "string", "pattern": "^ORD-[0-9]{4}$", "minLength": 8, "maxLength": 8}))
+    );
+}

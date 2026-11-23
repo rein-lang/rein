@@ -631,6 +631,66 @@ fn struct_answer_asks_for_a_json_object_with_the_fields_of_the_struct() {
 }
 
 #[test]
+fn struct_answer_field_of_iri_carries_its_json_schema() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "iri");
+    assert_eq!(fields[0].schema, Some(serde_json::json!({"type": "string", "format": "iri"})));
+}
+
+#[test]
+fn struct_answer_plain_string_field_has_no_schema() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!((fields[0].name.as_str(), fields[0].r#type.as_str()), ("pr", "string"));
+    assert_eq!(fields[0].schema, None);
+}
+
+#[test]
+fn plain_string_field_spec_serializes_without_a_schema_key() {
+    let field = FieldSpec { name: "pr".into(), r#type: "string".into(), options: None, description: "The PR link.".into(), schema: None };
+    let value = serde_json::to_value(&field).unwrap();
+    let object = value.as_object().unwrap();
+    assert!(!object.contains_key("schema"), "{value}");
+    assert_eq!(value["type"], "string");
+}
+
+#[test]
+fn struct_answer_union_field_has_no_schema() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!((fields[1].name.as_str(), fields[1].r#type.as_str()), ("task", "union"));
+    assert_eq!(fields[1].schema, None);
+}
+
+#[test]
+fn struct_answer_field_of_a_schema_type_carries_the_user_schema() {
+    let picker = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let p = project(&[("main.rein", picker), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "string");
+    let schema = fields[0].schema.as_ref().expect("schema of the user type");
+    assert_eq!(schema, &serde_json::json!({"title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20, "examples": ["ABC-123"]}));
+}
+
+#[test]
+fn struct_file_schema_field_carries_the_schema_its_own_file_imports() {
+    // The schema import sits in `pick.struct.rein`, not in the file that uses the struct.
+    let main = "import { Pick } from \"./pick.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The pick. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let shared = "import { Ticket } from \"./ticket.schema\";\n\n/** A picked ticket. */\nexport default interface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n";
+    let p = project(&[("main.rein", main), ("pick.struct.rein", shared), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request: {:?}", step(&p, &req("main", &[]))) };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "string");
+    let schema = fields[0].schema.as_ref().expect("schema of the user type from the struct file");
+    assert_eq!(schema, &serde_json::json!({"title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20, "examples": ["ABC-123"]}));
+}
+
+#[test]
 fn struct_answer_is_validated_field_by_field() {
     let p = crate::program_fixture::with_main(PICKER.to_string());
     let cases = [
@@ -810,6 +870,17 @@ fn struct_answer_is_a_json_object_on_the_wire() {
     assert_eq!(request.answers["main.ci"], "green");
     let back = serde_json::to_string(&request).unwrap();
     assert!(back.contains(r#""main.pick":{"pr":"u/1","task":"merge"}"#) && back.contains(r#""main.ci":"green""#), "{back}");
+}
+
+#[test]
+fn built_in_format_field_serializes_its_schema_in_the_step_json() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let res = step(&p, &req("main", &[]));
+    let value = serde_json::to_value(&res).unwrap();
+    assert_eq!(value["kind"], "request");
+    assert_eq!(value["response"]["fields"][0]["name"], "pr");
+    assert_eq!(value["response"]["fields"][0]["type"], "iri");
+    assert_eq!(value["response"]["fields"][0]["schema"], serde_json::json!({"type": "string", "format": "iri"}));
 }
 
 #[test]

@@ -366,6 +366,14 @@ impl InputType {
         matches!(self, InputType::Text | InputType::Format(_))
     }
 
+    /// The JSON Schema of a format type. `None` for every other type, and for a schema type not loaded.
+    pub fn json_schema(&self) -> Option<serde_json::Value> {
+        match self {
+            InputType::Format(f) => f.json_schema(),
+            _ => None,
+        }
+    }
+
     /// The type as TypeScript writes it: `boolean`, `string`, or `"a" | "b"`.
     pub fn ts_type(&self) -> String {
         match self {

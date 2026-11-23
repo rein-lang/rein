@@ -433,3 +433,56 @@ fn string_input_is_a_template_argument_and_the_check_is_clean() {
     assert_eq!(code(&run), 0, "{}{}", stdout(&run), stderr(&run));
     assert_eq!(stdout(&run).trim(), format!("{LINK} then b"));
 }
+
+const TICKET_MAIN: &str = "import { Ticket } from \"./ticket.schema\";\n\ninterface Input {\n  /** The ticket to fix. */\n  ticket: Ticket;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ ticket, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${ticket}.`;\n  }\n\n  return `Fix ${ticket}.`;\n}\n";
+const TICKET_JSON: &str = "{ \"title\": \"Ticket\", \"type\": \"string\", \"pattern\": \"^[A-Z]+-[0-9]+$\", \"maxLength\": 20, \"examples\": [\"ABC-123\"] }";
+
+#[test]
+fn eval_need_input_of_a_schema_type_carries_its_json_schema() {
+    let flow = Flow::new(&[("main.rein", TICKET_MAIN), ("ticket.schema.json", TICKET_JSON)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no", "--json"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    let v = json(&out);
+    assert_eq!(v["kind"], "need_input");
+    assert_eq!(v["input"]["name"], "ticket");
+    assert_eq!(v["input"]["type"], "string");
+    assert_eq!(v["input"]["schema"], serde_json::from_str::<Value>(TICKET_JSON).unwrap());
+}
+
+#[test]
+fn eval_need_input_of_a_builtin_format_carries_its_json_schema() {
+    let main = "interface Input {\n  /** The link. */\n  link: IRI;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ link, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${link}.`;\n  }\n\n  return `Open ${link}.`;\n}\n";
+    let flow = Flow::new(&[("main.rein", main)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no", "--json"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(json(&out)["input"]["schema"], serde_json::json!({"type": "string", "format": "iri"}));
+}
+
+#[test]
+fn eval_need_input_of_a_plain_string_has_no_schema_key() {
+    let main = "interface Input {\n  /** The note. */\n  note: string;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ note, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${note}.`;\n  }\n\n  return `Note ${note}.`;\n}\n";
+    let flow = Flow::new(&[("main.rein", main)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no", "--json"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(json(&out)["input"]["name"], "note");
+    assert!(json(&out)["input"].get("schema").is_none());
+}
+
+#[test]
+fn eval_need_input_of_a_schema_type_text_mode_is_unchanged() {
+    let flow = Flow::new(&[("main.rein", TICKET_MAIN), ("ticket.schema.json", TICKET_JSON)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "need input ticket: Ticket - The ticket to fix.\nhint: rerun with --set ticket=<value>\n");
+}
+
+#[test]
+fn step_text_mode_struct_answer_lists_fields_without_schema() {
+    let pick = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let flow = Flow::new(&[("main.rein", pick), ("ticket.schema.json", TICKET_JSON)]);
+    let out = step_in(flow.path(), &[]);
+    assert_eq!(code(&out), 3, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("  ticket: string - The ticket.\n  link: iri - The link.\n"), "{text}");
+    assert!(!text.contains("schema"), "{text}");
+}
