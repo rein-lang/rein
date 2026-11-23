@@ -75,6 +75,20 @@ impl Format {
         self.spec().1
     }
 
+    /// The indefinite article for the type name, by its first sound: `an IRI`, `a URI`, `an Email`.
+    pub fn article(self) -> &'static str {
+        match self {
+            Format::Iri
+            | Format::IriReference
+            | Format::Email
+            | Format::IdnEmail
+            | Format::IdnHostname
+            | Format::Ipv4
+            | Format::Ipv6 => "an",
+            _ => "a",
+        }
+    }
+
     /// A valid value that stands in for a real one when a walk has no value, such as `rein graph`.
     pub fn placeholder(self, name: &str) -> String {
         match self {

@@ -125,7 +125,7 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                 let members = match &input.ty {
                     InputType::Choice(members) => members,
                     InputType::Text | InputType::Format(_) => {
-                        return Err(Stop::Error(string_in_condition(&subject.value)));
+                        return Err(Stop::Error(string_in_condition(&subject.value, &input.ty)));
                     }
                     InputType::Bool => return Err(bool_in_switch(&subject.value)),
                     InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&subject.value))),
@@ -266,7 +266,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
         Expr::Var(v) => {
             let input = declared(env, &v.value)?;
             match input.ty {
-                InputType::Text | InputType::Format(_) => Err(Stop::Error(string_in_condition(&v.value))),
+                InputType::Text | InputType::Format(_) => Err(Stop::Error(string_in_condition(&v.value, &input.ty))),
                 InputType::Struct(_) => Err(Stop::Error(struct_in_use(&v.value))),
                 InputType::Bool => parse_bool(&v.value, provided(env, &v.value)?),
                 InputType::Choice(_) => Err(Stop::Error(format!(
@@ -279,7 +279,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
             let input = declared(env, &var.value)?;
             let InputType::Choice(members) = &input.ty else {
                 return Err(match input.ty {
-                    InputType::Text | InputType::Format(_) => Stop::Error(string_in_condition(&var.value)),
+                    InputType::Text | InputType::Format(_) => Stop::Error(string_in_condition(&var.value, &input.ty)),
                     InputType::Struct(_) => Stop::Error(struct_in_use(&var.value)),
                     _ => bool_compared(&var.value),
                 });
