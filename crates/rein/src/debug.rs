@@ -168,11 +168,13 @@ fn walk(project: &Project, entry: &str, body: &str) -> Value {
             if request.entry == ENTRY {
                 request.entry = entry.to_string();
             }
+            // The unset inputs get stand-in values, so this is a walk: it checks no format.
+            request.walk = true;
             if let Some(sf) = project.get(&request.entry) {
                 for i in sf.function.text_inputs() {
                     let name = &i.name.value;
                     if request.inputs.get(name).is_none_or(|v| v.is_empty()) {
-                        request.inputs.insert(name.clone(), walk_value(project, &request.entry, i));
+                        request.inputs.insert(name.clone(), walk_value(i));
                         placeholders.push(name.clone());
                     }
                 }

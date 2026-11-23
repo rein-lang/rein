@@ -12,6 +12,7 @@ fn first(answers: &[(&str, &str)]) -> StepRequest {
         answers: answers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
         flow: None,
         inputs: [("pr".to_string(), "https://x/pr/1".to_string())].into(),
+        walk: false,
     }
 }
 
@@ -181,27 +182,27 @@ fn iri_entry_project() -> Project {
 }
 
 #[test]
-fn walk_with_an_unset_iri_input_uses_a_valid_example() {
+fn walk_with_an_unset_iri_input_passes_the_stand_in_without_a_format_check() {
     let out = walk(&iri_entry_project(), "main", "{}");
     assert_eq!(out["step"]["kind"], "done", "{out}");
-    assert!(out["step"]["instruction"].as_str().unwrap().contains("Task: Open urn:rein:link."), "{out}");
+    assert!(out["step"]["instruction"].as_str().unwrap().contains("Task: Open <link>."), "{out}");
     assert_eq!(out["placeholders"], json!(["link"]));
 }
 
 #[test]
-fn walk_with_an_unset_string_input_passed_to_an_iri_uses_a_valid_example() {
+fn walk_of_an_unset_string_input_handed_to_an_iri_has_no_error() {
     let root = std::env::temp_dir().join(format!("rein-debug-text-iri-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    let main = "import { other } from \"./other\";\n\n/** Entry. */\nexport default function main(\n  /** The link. */\n  link: string,\n) {\n  return other(link=link);\n}\n";
-    let other = "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return `Open ${link}.`;\n}\n";
+    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  s: string,\n) {\n  return @./other(link=s);\n}\n";
+    let other = "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
     std::fs::write(root.join("main.rein"), main).unwrap();
     std::fs::write(root.join("other.rein"), other).unwrap();
     let project = Project::load(&root).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
     let out = walk(&project, "main", "{}");
     assert_eq!(out["step"]["kind"], "done", "{out}");
-    assert!(out["step"]["instruction"].as_str().unwrap().contains("Open urn:rein:link."), "{out}");
-    assert_eq!(out["placeholders"], json!(["link"]));
+    assert!(out["step"]["instruction"].as_str().unwrap().contains("Open <s>."), "{out}");
+    assert_eq!(out["placeholders"], json!(["s"]));
 }
 
 #[test]

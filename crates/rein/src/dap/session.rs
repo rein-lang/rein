@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use rein_core::input_formats::formats_of;
+use rein_core::ast::InputType;
 use rein_core::project::Project;
 use rein_core::step::{step, type_of, Answers, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
@@ -268,14 +268,16 @@ impl Session {
         }
     }
 
-    /// The format check of an entry input, as `rein step` runs it. A `string` input is checked against each format
-    /// of the parameters it reaches. `None` when the value passes, or the input has no format. A refused value is
-    /// not stored, so the same question is asked again.
+    /// The format check of an entry input, as `rein step` runs it. `None` when the value passes, or the input is not
+    /// a format. A refused value is not stored, so the same question is asked again.
     fn input_refusal(&self, name: &str, value: &str) -> Option<String> {
         let project = self.project.as_ref()?;
         let function = &project.get(&self.entry)?.function;
         let input = function.text_inputs().find(|i| i.name.value == name)?;
-        formats_of(project, &self.entry, input).iter().find_map(|format| format.check(name, value).err())
+        match &input.ty {
+            InputType::Format(format) => format.check(name, value).err(),
+            _ => None,
+        }
     }
 
     /// The step engine's error for `key`, if it refuses the answers so far.
@@ -533,6 +535,7 @@ impl Session {
             answers: self.answers.clone(),
             flow: None,
             inputs: self.inputs.clone(),
+            walk: false,
         }
     }
 }
