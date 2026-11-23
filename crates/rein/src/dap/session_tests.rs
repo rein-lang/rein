@@ -224,6 +224,25 @@ fn missing_string_input_is_asked_first() {
 }
 
 #[test]
+fn missing_format_input_is_asked_with_its_format_name() {
+    let root = std::env::temp_dir().join(format!("rein-dap-iri-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    fs::write(root.join("main.rein"), main).unwrap();
+    fs::write(root.join("rein.json"), "{\n  \"entry\": \"main.rein\"\n}\n").unwrap();
+    let mut session = Session::default();
+    session.handle(&request("initialize", json!({})));
+    let program = root.join("main.rein").display().to_string();
+    let out = session.handle(&request("launch", json!({"program": program})));
+    assert!(out[0]["success"].as_bool().unwrap(), "{out:?}");
+    let out = session.handle(&request("configurationDone", json!({})));
+    let asks = events(&out, "rein/ask");
+    assert_eq!(asks[0]["body"]["key"], "link");
+    assert_eq!(asks[0]["body"]["type"], "iri");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn stop_on_entry_stops_before_the_first_question() {
     let mut session = started(json!({"stopOnEntry": true}));
     let out = session.handle(&request("configurationDone", json!({})));

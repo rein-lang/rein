@@ -162,22 +162,21 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     run(project, req, &mut Vec::new())
 }
 
+/// The value that a walk gives an unset `string` or format input: a valid example for a format, else `<name>`.
+pub fn walk_value(input: &Input) -> String {
+    match &input.ty {
+        InputType::Format(format) => format.placeholder(&input.name.value),
+        _ => format!("<{}>", input.name.value),
+    }
+}
+
 /// The owner of each function a step walks, in walk order, as [`scoped`] gives it: `main`, then `main.b>fn`.
-/// `rein graph` reads a function's answers through the first of its owners. A `string` input of `entry` is walked
-/// as `<name>`: no condition reads an input, so the walk is the same as with the real inputs.
+/// `rein graph` reads a function's answers through the first of its owners. An unset `string` or format input of
+/// `entry` is walked with [`walk_value`]: no condition reads an input, so the walk is the same as with the real inputs.
 /// Each owner comes with the values passed to that visit, so a walk reads a passed `boolean` as `rein step` does.
 pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<(String, BTreeMap<String, String>)> {
     let inputs = project.get(entry).map_or_else(BTreeMap::new, |sf| {
-        sf.function
-            .text_inputs()
-            .map(|i| {
-                let value = match &i.ty {
-                    InputType::Format(format) => format.placeholder(&i.name.value),
-                    _ => format!("<{}>", i.name.value),
-                };
-                (i.name.value.clone(), value)
-            })
-            .collect()
+        sf.function.text_inputs().map(|i| (i.name.value.clone(), walk_value(i))).collect()
     });
     let req = StepRequest { version: PROTOCOL_VERSION, entry: entry.to_string(), answers: answers.clone(), flow: None, inputs };
     let mut owners = Vec::new();
