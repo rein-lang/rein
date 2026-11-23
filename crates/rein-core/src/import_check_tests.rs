@@ -528,3 +528,20 @@ fn missing_schema_file_is_an_error() {
         diags["main"]
     );
 }
+
+#[test]
+fn schema_import_has_no_name_error() {
+    let project = project_on_disk(
+        "noerr",
+        &[
+            ("ticket.schema.json", TICKET_SCHEMA),
+            ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `x`;")),
+        ],
+    );
+    let diags = project.check();
+    assert!(
+        !diags["main"].iter().any(|d| d.severity == Severity::Error),
+        "{:?}",
+        diags["main"]
+    );
+}
