@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "rein"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clap",
  "clap-markdown",
@@ -1287,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "rein-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "jsonschema",
  "serde",
