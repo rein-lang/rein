@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use rein_core::ast::InputType;
 use rein_core::project::Project;
 use rein_core::step::{step, type_of, Answers, StepRequest, StepResponse, PROTOCOL_VERSION};
 use serde_json::{json, Value};
@@ -252,11 +253,26 @@ impl Session {
                 Ok(mode)
             }
             Some(Waiting::Input { name, mode }) if name == key => {
+                if let Some(message) = self.input_refusal(&name, &value) {
+                    return Err(message);
+                }
                 self.inputs.insert(name, value);
                 self.waiting = None;
                 Ok(mode)
             }
             _ => Err(format!("no question is waiting for `{key}`")),
+        }
+    }
+
+    /// The format check of an entry input, as `rein step` runs it. `None` when the value passes, or the input is not
+    /// a format. A refused value is not stored, so the same question is asked again.
+    fn input_refusal(&self, name: &str, value: &str) -> Option<String> {
+        let project = self.project.as_ref()?;
+        let function = &project.get(&self.entry)?.function;
+        let input = function.text_inputs().find(|i| i.name.value == name)?;
+        match &input.ty {
+            InputType::Format(format) => format.check(name, value).err(),
+            _ => None,
         }
     }
 
