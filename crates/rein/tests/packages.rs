@@ -21,7 +21,7 @@ impl Sandbox {
     fn new(tag: &str) -> Self {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let base = std::env::temp_dir().join(format!("rein-packages-{tag}-{}-{nanos}-{n}", std::process::id()));
+        let base = sandbox_root().join(format!("rein-packages-{tag}-{}-{nanos}-{n}", std::process::id()));
         fs::create_dir_all(base.join("home")).unwrap();
         fs::create_dir_all(base.join("work")).unwrap();
         fs::create_dir_all(base.join("repo/.git")).unwrap();
@@ -61,6 +61,16 @@ impl Drop for Sandbox {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.base);
     }
+}
+
+/// The folder the sandboxes go in. Rein takes the nearest `rein/` folder above the working directory, so the folder
+/// must have no parent that holds one. The shared temp folder and a checkout's parent folder can both hold one.
+fn sandbox_root() -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    [PathBuf::from(env!("CARGO_TARGET_TMPDIR")), home.join(".cache/rein-test")]
+        .into_iter()
+        .find(|root| root.ancestors().all(|d| !d.join("rein").is_dir()))
+        .expect("no folder without a parent `rein/` folder: set HOME to one that has none")
 }
 
 fn write(path: &Path, text: &str) {
