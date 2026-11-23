@@ -13,22 +13,48 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      checks: read # read CI results of the tagged commit
       id-token: write # crates.io trusted publishing (OIDC): no stored token
     env:
       RUSTUP_TOOLCHAIN: "1.100.0" # keep equal to the pin in ci.yml
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history for the ancestor check
+
+      # Never publish a commit that is not on main or whose CI is not green.
+      - name: Require tag on main with green CI
+        run: |
+          set -o pipefail # a failed gh api page must fail the gate
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "tagged commit is not on main"; exit 1; }
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+            --jq '.check_runs[] | select(.name != "publish")
+              | "\(.name) \(.status) \(.conclusion)"' | tee runs.txt
+          [ -s runs.txt ] || { echo "no CI runs found"; exit 1; }
+          ! grep -qv ' completed success$' runs.txt \
+            || { echo "CI is not green"; exit 1; }
 
       - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
 
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
+      # Skip a crate already on crates.io so a rerun does not fail.
       # rein depends on rein-core, so rein-core goes first.
-      - run: cargo publish -p rein-core
+      - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-
-      - run: cargo publish -p rein
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          for crate in rein-core rein; do
+            v=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[]|select(.name==$c).version')
+            if curl -sf -A "rein-release (github.com/rein-lang/rein)" \
+              "https://crates.io/api/v1/crates/$crate/$v" >/dev/null; then
+              echo "$crate $v already published, skipping"
+              continue
+            fi
+            cargo publish -p "$crate"
+          done
