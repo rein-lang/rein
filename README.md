@@ -21,6 +21,14 @@ A Rein program asks one question at a time. The agent answers, and the program g
 
 Skills teach. Programs run the work. Read more at [rein-lang.com](https://rein-lang.com) and [Rein and skills](https://rein-lang.com/docs/rein-vs-skills).
 
+## The language
+
+Each function is one file. It returns the next step as text, as a reference to another function, or as a template call.
+
+Rein mimics TypeScript syntax and types, except `@` references. Imports name the declared function, such as `import { fix } from "./ci/fix";`. There is no `else`, and no `default` in a `switch`. Every function returns on every path. A function takes one parameter: a scalar or a struct, and a shared struct is a `<name>.struct.rein` file.
+
+Rein is not TypeScript, and it does not handle logic. See [Why not an existing language](https://rein-lang.com/docs/why-not-a-programming-language).
+
 ## Sample
 
 `examples/rein/merge-pr/merge_pr.rein`:
