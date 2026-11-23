@@ -199,7 +199,7 @@ function Graph({ graph, keys, theme, onPick }) {
 // ---- Controls and step ----
 
 // One control per key: yes/no buttons, a list of the options, or a text box. A text box sets on Enter or blur.
-function Control({ item, value, onChange, focused, needed }) {
+function Control({ item, value, onChange, focused, needed, invalid }) {
   const id = "c-" + item.key;
   let field;
   if (item.type === "boolean") {
@@ -217,7 +217,7 @@ function Control({ item, value, onChange, focused, needed }) {
       onBlur=${commit} onKeyDown=${(e) => e.key === "Enter" && commit(e)} />`;
   }
   const kind = item.type === "string" || item.type === "struct" ? ` (${item.type})` : "";
-  const cls = ["control", value ? "set" : "", focused ? "focus" : "", needed ? "needed" : ""].join(" ");
+  const cls = ["control", value ? "set" : "", focused ? "focus" : "", needed ? "needed" : "", invalid ? "invalid" : ""].join(" ");
   return html`<div className=${cls} data-key=${item.key}>
     <label htmlFor=${id}>${item.key}</label><small>${item.description + kind}</small>${field}
   </div>`;
@@ -330,6 +330,8 @@ function App({ schema }) {
   const placeholders = (out && out.placeholders) || [];
   const inputs = schema.inputs[state.entry] || [];
   const keys = useMemo(() => (out && out.keys) || {}, [out]);
+  // The answer the error names, so its control is marked.
+  const bad = out && out.step && out.step.kind === "error" ? out.step.key : null;
   return html`
     <header>
       <h1>rein debug</h1>
@@ -354,7 +356,7 @@ function App({ schema }) {
         })}
         <h2>Answers</h2>
         ${schema.answers.map((a) => html`<${Control} key=${a.key} item=${a} value=${state.answers[a.key]}
-          onChange=${(v) => setAnswer(a.key, v)} focused=${focus === a.key} />`)}
+          onChange=${(v) => setAnswer(a.key, v)} focused=${focus === a.key} invalid=${bad === a.key} />`)}
       </aside>
       <section>
         <${Step} step=${out && out.step} schema=${schema} placeholders=${placeholders} onAnswer=${setAnswer} />
