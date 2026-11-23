@@ -28,7 +28,8 @@ fn partial_walk_stops_at_the_next_question() {
     assert_eq!(out["step"]["trace"], json!(["main", "merge"]));
     assert_eq!(out["current"]["key"], "merge.ci");
     assert_eq!(out["path"], json!(["f2", "f2_0", "f2_2", "f3", "f3_0"]));
-    assert!(out["mermaid"].as_str().unwrap().contains("class f3_0 current"));
+    assert_eq!(out["graph"]["current"]["node"], "f3_0");
+    assert!(out["graph"]["nodes"].as_array().unwrap().iter().any(|n| n["id"] == "f3_0" && n["kind"] == "question"));
     assert_eq!(out["keys"]["f3_0"], "merge.ci");
 }
 
@@ -54,7 +55,7 @@ fn invalid_answer_is_the_step_error() {
     let message = "invalid value `ship` for `task`; expected one of: `review`, `address comments`, `fix ci`, `merge`";
     assert_eq!(out["step"]["message"], message);
     assert!(out["current"].is_null());
-    assert!(!out["mermaid"].as_str().unwrap().contains("classDef taken"));
+    assert!(out["graph"]["path"].is_null(), "{out}");
 }
 
 #[test]
@@ -79,11 +80,18 @@ fn schema_lists_inputs_and_keys_with_types() {
 }
 
 #[test]
-fn page_has_the_controls_and_the_pinned_mermaid() {
+fn page_has_the_root_and_the_pinned_react_flow() {
     let html = page(&first(&[("main.task", "merge")]));
-    for part in ["id=\"controls\"", "id=\"step\"", "id=\"diagram\"", graph_cmd::MERMAID, "\"main.task\":\"merge\""] {
+    for part in ["id=\"root\"", "<script type=\"importmap\">", "from \"@xyflow/react\"", REACT_FLOW_CSS, "\"main.task\":\"merge\""] {
         assert!(html.contains(part), "{part}");
     }
+    for (name, url) in IMPORTS {
+        assert!(html.contains(url), "{name}");
+    }
+    for placeholder in ["__CSS__", "__SCRIPT__", "__IMPORTS__", "__INITIAL__", "__REACT_FLOW_CSS__"] {
+        assert!(!html.contains(placeholder), "{placeholder}");
+    }
+    assert!(!html.contains("mermaid"));
 }
 
 #[test]
@@ -110,8 +118,8 @@ fn page_has_the_dark_mode_and_the_theme_switch() {
         ":root[data-theme=\"dark\"]",
         "id=\"theme\"",
         "localStorage.getItem(\"rein-theme\")",
-        "theme: dark ? \"dark\" : \"default\"",
-        "applyTheme(theme.value)",
+        "colorMode=${colorMode}",
+        "localStorage.setItem(\"rein-theme\", theme)",
     ] {
         assert!(html.contains(part), "{part}");
     }
@@ -128,7 +136,7 @@ fn start_url_carries_the_starting_state_as_its_query() {
 #[test]
 fn page_has_the_zoom_and_the_pan() {
     let html = page(&first(&[]));
-    for part in ["id=\"zoom-in\"", "id=\"zoom-fit\"", "id=\"zoom-100\"", "function centerCurrent()", "addEventListener(\"wheel\""] {
+    for part in ["id=\"zoom-current\"", "id=\"zoom-fit\"", "<${Controls}", "<${MiniMap}", "flow.setCenter"] {
         assert!(html.contains(part), "{part}");
     }
 }

@@ -114,10 +114,32 @@ impl Server {
     }
 }
 
-/// The page, with the first inputs and answers. `<` is escaped so the JSON cannot close the script.
+/// The React builds the page loads, by import name. Pinned, so a page draws the same later. React Flow and React DOM
+/// take React from this map, so the page has one React.
+pub(crate) const IMPORTS: &[(&str, &str)] = &[
+    ("react", "https://esm.sh/react@18.3.1"),
+    ("react/jsx-runtime", "https://esm.sh/react@18.3.1/jsx-runtime"),
+    ("react-dom", "https://esm.sh/react-dom@18.3.1?external=react"),
+    ("react-dom/client", "https://esm.sh/react-dom@18.3.1/client?external=react"),
+    ("@xyflow/react", "https://esm.sh/@xyflow/react@12.3.6?external=react,react-dom"),
+    ("@dagrejs/dagre", "https://esm.sh/@dagrejs/dagre@1.1.4"),
+    ("htm", "https://esm.sh/htm@3.1.1"),
+];
+
+/// The React Flow style sheet, of the same version as its import.
+pub(crate) const REACT_FLOW_CSS: &str = "https://cdn.jsdelivr.net/npm/@xyflow/react@12.3.6/dist/style.css";
+
+/// The page: its style, its script, the import map and the first inputs and answers, in one document. `<` is
+/// escaped so the JSON cannot close the script.
 fn page(first: &StepRequest) -> String {
     let initial = serde_json::to_string(first).unwrap_or_default().replace('<', "\\u003c");
-    include_str!("debug_page.html").replace("__MERMAID__", graph_cmd::MERMAID).replace("__INITIAL__", &initial)
+    let imports: serde_json::Map<String, Value> = IMPORTS.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
+    include_str!("debug_page.html")
+        .replace("__REACT_FLOW_CSS__", REACT_FLOW_CSS)
+        .replace("__IMPORTS__", &json!({ "imports": imports }).to_string())
+        .replace("__CSS__", include_str!("debug_page.css"))
+        .replace("__SCRIPT__", include_str!("debug_page.js"))
+        .replace("__INITIAL__", &initial)
 }
 
 /// The controls of the page: the functions an entry can be, the `string` inputs of each, and every key the flow
@@ -156,7 +178,7 @@ fn schema(project: &Project, entry: &str) -> Value {
     json!({"entry": entry, "functions": functions, "inputs": inputs, "answers": answers})
 }
 
-/// The answer to `POST /walk`: the real step response, the graph with the walk marked as Mermaid text, the answer
+/// The answer to `POST /walk`: the real step response, the graph with the walk marked (nodes, edges, path), the answer
 /// key of each question node (so a click on one can focus its control), and the `string` inputs left unset.
 /// An unset input is walked with [`walk_value`], so the page always has a step to show. `entry` is the
 /// default entry.
@@ -190,8 +212,7 @@ fn walk(project: &Project, entry: &str, body: &str) -> Value {
         .filter(|n| n.kind == NodeKind::Question)
         .filter_map(|n| Some((n.id.clone(), json!(format!("{}.{}", n.function, n.name.as_ref()?)))))
         .collect();
-    let mermaid = graph::mermaid(&g);
-    json!({"step": response, "mermaid": mermaid, "path": g.path, "current": g.current, "keys": keys, "placeholders": placeholders})
+    json!({"step": response, "path": g.path, "current": g.current, "graph": g, "keys": keys, "placeholders": placeholders})
 }
 
 #[cfg(test)]
