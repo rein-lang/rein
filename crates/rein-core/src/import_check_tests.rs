@@ -460,3 +460,17 @@ fn aliased_import_of_a_destructured_field_name_is_clean() {
         diags["main"]
     );
 }
+
+#[test]
+fn schema_import_has_no_name_error() {
+    let project = project_of(&[(
+        "main",
+        &main_with("import { Ticket } from \"./ticket.schema\";", "return `x`;"),
+    )]);
+    let diags = project.check();
+    assert!(
+        !diags["main"].iter().any(|d| d.severity == Severity::Error),
+        "{:?}",
+        diags["main"]
+    );
+}

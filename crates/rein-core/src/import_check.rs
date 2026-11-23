@@ -11,8 +11,10 @@ pub fn check(project: &Project, from: &str, f: &Function) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let own = own_names(f);
     for import in &f.imports {
-        if let Some(d) = wrong_name(project, from, import) {
-            out.push(d);
+        if !import.is_schema() {
+            if let Some(d) = wrong_name(project, from, import) {
+                out.push(d);
+            }
         }
         if let Some(d) = shadowed(import, &own) {
             out.push(d);

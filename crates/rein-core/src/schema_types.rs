@@ -17,7 +17,8 @@ pub const SCHEMA_SUFFIX: &str = ".schema";
 /// The file of a schema type: the import path plus this, such as `ticket.schema.json`.
 pub const SCHEMA_FILE_EXT: &str = ".schema.json";
 
-/// A JSON Schema file that defines a string type. Its `title` is the name the import gives.
+/// A JSON Schema file that defines a string type. Its `title` is the type name the import should use. This PR does
+/// not check that the two match.
 pub struct UserSchema {
     /// The name the schema declares, such as `Ticket`.
     pub title: String,
