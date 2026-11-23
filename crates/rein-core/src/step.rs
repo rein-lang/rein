@@ -609,8 +609,17 @@ fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>, walk: 
     if let Some(input) = entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
         return Err(missing_input(&input.name.value));
     }
+    if !walk {
+        check_formats(entry, |name| given.get(name).map(String::as_str))?;
+    }
+    Ok(())
+}
+
+/// Checks each format input of `entry` that `value_of` gives a value to against its format. A name with no
+/// value is skipped. `rein step` and `rein eval` both check their `string` inputs with it.
+pub fn check_formats<'a>(entry: &Function, value_of: impl Fn(&str) -> Option<&'a str>) -> Result<(), String> {
     for input in entry.text_inputs() {
-        if let (InputType::Format(format), Some(value), false) = (&input.ty, given.get(&input.name.value), walk) {
+        if let (InputType::Format(format), Some(value)) = (&input.ty, value_of(&input.name.value)) {
             format.check(&input.name.value, value)?;
         }
     }
