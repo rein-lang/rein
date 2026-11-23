@@ -660,6 +660,19 @@ fn struct_answer_field_of_a_schema_type_carries_the_user_schema() {
 }
 
 #[test]
+fn struct_file_schema_field_carries_the_schema_its_own_file_imports() {
+    // The schema import sits in `pick.struct.rein`, not in the file that uses the struct.
+    let main = "import { Pick } from \"./pick.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The pick. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let shared = "import { Ticket } from \"./ticket.schema\";\n\n/** A picked ticket. */\nexport default interface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n";
+    let p = project(&[("main.rein", main), ("pick.struct.rein", shared), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request: {:?}", step(&p, &req("main", &[]))) };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "string");
+    let schema = fields[0].schema.as_ref().expect("schema of the user type from the struct file");
+    assert_eq!(schema["pattern"], "^[A-Z]+-[0-9]+$");
+}
+
+#[test]
 fn struct_answer_is_validated_field_by_field() {
     let p = crate::program_fixture::with_main(PICKER.to_string());
     let cases = [
