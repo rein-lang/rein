@@ -1107,3 +1107,31 @@ fn a_passed_union_is_not_a_question_and_an_unpassed_one_is() {
     let StepResponse::Question { key, .. } = res else { panic!("{res:?}") };
     assert_eq!(key, "go.ci");
 }
+
+const DATE_ANSWER: &str = "interface Date {\n  /** The day. */\n  day: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The day to plan. */\n  const d: Date = await request(`pick a day`);\n  return `Plan ${d.day}.`;\n}\n";
+
+#[test]
+fn local_interface_named_like_a_format_shadows_the_format() {
+    let p = crate::program_fixture::with_main(DATE_ANSWER.to_string());
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.d", "{\"day\":\"Monday\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Plan Monday.");
+}
+
+#[test]
+fn imported_struct_named_like_a_format_is_a_struct() {
+    let main = "import { Email } from \"./email.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The address to write to. */\n  const e: Email = await request(`pick an address`);\n  return `Write ${e.address}.`;\n}\n";
+    let shared = "/** A mail address. */\nexport default interface Email {\n  /** The address. */\n  address: string;\n}\n";
+    let p = project(&[("main.rein", main), ("email.struct.rein", shared)]);
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.e", "{\"address\":\"a@b.c\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Write a@b.c.");
+}
+
+#[test]
+fn format_without_a_local_declaration_still_checks_its_value() {
+    let src = "interface Input {\n  /** The day. */\n  day: Date;\n}\n/** Entry. */\nexport default function main({ day }: Input) {\n  return delegate(model=`x`, task=`Plan ${day}.`);\n}\n";
+    let p = project(&[("main.rein", src)]);
+    let StepResponse::Error { message, .. } = step(&p, &req_with("main", &[], &[("day", "2026-13-45")])) else { panic!("not an error") };
+    assert!(message.contains("`day`"), "{message}");
+    let StepResponse::Done { instruction, .. } = step(&p, &req_with("main", &[], &[("day", "2026-11-23")])) else { panic!("not done") };
+    assert!(instruction.ends_with("Task: Plan 2026-11-23."), "{instruction}");
+}
