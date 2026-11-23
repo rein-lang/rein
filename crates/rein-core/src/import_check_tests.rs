@@ -2,6 +2,7 @@ use super::*;
 use crate::diagnostic::Severity;
 use crate::graph;
 use crate::program_fixture::with_main;
+use crate::project_fixture::{project, TICKET_SCHEMA};
 use crate::step::Answers;
 use crate::step::{step, StepRequest, StepResponse, PROTOCOL_VERSION};
 use std::collections::BTreeMap;
@@ -461,29 +462,9 @@ fn aliased_import_of_a_destructured_field_name_is_clean() {
     );
 }
 
-/// A project loaded from disk, so a `.schema.json` file next to the `.rein` files is read.
-fn project_on_disk(tag: &str, files: &[(&str, &str)]) -> Project {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!("rein-import-schema-{tag}-{}-{nanos}", std::process::id()));
-    for (rel, text) in files {
-        let path = root.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-    let loaded = Project::load(&root).unwrap();
-    std::fs::remove_dir_all(&root).unwrap();
-    loaded
-}
-
-const TICKET_SCHEMA: &str = "{ \"title\": \"Ticket\", \"type\": \"string\", \"examples\": [\"ABC-123\"] }";
-
 #[test]
 fn schema_import_with_the_declared_title_is_clean() {
-    let project = project_on_disk(
-        "ok",
+    let project = project(
         &[
             ("ticket.schema.json", TICKET_SCHEMA),
             ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix ${ticket}.`;").replace("export default function main()", "export default function main({ ticket }: { ticket: Ticket })")),
@@ -496,8 +477,7 @@ fn schema_import_with_the_declared_title_is_clean() {
 
 #[test]
 fn schema_import_with_another_title_is_an_error() {
-    let project = project_on_disk(
-        "title",
+    let project = project(
         &[
             ("ticket.schema.json", TICKET_SCHEMA),
             ("main.rein", &main_with("import { Issue } from \"./ticket.schema\";", "return `Fix.`;")),
@@ -517,10 +497,10 @@ fn schema_import_with_another_title_is_an_error() {
 
 #[test]
 fn missing_schema_file_is_an_error() {
-    let project = project_on_disk(
-        "missing",
-        &[("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix.`;"))],
-    );
+    let project = project(&[(
+        "main.rein",
+        &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix.`;"),
+    )]);
     let diags = project.check();
     assert!(
         has(&diags["main"], Severity::Error, "cannot find schema `./ticket.schema`; add a `ticket.schema.json` file"),
@@ -531,16 +511,81 @@ fn missing_schema_file_is_an_error() {
 
 #[test]
 fn schema_import_has_no_name_error() {
-    let project = project_on_disk(
-        "noerr",
-        &[
-            ("ticket.schema.json", TICKET_SCHEMA),
-            ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `x`;")),
-        ],
-    );
+    let project = project(&[
+        ("ticket.schema.json", TICKET_SCHEMA),
+        ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `x`;")),
+    ]);
     let diags = project.check();
     assert!(
         !diags["main"].iter().any(|d| d.severity == Severity::Error),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn schema_path_with_a_dot_is_only_the_path_error() {
+    // Import path names allow letters, digits and `_` only. The schema file loads, so the only error is the path's.
+    let project = project(&[
+        ("x.v2.schema.json", TICKET_SCHEMA),
+        ("main.rein", &main_with("import { Ticket } from \"./x.v2.schema\";", "return `x`;")),
+    ]);
+    let errors: Vec<String> = project.check()["main"]
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(
+        !errors.is_empty() && errors.iter().all(|m| m.starts_with("a path is `\"./path\"`")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn missing_schema_in_a_folder_names_the_full_path() {
+    let project = project(&[(
+        "main.rein",
+        &main_with("import { Ticket } from \"./sub/ticket.schema\";", "return `Fix.`;"),
+    )]);
+    let diags = project.check();
+    assert!(
+        has(
+            &diags["main"],
+            Severity::Error,
+            "cannot find schema `./sub/ticket.schema`; add a `sub/ticket.schema.json` file"
+        ),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn schema_title_that_is_not_a_name_is_an_error_naming_the_file() {
+    let project = project(&[
+        ("bad.schema.json", "{ \"title\": \"Ticket Type\", \"type\": \"string\" }"),
+        ("main.rein", &main_with("import { Ticket } from \"./bad.schema\";", "return `Fix.`;")),
+    ]);
+    let diags = project.check();
+    assert!(
+        has(
+            &diags["main"],
+            Severity::Error,
+            "`bad.schema.json`: a schema `title` must be a name such as `Ticket`"
+        ),
+        "{:?}",
+        diags["main"]
+    );
+}
+
+#[test]
+fn unreadable_schema_file_is_an_error_naming_the_file() {
+    let project = project(&[
+        ("ticket.schema.json", "{"),
+        ("main.rein", &main_with("import { Ticket } from \"./ticket.schema\";", "return `Fix.`;")),
+    ]);
+    let diags = project.check();
+    assert!(
+        has(&diags["main"], Severity::Error, "`ticket.schema.json`: cannot read schema"),
         "{:?}",
         diags["main"]
     );

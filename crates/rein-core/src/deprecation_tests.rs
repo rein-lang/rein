@@ -1,5 +1,6 @@
 use super::*;
 use crate::diagnostic::{Severity, DEPRECATED_CODE};
+use crate::project_fixture::{project, TICKET_SCHEMA};
 use std::path::PathBuf;
 
 /// A project of the given (name, source) files, all in `/proj`.
@@ -203,6 +204,25 @@ fn default_import_suggests_the_declared_name() {
     let msgs = deprecations(&project);
     assert!(
         msgs[0].contains("write `import { fixCi } from \"./ci/fix\"`"),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn default_schema_import_is_not_flagged_and_a_default_function_import_still_is() {
+    let project = project(&[
+        ("ticket.schema.json", TICKET_SCHEMA),
+        ("ci/fix.rein", FIX),
+        (
+            "main.rein",
+            &main_with("import Ticket from \"./ticket.schema\";\nimport fix from \"./ci/fix\";", "return fix;"),
+        ),
+    ]);
+    let msgs = deprecations(&project);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].starts_with("default imports are deprecated")
+            && msgs[0].contains("write `import { fix } from \"./ci/fix\"`"),
         "{msgs:?}"
     );
 }
