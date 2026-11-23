@@ -63,7 +63,7 @@ fn resolves(path: &str) -> Result<Kind, String> {
         return Ok(Kind::Function { params: vec![("ok".into(), InputType::Bool)] });
     }
     if path == "./iri" {
-        return Ok(Kind::Function { params: vec![("link".into(), InputType::Format(crate::formats::Format::Iri))] });
+        return Ok(Kind::Function { params: vec![("link".into(), InputType::Format(crate::schema_types::FormatType::Builtin(crate::formats::Format::Iri)))] });
     }
     Ok(Kind::Function { params: Vec::new() })
 }
