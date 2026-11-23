@@ -6,6 +6,7 @@ pub mod doc;
 pub mod diagnostic;
 pub mod eval;
 pub mod flows;
+pub mod formats;
 pub mod graph;
 pub mod import_check;
 pub mod imports;
