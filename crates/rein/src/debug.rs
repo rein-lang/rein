@@ -26,7 +26,7 @@ pub struct DebugArgs {
     /// Function to start from, as its path under the root without `.rein`. Default: the program's entry.
     #[arg(long)]
     entry: Option<String>,
-    /// First value of a `string` parameter of the entry, as name=value. Repeat for each input.
+    /// First value of a `string`, format or schema parameter of the entry, as name=value. Repeat for each input.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     input: Vec<String>,
     /// First answer, as key=value, such as `main.task=merge`. Repeat for each answer.

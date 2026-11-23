@@ -97,7 +97,7 @@ enum Command {
         /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
         #[arg(long = "answer", value_name = "KEY=VALUE")]
         answer: Vec<String>,
-        /// Value of a `string` parameter of the entry function, as name=value. Repeat for each input.
+        /// Value of a `string`, format or schema parameter of the entry function, as name=value. Repeat for each input.
         #[arg(long = "input", value_name = "NAME=VALUE")]
         input: Vec<String>,
         /// Read the whole request as JSON from stdin. Output is always JSON.
