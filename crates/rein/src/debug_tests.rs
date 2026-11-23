@@ -142,6 +142,14 @@ fn page_has_the_zoom_and_the_pan() {
 }
 
 #[test]
+fn page_lets_a_function_node_switch_the_entry() {
+    let html = page(&first(&[]));
+    for part in ["entries.includes(n.function)", "onEntry(n.data.fn)", "onEntry=${pickEntry}", "entries=${schema.functions}"] {
+        assert!(html.contains(part), "{part}");
+    }
+}
+
+#[test]
 fn routes_and_the_host_check() {
     let server = Server { project: pr_handling(), first: first(&[]), port: 4000 };
     assert_eq!(server.respond("GET", "/nope", "").0, "404 Not Found");

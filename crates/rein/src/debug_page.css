@@ -46,6 +46,8 @@ h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 16
 .control.set label::after { content: " (set)"; color: var(--ok); font-weight: 400; }
 .control.focus { outline: 2px solid var(--hot); outline-offset: 4px; }
 .control.needed input { border: 2px solid var(--hot); background: var(--needed-bg); }
+.control.invalid input, .control.invalid select { border: 2px solid var(--hot); background: var(--error-bg); }
+.control.invalid label::after { content: " (invalid)"; color: var(--hot); font-weight: 400; }
 input[type=text], select { font: inherit; width: 100%; padding: 4px 6px; background: var(--field-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
 header select { width: auto; }
 button { font: inherit; margin: 2px 4px 2px 0; }

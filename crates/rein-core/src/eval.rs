@@ -334,8 +334,12 @@ fn check_answer(f: &Function, input: &Input, raw: &str) -> Eval<()> {
 pub fn struct_values(name: &str, s: &Struct, raw: &str) -> Result<Vec<(String, String)>, String> {
     let fields: Vec<&str> = s.fields.iter().map(|f| f.name.value.as_str()).collect();
     let example = fields.iter().map(|f| format!("\"{f}\": ...")).collect::<Vec<_>>().join(", ");
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str(raw) else {
-        return Err(format!("the answer `{name}` must be a JSON object, like {{{example}}}"));
+    let map = match serde_json::from_str(raw) {
+        Ok(serde_json::Value::Object(map)) => map,
+        Ok(_) => return Err(format!("the answer `{name}` must be a JSON object, like {{{example}}}; got `{raw}`")),
+        Err(e) => {
+            return Err(format!("the answer `{name}` is not valid JSON ({e}): `{raw}`; give a JSON object, like {{{example}}}"))
+        }
     };
     if let Some(extra) = map.keys().find(|k| !fields.contains(&k.as_str())) {
         return Err(format!("`{extra}` is not a field of `{}`; fields are {}", s.name.value, fields.join(", ")));
