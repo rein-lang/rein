@@ -1,8 +1,8 @@
 //! Format types: string types with a fixed shape, such as `IRI`. A program uses one where it would use `string`.
 //! The checker treats a format type as a `string`; the run checks each value against the format.
 //! The checks are the built-in `format` keywords of the jsonschema crate, so no format logic lives here.
-//! A new built-in format needs five edits: a variant in `Format`, an entry in `Format::ALL`, an entry in `Format::spec`, an arm in `Format::placeholder`, and an arm in `Format::article`.
-//! The compiler checks the variant, the `spec` entry, the `placeholder` arm and the `article` arm. Nothing checks the `Format::ALL` entry.
+//! A new built-in format needs four edits: a variant in `Format`, an entry in `Format::ALL`, an entry in `Format::spec`, and an arm in `Format::article`.
+//! The compiler checks the variant, the `spec` entry and the `article` arm. Nothing checks the `Format::ALL` entry.
 //!
 //! The jsonschema crate keeps its list of formats private, so `Format` repeats it by hand for now.
 //! TODO: replace `Format` and `Format::spec` with `ValidationOptions::known_formats` once it is released:
@@ -97,29 +97,6 @@ impl Format {
             | Format::JsonPointer
             | Format::RelativeJsonPointer
             | Format::Regex => "a",
-        }
-    }
-
-    /// A valid value that stands in for a real one when a walk has no value, such as `rein graph`.
-    pub fn placeholder(self, name: &str) -> String {
-        match self {
-            Format::Iri
-            | Format::IriReference
-            | Format::Uri
-            | Format::UriReference
-            | Format::UriTemplate => format!("urn:rein:{name}"),
-            Format::Email | Format::IdnEmail => "someone@example.com".to_owned(),
-            Format::Hostname | Format::IdnHostname => "example.com".to_owned(),
-            Format::Ipv4 => "192.0.2.1".to_owned(),
-            Format::Ipv6 => "2001:db8::1".to_owned(),
-            Format::Date => "2026-11-23".to_owned(),
-            Format::Time => "13:45:00Z".to_owned(),
-            Format::DateTime => "2026-11-23T13:45:00Z".to_owned(),
-            Format::Duration => "P1DT2H".to_owned(),
-            Format::Uuid => "123e4567-e89b-12d3-a456-426614174000".to_owned(),
-            Format::JsonPointer => "/items/0".to_owned(),
-            Format::RelativeJsonPointer => "1/items".to_owned(),
-            Format::Regex => "^[a-z]+$".to_owned(),
         }
     }
 

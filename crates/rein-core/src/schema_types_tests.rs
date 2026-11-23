@@ -1,6 +1,6 @@
 use super::*;
 
-const TICKET: &str = r#"{ "title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20, "examples": ["ABC-123"] }"#;
+const TICKET: &str = r#"{ "title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20 }"#;
 
 fn load_err(text: &str) -> String {
     match UserSchema::load(text) {
@@ -13,38 +13,21 @@ fn load_err(text: &str) -> String {
 fn loads_a_string_schema() {
     let s = UserSchema::load(TICKET).unwrap();
     assert_eq!(s.title, "Ticket");
-    assert_eq!(s.example, "ABC-123");
     assert_eq!(s.schema()["maxLength"], 20);
 }
 
 #[test]
 fn a_schema_must_be_a_string_type() {
-    let e = load_err(r#"{ "title": "Ticket", "type": "integer", "examples": ["1"] }"#);
+    let e = load_err(r#"{ "title": "Ticket", "type": "integer" }"#);
     assert!(e.contains("`\"type\": \"string\"`"), "{e}");
-    let e = load_err(r#"{ "title": "Ticket", "examples": ["ABC-1"] }"#);
+    let e = load_err(r#"{ "title": "Ticket" }"#);
     assert!(e.contains("`\"type\": \"string\"`"), "{e}");
 }
 
 #[test]
 fn a_schema_needs_a_title() {
-    let e = load_err(r#"{ "type": "string", "examples": ["ABC-1"] }"#);
+    let e = load_err(r#"{ "type": "string" }"#);
     assert!(e.contains("`title`"), "{e}");
-}
-
-#[test]
-fn a_schema_needs_an_example_string() {
-    let e = load_err(r#"{ "title": "Ticket", "type": "string" }"#);
-    assert!(e.contains("`examples`"), "{e}");
-    let e = load_err(r#"{ "title": "Ticket", "type": "string", "examples": [] }"#);
-    assert!(e.contains("`examples`"), "{e}");
-    let e = load_err(r#"{ "title": "Ticket", "type": "string", "examples": [1] }"#);
-    assert!(e.contains("`examples`"), "{e}");
-}
-
-#[test]
-fn the_example_must_pass_the_schema() {
-    let e = load_err(r#"{ "title": "Ticket", "type": "string", "pattern": "^[A-Z]+$", "examples": ["abc"] }"#);
-    assert!(e.contains("does not match the schema"), "{e}");
 }
 
 #[test]

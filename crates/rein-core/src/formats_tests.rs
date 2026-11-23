@@ -54,14 +54,6 @@ fn every_format_round_trips_by_name_and_names_are_unique() {
     assert_eq!(json_names.len(), count);
 }
 
-#[test]
-fn every_placeholder_passes_its_own_check() {
-    for f in Format::ALL {
-        let p = f.placeholder("x");
-        assert_eq!(f.check("x", &p), Ok(()), "{} with `{p}`", f.name());
-    }
-}
-
 /// A value that the format must reject. A regex accepts plain text, so it gets an unbalanced group.
 fn invalid_value(format: Format) -> &'static str {
     match format {
