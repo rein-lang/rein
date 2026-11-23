@@ -6,6 +6,7 @@ use crate::ast::{Binding, Import};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{self, Tok};
 use crate::project::{Project, SourceFile};
+use crate::schema_types::SCHEMA_SUFFIX;
 
 /// The date when `@` references and default imports become errors. The one place that holds the date.
 pub const IMPORT_REMOVAL_DATE: &str = "2026-12-19";
@@ -58,6 +59,9 @@ fn default_warning(project: &Project, from: &str, import: &Import) -> Diagnostic
 
 /// The name that the target of `reference` declares, or `None` when the target does not resolve.
 fn declared_name(project: &Project, from: &str, reference: &str, is_struct: bool) -> Option<String> {
+    if reference.ends_with(SCHEMA_SUFFIX) {
+        return project.schema_for(from, reference).ok().map(|s| s.title.clone());
+    }
     if is_program(reference) {
         let linked = match project.programs.get(program_or_path(reference)) {
             Some(Ok(linked)) => linked,

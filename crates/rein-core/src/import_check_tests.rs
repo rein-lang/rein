@@ -2,9 +2,9 @@ use super::*;
 use crate::ast::InputType;
 use crate::diagnostic::Severity;
 use crate::graph;
-use crate::schema_types::FormatType;
 use crate::program_fixture::with_main;
 use crate::project_fixture::{project, TICKET_SCHEMA};
+use crate::schema_types::FormatType;
 use crate::step::Answers;
 use crate::step::{step, StepRequest, StepResponse, PROTOCOL_VERSION};
 use std::collections::BTreeMap;
@@ -493,7 +493,7 @@ fn schema_path_that_leaves_the_root_names_the_written_path() {
         has(
             &project.check()["main"],
             Severity::Error,
-            "the import path \"../ticket.schema\" leaves the project root"
+            "the path \"../ticket.schema\" leaves the project root"
         ),
         "{:?}",
         project.check()["main"]

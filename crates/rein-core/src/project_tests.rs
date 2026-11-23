@@ -530,11 +530,11 @@ fn import_path_errors() {
     // From ci/fix the directory is `ci`; two steps up leaves the root.
     assert_eq!(
         project.resolve("ci/fix", "../../top").unwrap_err(),
-        "the import path \"../../top\" leaves the project root"
+        "the path \"../../top\" leaves the project root"
     );
     assert_eq!(
         project.resolve("top", "../top").unwrap_err(),
-        "the import path \"../top\" leaves the project root"
+        "the path \"../top\" leaves the project root"
     );
 }
 
@@ -1258,7 +1258,6 @@ fn program_hand_off_passes_every_parameter() {
     let rest: Vec<_> = full.check()["main"].iter().filter(|d| !d.is_deprecated()).cloned().collect();
     assert!(rest.is_empty(), "{:?}", rest);
 }
-
 
 #[test]
 fn schema_path_without_dot_slash_names_the_written_path_in_the_error() {

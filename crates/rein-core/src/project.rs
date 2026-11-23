@@ -790,7 +790,7 @@ fn resolve(from: &str, source: &str) -> Result<String, String> {
             ".." => {
                 if parts.pop().is_none() {
                     return Err(format!(
-                        "the import path \"{source}\" leaves the project root"
+                        "the path \"{source}\" leaves the project root"
                     ));
                 }
             }
