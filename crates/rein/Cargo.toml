@@ -8,7 +8,7 @@ homepage.workspace = true
 description = "CLI, language server and MCP server for Rein, a language for agent processes."
 
 [dependencies]
-rein-core = { path = "../rein-core", version = "0.1.5" }
+rein-core = { path = "../rein-core", version = "0.1.6" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 form_urlencoded = "1"
