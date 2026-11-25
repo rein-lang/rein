@@ -177,7 +177,11 @@ fn pr_handling_checks_with_no_errors_or_warnings() {
     assert!(stderr(&out).contains("0 errors, "), "{}", stderr(&out));
     // ponytail: the example still lets callees ask their `boolean` and union parameters; drop this filter and
     // expect `0 warnings` again once rein-lang/examples passes every parameter.
-    let other = stdout(&out).lines().filter(|l| l.contains("warning:") && !l.contains("missing argument `")).count();
+    // The `@` references of the example are deprecated; they are not what this test checks.
+    let other = stdout(&out)
+        .lines()
+        .filter(|l| l.contains("warning:") && !l.contains("missing argument `") && !l.contains("is deprecated and becomes"))
+        .count();
     assert_eq!(other, 0, "{}", stdout(&out));
 }
 
@@ -291,6 +295,21 @@ fn rein_eval_set_gives_a_string_parameter_its_value() {
 }
 
 #[test]
+fn rein_eval_set_checks_an_iri_value_against_its_format() {
+    let flow = Flow::new(&[(
+        "main.rein",
+        "interface Input {\n  /** The link. */\n  link: Iri;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ link, ok }: Input) {\n  if (ok) {\n    return `Open ${link}.`;\n  }\n  return `none`;\n}\n",
+    )]);
+    let bad = rein(&["eval", "main", "--root", flow.path(), "--set", "link=not-a-link", "--set", "ok=yes"], None);
+    assert_eq!(code(&bad), 1, "{}{}", stdout(&bad), stderr(&bad));
+    assert!(stderr(&bad).contains("must match format `iri`"), "{}", stderr(&bad));
+
+    let good = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("link={LINK}"), "--set", "ok=yes"], None);
+    assert_eq!(code(&good), 0, "{}{}", stdout(&good), stderr(&good));
+    assert_eq!(stdout(&good).trim(), format!("Open {LINK}."));
+}
+
+#[test]
 fn rein_eval_asks_for_a_missing_string_value() {
     let flow = Flow::new(&[(
         "main.rein",
@@ -341,7 +360,8 @@ fn unused_string_input_is_a_warning() {
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
     assert!(stdout(&out).contains("warning: unused parameter `pr`"), "{}", stdout(&out));
-    assert!(stderr(&out).contains("0 errors, 1 warnings"), "{}", stderr(&out));
+    // The `@./done` reference adds a deprecation warning, so the count is 2.
+    assert!(stderr(&out).contains("0 errors, 2 warnings"), "{}", stderr(&out));
 }
 
 #[test]
@@ -391,7 +411,7 @@ fn hand_off_arguments_to_a_function_without_parameters_is_a_check_error() {
 #[test]
 fn argument_that_is_not_a_string_input_is_a_check_error() {
     let flow = Flow::new(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** C */\n  ci: \"green\" | \"red\",\n) {\n  return @./merge(pr=ci);\n}\n"),
+        ("main.rein", "import { merge } from \"./merge\";\n\n/** Entry. */\nexport default function main(\n  /** C */\n  ci: \"green\" | \"red\",\n) {\n  return merge(pr=ci);\n}\n"),
         ("merge.rein", "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n) {\n  return `Merge ${pr}`;\n}\n"),
     ]);
     let out = rein(&["check", flow.path()], None);
@@ -407,8 +427,62 @@ fn string_input_is_a_template_argument_and_the_check_is_clean() {
     ]);
     let out = rein(&["check", flow.path()], None);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
-    assert!(stderr(&out).contains("0 errors, 0 warnings"), "{}", stderr(&out));
+    // The `@./tpl` reference is deprecated, and it is the only warning.
+    assert!(stderr(&out).contains("0 errors, 1 warnings"), "{}", stderr(&out));
     let run = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("pr={LINK}"), "--set", "ok=yes"], None);
     assert_eq!(code(&run), 0, "{}{}", stdout(&run), stderr(&run));
     assert_eq!(stdout(&run).trim(), format!("{LINK} then b"));
+}
+
+const TICKET_MAIN: &str = "import { Ticket } from \"./ticket.schema\";\n\ninterface Input {\n  /** The ticket to fix. */\n  ticket: Ticket;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ ticket, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${ticket}.`;\n  }\n\n  return `Fix ${ticket}.`;\n}\n";
+const TICKET_JSON: &str = "{ \"title\": \"Ticket\", \"type\": \"string\", \"pattern\": \"^[A-Z]+-[0-9]+$\", \"maxLength\": 20, \"examples\": [\"ABC-123\"] }";
+
+#[test]
+fn eval_need_input_of_a_schema_type_carries_its_json_schema() {
+    let flow = Flow::new(&[("main.rein", TICKET_MAIN), ("ticket.schema.json", TICKET_JSON)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no", "--json"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    let v = json(&out);
+    assert_eq!(v["kind"], "need_input");
+    assert_eq!(v["input"]["name"], "ticket");
+    assert_eq!(v["input"]["type"], "string");
+    assert_eq!(v["input"]["schema"], serde_json::from_str::<Value>(TICKET_JSON).unwrap());
+}
+
+#[test]
+fn eval_need_input_of_a_builtin_format_carries_its_json_schema() {
+    let main = "interface Input {\n  /** The link. */\n  link: Iri;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ link, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${link}.`;\n  }\n\n  return `Open ${link}.`;\n}\n";
+    let flow = Flow::new(&[("main.rein", main)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no", "--json"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(json(&out)["input"]["schema"], serde_json::json!({"type": "string", "format": "iri"}));
+}
+
+#[test]
+fn eval_need_input_of_a_plain_string_has_no_schema_key() {
+    let main = "interface Input {\n  /** The note. */\n  note: string;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ note, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${note}.`;\n  }\n\n  return `Note ${note}.`;\n}\n";
+    let flow = Flow::new(&[("main.rein", main)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no", "--json"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(json(&out)["input"]["name"], "note");
+    assert!(json(&out)["input"].get("schema").is_none());
+}
+
+#[test]
+fn eval_need_input_of_a_schema_type_text_mode_is_unchanged() {
+    let flow = Flow::new(&[("main.rein", TICKET_MAIN), ("ticket.schema.json", TICKET_JSON)]);
+    let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no"], None);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "need input ticket: Ticket - The ticket to fix.\nhint: rerun with --set ticket=<value>\n");
+}
+
+#[test]
+fn step_text_mode_struct_answer_lists_fields_without_schema() {
+    let pick = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n  /** The link. */\n  link: Iri;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let flow = Flow::new(&[("main.rein", pick), ("ticket.schema.json", TICKET_JSON)]);
+    let out = step_in(flow.path(), &[]);
+    assert_eq!(code(&out), 3, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("  ticket: string - The ticket.\n  link: iri - The link.\n"), "{text}");
+    assert!(!text.contains("schema"), "{text}");
 }

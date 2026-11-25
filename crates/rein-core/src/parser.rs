@@ -1,12 +1,16 @@
 //! Recursive descent parser: tokens to a `Function` syntax tree.
 
 use crate::ast::{
-    Arg, Awaited, Call, Callee, Case, DocBlock, Expr, Function, Input, InputType, Param, Piece, ReturnValue, Spanned, Stmt, Struct,
-    StructParam, StructRef, TemplateLit, Value,
+    Arg, Awaited, Call, Callee, Case, DocBlock, Expr, Function, Import, Input, InputType, Param, Piece, ReturnValue, Spanned,
+    Stmt, Struct, StructParam, StructRef, TemplateLit, Value,
 };
 use crate::diagnostic::{Diagnostic, Span};
+use crate::formats::Format;
 use crate::doc::parse_doc;
+use crate::imports;
+use std::collections::HashSet;
 use crate::lexer::{lex, Tok};
+use crate::schema_types::FormatType;
 
 /// Parses one function file. Stops at the first error and returns the
 /// tree built so far, plus that one error.
@@ -16,25 +20,45 @@ pub fn parse(src: &str) -> (Function, Vec<Diagnostic>) {
         Ok(toks) => toks,
         Err(d) => return (f, vec![d]),
     };
-    let mut p = Parser { toks, pos: 0 };
+    let local_types = interface_names(&toks);
+    let mut p = Parser { toks, pos: 0, imports: Vec::new(), items: false, local_types };
     let diags = match p.file(&mut f) {
         Ok(()) => vec![],
         Err(d) => vec![d],
     };
+    f.imports = p.imports;
     (f, diags)
 }
 
 struct Parser {
     toks: Vec<(Tok, Span)>,
     pos: usize,
+    /// The `import` lines so far. A use of a local name reads its path, see [`imports::reference`].
+    imports: Vec<Import>,
+    /// True once the file has a doc block, an interface or an export. An `import` after that is an error.
+    items: bool,
+    /// The names of the file's `interface`s, found before parsing, so a use can come before its declaration.
+    local_types: HashSet<String>,
 }
+
+/// The names that follow an `interface` keyword anywhere in the file.
+fn interface_names(toks: &[(Tok, Span)]) -> HashSet<String> {
+    toks.windows(2)
+        .filter_map(|w| match (&w[0].0, &w[1].0) {
+            (Tok::Ident(kw), Tok::Ident(name)) if kw == "interface" => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+const IMPORTS_FIRST: &str = "imports come first; move this `import` above the doc comment and the declarations";
 
 const DOC_PLACES: &str =
     "the doc comment must go right before `export default function`, an `interface`, a parameter, a field, or a const answer";
 const NO_VARIABLES: &str = "Rein has no variables, except `/** question */ const x: type = await request(...)`";
-const ONLY_AWAIT: &str = "only `request` or a reference like `@program` can be awaited";
+const ONLY_AWAIT: &str = "only `request` or an imported program can be awaited";
 const AWAIT_NEEDS_CONST: &str =
-    "`await` gives an answer; write `/** question */ const name: Type = await @program(...);`, then read `name`";
+    "`await` gives an answer; import the program, then write `/** question */ const name: Type = await program(...);`, then read `name`";
 const NO_ELSE: &str = "Rein has no `else`: end the `if` block with a return, and handle the other case after it";
 
 fn no_default(span: Span) -> Diagnostic {
@@ -134,12 +158,18 @@ impl Parser {
     fn file(&mut self, f: &mut Function) -> Result<(), Diagnostic> {
         loop {
             if *self.peek() == Tok::Import {
-                return Err(Diagnostic::error(
-                    self.span(),
-                    "Rein has no imports; reference functions with `@./path` and use std functions directly",
-                ));
+                if self.items {
+                    return Err(Diagnostic::error(self.span(), IMPORTS_FIRST));
+                }
+                let import = imports::parse_import(&self.toks, &mut self.pos)?;
+                imports::add(&mut self.imports, import)?;
+                continue;
             }
             let doc = self.doc_block();
+            if *self.peek() == Tok::Import {
+                return Err(Diagnostic::error(doc.map_or(self.span(), |d| d.span), IMPORTS_FIRST));
+            }
+            self.items = true;
             if self.is_word("interface") {
                 let s = self.struct_decl(doc, None, false)?;
                 f.structs.push(s);
@@ -156,6 +186,10 @@ impl Parser {
                     let s = self.struct_decl(doc, Some(export), default)?;
                     f.structs.push(s);
                     continue;
+                }
+                if !default && matches!(self.peek(), Tok::LBrace | Tok::Star) {
+                    let message = "`export ... from` is not supported; write `import { name } from \"path\";`";
+                    return Err(Diagnostic::error(self.span(), message));
                 }
                 if !default {
                     return Err(self.unexpected("`default`"));
@@ -202,7 +236,19 @@ impl Parser {
                 f.bind_answer_struct(&answer, found);
             }
         }
+        if let Some(d) = imports::clash(&self.imports, f) {
+            return Err(d);
+        }
         Ok(())
+    }
+
+    /// The built-in format a name stands for. A file's own `interface` or import of that name wins: a local
+    /// type shadows a built-in format, as in TypeScript.
+    fn format_named(&self, word: &str) -> Option<Format> {
+        if self.local_types.contains(word) || imports::is_import(&self.imports, word) {
+            return None;
+        }
+        Format::from_name(word)
     }
 
     fn is_word(&self, word: &str) -> bool {
@@ -265,8 +311,11 @@ impl Parser {
         self.expect(Tok::Colon, "`:`")?;
         let ty = match self.peek().clone() {
             Tok::Ref(path) => StructRef::Ref(Spanned { value: path, span: self.bump() }),
-            Tok::Ident(name) => StructRef::Local(Spanned { value: name, span: self.bump() }),
-            _ => return Err(self.unexpected("a struct name, or a reference like `@./name`")),
+            Tok::Ident(name) => {
+                let span = self.bump();
+                imports::struct_ref(&mut self.imports, &name, span)?
+            }
+            _ => return Err(self.unexpected("a struct name, or an imported struct")),
         };
         Ok(StructParam { fields, ty, span: start.to(self.last_span()) })
     }
@@ -296,7 +345,9 @@ impl Parser {
         self.expect(Tok::Colon, "`:`")?;
         let struct_type = match self.peek() {
             Tok::Ref(p) => Some(format!("@{p}")),
-            Tok::Ident(w) if w != "string" => Some(w.clone()),
+            Tok::Ident(w) if w != "string" && self.format_named(w).is_none() && !imports::is_schema(&self.imports, w) => {
+                Some(w.clone())
+            }
             _ => None,
         };
         if let (true, Some(ty)) = (param, struct_type) {
@@ -319,14 +370,15 @@ impl Parser {
     fn answer_type(&mut self) -> Result<InputType, Diagnostic> {
         match self.peek().clone() {
             Tok::Ref(path) => Ok(InputType::Struct(StructRef::Ref(Spanned { value: path, span: self.bump() }))),
-            Tok::Ident(name) if name != "string" => {
-                Ok(InputType::Struct(StructRef::Local(Spanned { value: name, span: self.bump() })))
+            Tok::Ident(name) if name != "string" && self.format_named(&name).is_none() && !imports::is_schema(&self.imports, &name) => {
+                let span = self.bump();
+                Ok(InputType::Struct(imports::struct_ref(&mut self.imports, &name, span)?))
             }
             _ => self.param_type(),
         }
     }
 
-    /// `boolean`, or a union of strings with an optional leading `|`.
+    /// `boolean`, `string`, a format type such as `Iri`, or a union of strings with an optional leading `|`.
     fn param_type(&mut self) -> Result<InputType, Diagnostic> {
         if *self.peek() == Tok::Boolean {
             self.bump();
@@ -336,10 +388,25 @@ impl Parser {
             self.bump();
             return Ok(InputType::Text);
         }
+        if let Tok::Ident(w) = self.peek() {
+            if let Some(format) = self.format_named(w) {
+                self.bump();
+                return Ok(InputType::Format(FormatType::Builtin(format)));
+            }
+        }
+        if let Tok::Ident(w) = self.peek().clone() {
+            let span = self.span();
+            if let Some(schema) = imports::schema_ref(&mut self.imports, &w, span) {
+                self.bump();
+                return Ok(InputType::Format(FormatType::Schema(schema)));
+            }
+        }
         if *self.peek() == Tok::Pipe {
             self.bump();
         }
-        let mut members = vec![self.string("`boolean` or a string type, like \"green\"")?];
+        let example = "Iri";
+        let expected = format!("`boolean`, `string`, a format type like `{example}`, or a string type, like \"green\"");
+        let mut members = vec![self.string(&expected)?];
         while *self.peek() == Tok::Pipe {
             self.bump();
             members.push(self.string("a string type, like \"green\"")?);
@@ -440,7 +507,7 @@ impl Parser {
     fn return_stmt(&mut self) -> Result<Stmt, Diagnostic> {
         let start = self.bump();
         if *self.peek() == Tok::Semi || *self.peek() == Tok::RBrace {
-            return Err(Diagnostic::error(start, "`return` needs a value: a string, a template, or `@./function`"));
+            return Err(Diagnostic::error(start, "`return` needs a value: a string, a template, or an imported function"));
         }
         let (value, span) = match self.peek().clone() {
             Tok::Str(s) => {
@@ -463,12 +530,16 @@ impl Parser {
                 }
             }
             Tok::Ident(word) if word == "await" => return Err(Diagnostic::error(self.span(), AWAIT_NEEDS_CONST)),
+            Tok::Ident(name) if *self.next_tok() != Tok::LParen && imports::is_import(&self.imports, &name) => {
+                let span = self.bump();
+                (ReturnValue::Ref(imports::reference(&mut self.imports, &name, span)?), span)
+            }
             Tok::Ident(_) if *self.next_tok() == Tok::LParen => {
                 let call = self.call()?;
                 let span = call.span;
                 (ReturnValue::Call(call), span)
             }
-            _ => return Err(self.unexpected("a string, a template literal, or a reference like `@./path`")),
+            _ => return Err(self.unexpected("a string, a template literal, or an imported function")),
         };
         if *self.peek() == Tok::Semi {
             self.bump();
@@ -515,7 +586,19 @@ impl Parser {
             let span = self.bump();
             return Ok((Awaited::Call(ReturnValue::Ref(Spanned { value: path, span })), span));
         }
-        let callee = self.ident("`request` or a reference like `@program`")?;
+        if let Tok::Ident(name) = self.peek().clone() {
+            if imports::is_import(&self.imports, &name) {
+                if *self.next_tok() == Tok::LParen {
+                    let call = self.call()?;
+                    let span = call.span;
+                    return Ok((Awaited::Call(ReturnValue::Call(call)), span));
+                }
+                let span = self.bump();
+                let target = imports::reference(&mut self.imports, &name, span)?;
+                return Ok((Awaited::Call(ReturnValue::Ref(target)), span));
+            }
+        }
+        let callee = self.ident("`request` or an imported program")?;
         if callee.value != "request" {
             return Err(Diagnostic::error(callee.span, ONLY_AWAIT));
         }
@@ -560,9 +643,13 @@ impl Parser {
             }
             Tok::Ident(name) => {
                 let span = self.bump();
-                Callee::Std(Spanned { value: name, span })
+                if imports::is_import(&self.imports, &name) {
+                    Callee::Ref(imports::reference(&mut self.imports, &name, span)?)
+                } else {
+                    Callee::Std(Spanned { value: name, span })
+                }
             }
-            _ => return Err(self.unexpected("a reference like `@./path`, or a std name")),
+            _ => return Err(self.unexpected("an imported function, or a std name")),
         };
         self.expect(Tok::LParen, "`(`")?;
         let mut args = Vec::new();

@@ -11,6 +11,7 @@ use rein_core::ast::Function;
 use rein_core::lexer::{lex, Tok};
 use rein_core::project::Project;
 
+use super::deprecation_actions::deprecation_actions;
 use super::occurrences::calls;
 use super::rename::move_function;
 use super::text::{offset, position};
@@ -19,7 +20,7 @@ use super::workspace::{locate, State};
 pub fn code_actions(state: &State, p: &CodeActionParams) -> Option<CodeActionResponse> {
     let (project, name) = locate(&state.docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
-    let actions = p
+    let mut actions: CodeActionResponse = p
         .context
         .diagnostics
         .iter()
@@ -42,6 +43,7 @@ pub fn code_actions(state: &State, p: &CodeActionParams) -> Option<CodeActionRes
             }))
         })
         .collect();
+    actions.extend(deprecation_actions(&project, &name, &sf.text, &p.text_document.uri, &p.context.diagnostics));
     Some(actions)
 }
 
@@ -54,6 +56,14 @@ fn move_fix(state: &State, project: &Project, name: &str, d: &Diagnostic) -> Opt
     let home = project.nest_target(name)?;
     let edit = move_function(state, project, name, &home).ok()?;
     Some((format!("Move to {home}.rein"), edit))
+}
+
+/// The name an import should use, from the message of a wrong name: "`./ci/fix` declares `fix`, not `fixCi`; ...".
+fn declared_name(msg: &str) -> Option<&str> {
+    if !msg.starts_with('`') || !msg.contains("` declares `") || !msg.contains("`, not `") {
+        return None;
+    }
+    msg.split('`').nth(3)
 }
 
 /// The fix for one diagnostic, found by its message: a title and one text edit.
@@ -80,6 +90,10 @@ fn fix(text: &str, f: &Function, d: &Diagnostic) -> Option<(String, TextEdit)> {
         let (_, export) = lex(text).ok()?.into_iter().find(|(t, _)| *t == Tok::Export)?;
         let doc = "/**\n * TODO: say what this function decides.\n */\n";
         return Some(("Add a doc comment".to_string(), insert(export.start, doc)));
+    }
+    // An import names a function that declares another name: write the declared name.
+    if let Some(declared) = declared_name(msg) {
+        return Some((format!("Use the declared name `{declared}`"), TextEdit { range: d.range, new_text: declared.to_string() }));
     }
     // The name the message is about, between its first pair of backticks.
     let named = msg.split('`').nth(1)?;

@@ -1,28 +1,5 @@
 use super::*;
-use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
-/// Writes `files` into a unique temp project, loads it, and removes the directory.
-fn project(files: &[(&str, &str)]) -> Project {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!("rein-step-{}-{nanos}-{n}", std::process::id()));
-    fs::create_dir_all(&root).unwrap();
-    for (rel, text) in files {
-        let path = root.join(rel);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
-    }
-    let loaded = Project::load(&root).unwrap();
-    fs::remove_dir_all(&root).unwrap();
-    loaded
-}
+use crate::project_fixture::{project, TICKET_SCHEMA};
 
 fn answers(pairs: &[(&str, &str)]) -> Answers {
     pairs
@@ -38,6 +15,7 @@ fn req(entry: &str, pairs: &[(&str, &str)]) -> StepRequest {
         answers: answers(pairs),
         flow: None,
         inputs: BTreeMap::new(),
+        walk: false,
     }
 }
 
@@ -48,7 +26,7 @@ fn trace(names: &[&str]) -> Vec<String> {
 /// `main` asks for `vip`, then hands off to `escalate` or returns text.
 fn vip_project() -> Project {
     project(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Is the customer on the VIP plan? */\n  vip: boolean,\n) {\n  if (vip) {\n    return @./escalate;\n  }\n  return `Answer the ticket.`;\n}\n"),
+        ("main.rein", "import { escalate } from \"./escalate\";\n\n/** Entry. */\nexport default function main(\n  /** Is the customer on the VIP plan? */\n  vip: boolean,\n) {\n  if (vip) {\n    return escalate;\n  }\n  return `Answer the ticket.`;\n}\n"),
         ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return `Assign the ticket to tier 2.`;\n}\n"),
     ])
 }
@@ -56,7 +34,7 @@ fn vip_project() -> Project {
 /// `main` picks a path. `merge` goes to `merge_pr`, which asks two questions.
 fn merge_project() -> Project {
     project(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Which path? */\n  path: \"merge\" | \"review\",\n) {\n  switch (path) {\n    case \"merge\":\n      return @./merge_pr;\n    case \"review\":\n      return `Review the code.`;\n  }\n}\n"),
+        ("main.rein", "import { mergePr } from \"./merge_pr\";\n\n/** Entry. */\nexport default function main(\n  /** Which path? */\n  path: \"merge\" | \"review\",\n) {\n  switch (path) {\n    case \"merge\":\n      return mergePr;\n    case \"review\":\n      return `Review the code.`;\n  }\n}\n"),
         ("merge_pr.rein", "interface Input {\n  /** Does the PR change only docs? */\n  docs_only: boolean;\n  /** What is the CI status? */\n  ci: \"green\" | \"red\";\n}\n/** Merge a PR. */\nexport default function mergePr({ docs_only, ci }: Input) {\n  if (docs_only) {\n    return `approved`;\n  }\n  switch (ci) {\n    case \"green\":\n      return `merge it`;\n    case \"red\":\n      return `wait for CI`;\n  }\n}\n"),
     ])
 }
@@ -64,8 +42,8 @@ fn merge_project() -> Project {
 /// `main` asks `article_found` through `answer/faq`, which asks a request, then escalates.
 fn faq_project() -> Project {
     project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./answer/faq;\n}\n"),
-        ("answer/faq.rein", "/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  article_found: boolean,\n) {\n  if (!article_found) {\n    return @../escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\n    `Send the article and ask if it solved the problem.`,\n  );\n  if (solved) {\n    return `Close the ticket as solved.`;\n  }\n  return @../escalate;\n}\n"),
+        ("main.rein", "import { answerFaq } from \"./answer/faq\";\n\n/** Entry. */\nexport default function main() {\n  return answerFaq;\n}\n"),
+        ("answer/faq.rein", "import { escalate } from \"../escalate\";\n\n/** Answer a how-to question. */\nexport default async function answerFaq(\n  /** Did you find an article? */\n  article_found: boolean,\n) {\n  if (!article_found) {\n    return escalate;\n  }\n  /** Did the article solve it? */\n  const solved: boolean = await request(\n    `Send the article and ask if it solved the problem.`,\n  );\n  if (solved) {\n    return `Close the ticket as solved.`;\n  }\n  return escalate;\n}\n"),
         ("escalate.rein", "/** Escalate. */\nexport default function escalate() {\n  return `Assign the ticket to tier 2.`;\n}\n"),
     ])
 }
@@ -277,7 +255,7 @@ fn invalid_union_value_lists_the_accepted_values() {
 #[test]
 fn string_parameter_cannot_be_answered() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./greet(who=`world`);\n}\n"),
+        ("main.rein", "import { greet } from \"./greet\";\n\n/** Entry. */\nexport default function main() {\n  return greet(who=`world`);\n}\n"),
         ("greet.rein", "/** Greet. */\nexport default function greet(\n  /** Who? */\n  who: string,\n) {\n  return `Hello ${who}`;\n}\n"),
     ]);
     assert_eq!(
@@ -299,7 +277,7 @@ fn string_parameter_cannot_be_answered() {
 #[test]
 fn same_parameter_name_in_two_functions_gets_separate_keys() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  if (ci === \"green\") {\n    return @./merge_pr;\n  }\n  return `Wait.`;\n}\n"),
+        ("main.rein", "import { mergePr } from \"./merge_pr\";\n\n/** Entry. */\nexport default function main(\n  /** CI? */\n  ci: \"green\" | \"red\",\n) {\n  if (ci === \"green\") {\n    return mergePr;\n  }\n  return `Wait.`;\n}\n"),
         ("merge_pr.rein", "/** Merge. */\nexport default function mergePr(\n  /** CI for the merge? */\n  ci: \"green\" | \"red\",\n) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${ci}`;\n    case \"red\":\n      return `Stop.`;\n  }\n}\n"),
     ]);
     // The answer to main.ci does not answer merge_pr.ci.
@@ -324,15 +302,15 @@ fn reference_cycle_hits_the_hop_limit() {
     let project = project(&[
         (
             "main.rein",
-            "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n",
+            "import { a } from \"./a\";\n\n/** Entry. */\nexport default function main() {\n  return a;\n}\n",
         ),
         (
             "a.rein",
-            "/** A. */\nexport default function a() {\n  return @./b;\n}\n",
+            "import { b } from \"./b\";\n\n/** A. */\nexport default function a() {\n  return b;\n}\n",
         ),
         (
             "b.rein",
-            "/** B. */\nexport default function b() {\n  return @./a;\n}\n",
+            "import { a } from \"./a\";\n\n/** B. */\nexport default function b() {\n  return a;\n}\n",
         ),
     ]);
     let res = step(&project, &req("main", &[]));
@@ -365,7 +343,7 @@ fn template_as_entry_is_an_error() {
 #[test]
 fn template_call_adds_no_hop_to_the_trace() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./tpl(a=`Hello`);\n}\n"),
+        ("main.rein", "import { tpl } from \"./tpl\";\n\n/** Entry. */\nexport default function main() {\n  return tpl(a=`Hello`);\n}\n"),
         ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n"),
     ]);
     let res = step(&project, &req("main", &[]));
@@ -383,7 +361,7 @@ fn template_call_adds_no_hop_to_the_trace() {
 #[test]
 fn nested_template_call_adds_no_hop_to_the_trace() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return delegate(model=@./tpl(a=`x`), task=`task`);\n}\n"),
+        ("main.rein", "import { tpl } from \"./tpl\";\n\n/** Entry. */\nexport default function main() {\n  return delegate(model=tpl(a=`x`), task=`task`);\n}\n"),
         ("tpl.rein", "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: string,\n) {\n  return `Hi ${a}`;\n}\n"),
     ]);
     let res = step(&project, &req("main", &[]));
@@ -445,6 +423,7 @@ fn request_defaults_to_version_one_and_main() {
             answers: answers(&[]),
             flow: None,
             inputs: BTreeMap::new(),
+            walk: false,
         }
     );
 }
@@ -493,7 +472,7 @@ fn project_and_protocol_types_are_send_and_sync() {
 /// `main` takes a link as an input and hands it to `merge`, which asks the agent for `ci`.
 fn pr_project() -> Project {
     project(&[
-        ("main.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** Draft? */\n  draft: boolean;\n}\n/** Entry. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return @./merge(pr=pr);\n}\n"),
+        ("main.rein", "import { merge } from \"./merge\";\n\ninterface Input {\n  /** The link. */\n  pr: string;\n  /** Draft? */\n  draft: boolean;\n}\n/** Entry. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Stop ${pr}.`;\n  }\n  return merge(pr=pr);\n}\n"),
         ("merge.rein", "interface Input {\n  /** The link. */\n  pr: string;\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n/** Merge. */\nexport default function merge({ pr, ci }: Input) {\n  switch (ci) {\n    case \"green\":\n      return `Merge ${pr}.`;\n    case \"red\":\n      return `Wait.`;\n  }\n}\n"),
     ])
 }
@@ -578,7 +557,7 @@ fn hand_off_binds_the_input_for_the_target() {
 #[test]
 fn hand_off_arguments_bind_in_declaration_order() {
     let project = project(&[
-        ("main.rein", "interface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** Entry. */\nexport default function main({ a, b }: Input) {\n  return @./two(y=a, x=b);\n}\n"),
+        ("main.rein", "import { two } from \"./two\";\n\ninterface Input {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n/** Entry. */\nexport default function main({ a, b }: Input) {\n  return two(y=a, x=b);\n}\n"),
         ("two.rein", "interface Input {\n  /** X */\n  x: string;\n  /** Y */\n  y: string;\n  /** Keep order? */\n  ok: boolean;\n}\n/** Two. */\nexport default function two({ x, y, ok }: Input) {\n  if (ok) {\n    return `${x} then ${y}`;\n  }\n  return `${y} then ${x}`;\n}\n"),
     ]);
     let inputs = [("a", "A"), ("b", "B")];
@@ -652,6 +631,66 @@ fn struct_answer_asks_for_a_json_object_with_the_fields_of_the_struct() {
 }
 
 #[test]
+fn struct_answer_field_of_iri_carries_its_json_schema() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "iri");
+    assert_eq!(fields[0].schema, Some(serde_json::json!({"type": "string", "format": "iri"})));
+}
+
+#[test]
+fn struct_answer_plain_string_field_has_no_schema() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!((fields[0].name.as_str(), fields[0].r#type.as_str()), ("pr", "string"));
+    assert_eq!(fields[0].schema, None);
+}
+
+#[test]
+fn plain_string_field_spec_serializes_without_a_schema_key() {
+    let field = FieldSpec { name: "pr".into(), r#type: "string".into(), options: None, description: "The PR link.".into(), schema: None };
+    let value = serde_json::to_value(&field).unwrap();
+    let object = value.as_object().unwrap();
+    assert!(!object.contains_key("schema"), "{value}");
+    assert_eq!(value["type"], "string");
+}
+
+#[test]
+fn struct_answer_union_field_has_no_schema() {
+    let p = crate::program_fixture::with_main(PICKER.to_string());
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!((fields[1].name.as_str(), fields[1].r#type.as_str()), ("task", "union"));
+    assert_eq!(fields[1].schema, None);
+}
+
+#[test]
+fn struct_answer_field_of_a_schema_type_carries_the_user_schema() {
+    let picker = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let p = project(&[("main.rein", picker), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request") };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "string");
+    let schema = fields[0].schema.as_ref().expect("schema of the user type");
+    assert_eq!(schema, &serde_json::json!({"title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20, "examples": ["ABC-123"]}));
+}
+
+#[test]
+fn struct_file_schema_field_carries_the_schema_its_own_file_imports() {
+    // The schema import sits in `pick.struct.rein`, not in the file that uses the struct.
+    let main = "import { Pick } from \"./pick.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The pick. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let shared = "import { Ticket } from \"./ticket.schema\";\n\n/** A picked ticket. */\nexport default interface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n";
+    let p = project(&[("main.rein", main), ("pick.struct.rein", shared), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Request { response, .. } = step(&p, &req("main", &[])) else { panic!("not a request: {:?}", step(&p, &req("main", &[]))) };
+    let fields = response.fields.unwrap();
+    assert_eq!(fields[0].r#type, "string");
+    let schema = fields[0].schema.as_ref().expect("schema of the user type from the struct file");
+    assert_eq!(schema, &serde_json::json!({"title": "Ticket", "type": "string", "pattern": "^[A-Z]+-[0-9]+$", "maxLength": 20, "examples": ["ABC-123"]}));
+}
+
+#[test]
 fn struct_answer_is_validated_field_by_field() {
     let p = crate::program_fixture::with_main(PICKER.to_string());
     let cases = [
@@ -660,13 +699,145 @@ fn struct_answer_is_validated_field_by_field() {
         ("{\"pr\":\"u/1\",\"task\":\"nope\"}", "invalid value `nope` for `pick.task`"),
         ("{\"pr\":\"\",\"task\":\"merge\"}", "field `pick.pr` is empty"),
         ("{\"pr\":1,\"task\":\"merge\"}", "field `pick.pr` must be a string"),
-        ("not json", "must be a JSON object"),
+        ("not json", "the answer `pick` is not valid JSON (expected ident at line 1 column 2): `not json`"),
+        ("{\"pr\":\"u/1\",}", "the answer `pick` is not valid JSON (trailing comma at line 1 column 13): `{\"pr\":\"u/1\",}`"),
+        ("[1]", "must be a JSON object, like {\"pr\": ..., \"task\": ...}; got `[1]`"),
     ];
     for (raw, part) in cases {
         let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {raw}") };
         assert!(message.contains(part), "{raw}: {message}");
         assert_eq!(key.as_deref(), Some("main.pick"));
     }
+}
+
+#[test]
+fn empty_format_field_is_rejected_like_an_empty_string_field() {
+    for ty in ["Regex", "JsonPointer"] {
+        let source = format!(
+            "interface Pick {{\n  /** The value. */\n  value: {ty};\n  /** The name. */\n  name: string;\n}}\n/** Entry. */\nexport default async function main() {{\n  /** The pick. */\n  const pick: Pick = await request(`pick`);\n  return `done`;\n}}\n"
+        );
+        let p = crate::program_fixture::with_main(source);
+        let raw = "{\"value\":\"\",\"name\":\"x\"}";
+        let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {ty}") };
+        assert_eq!(message, "field `pick.value` is empty; give some text", "{ty}");
+    }
+}
+
+#[test]
+fn template_with_an_iri_parameter_behaves_like_a_string_one() {
+    let template = |ty: &str| {
+        let tpl = format!("/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: {ty},\n) {{\n  return `Hi ${{a}}`;\n}}\n");
+        project(&[
+            ("main.rein", "import { tpl } from \"./tpl\";\n\n/** Entry. */\nexport default function main() {\n  return tpl(a=`https://example.com/a`);\n}\n"),
+            ("tpl.rein", tpl.as_str()),
+        ])
+    };
+    let as_string = step(&template("string"), &req("main", &[]));
+    let as_iri = step(&template("Iri"), &req("main", &[]));
+    assert_eq!(
+        as_iri,
+        StepResponse::Done {
+            version: 1,
+            instruction: "Hi https://example.com/a".into(),
+            answers: answers(&[]),
+            trace: trace(&["main"]),
+        }
+    );
+    assert_eq!(as_iri, as_string);
+}
+
+const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: Iri;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
+
+#[test]
+fn struct_answer_field_of_iri_must_match_its_format() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let cases = [
+        ("{\"pr\":\"example.com\"}", "`pick.pr` must match format `iri`"),
+        ("{\"pr\":1}", "field `pick.pr` must be a string"),
+    ];
+    for (raw, part) in cases {
+        let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", raw)])) else { panic!("not an error: {raw}") };
+        assert!(message.contains(part), "{raw}: {message}");
+        assert_eq!(key.as_deref(), Some("main.pick"));
+    }
+    let ok = "{\"pr\":\"https://example.com/pr/1\"}";
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", ok)])) else { panic!("not done") };
+    assert_eq!(instruction, "Open https://example.com/pr/1.");
+}
+
+const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: Iri;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+
+#[test]
+fn iri_entry_input_must_match_its_format() {
+    let p = project(&[("main.rein", IRI_ENTRY)]);
+    let res = step(&p, &req_with("main", &[], &[("link", "https://example.com/a")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Open https://example.com/a."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("link", "not a link")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("`link` must match format `iri`"), "{message}");
+}
+
+#[test]
+fn hand_off_to_an_iri_parameter_checks_the_value() {
+    let files = [
+        ("main.rein", "import { other } from \"./other\";\n\ninterface Pick {\n  /** The link. */\n  link: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The link to open. */\n  const pick: Pick = await request(`pick a link`);\n  return other(link=pick.link);\n}\n"),
+        ("other.rein", "/** Open a link. */\nexport default function other(\n  /** The link. */ link: Iri,\n) {\n  return `Open ${link}.`;\n}\n"),
+    ];
+    let p = project(&files);
+    let valid = "{\"link\":\"https://example.com/pr/1\"}";
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", valid)])) else { panic!("not done") };
+    assert_eq!(instruction, "Open https://example.com/pr/1.");
+    let invalid = "{\"link\":\"example.com\"}";
+    let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", invalid)])) else { panic!("not an error") };
+    assert!(message.contains("must match format `iri`"), "{message}");
+}
+
+/// `main` has a `string` input `s` and passes it with `call`, its return statement, to a function in `target`.
+fn text_to_iri(import: &str, call: &str, target: &str) -> Project {
+    let main = format!("{import}\n/** Entry. */\nexport default function main(\n  /** The link. */\n  s: string,\n) {{\n  return {call};\n}}\n");
+    project(&[("main.rein", main.as_str()), ("target.rein", target)])
+}
+
+/// The walk of `p` from `main` with its unset `string` input `s`: the stand-in value, and the walk flag.
+fn walk_of_s(p: &Project) -> StepRequest {
+    let value = walk_value(p.get("main").unwrap().function.input("s").unwrap());
+    StepRequest { inputs: BTreeMap::from([("s".to_string(), value)]), walk: true, ..req("main", &[]) }
+}
+
+/// A hand-off target with an `Iri` parameter. It is not a template, so a walk hands off to it.
+const OPEN_IRI: &str = "/** Open a link. */\nexport default function target(\n  /** The link. */ link: Iri,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+
+#[test]
+fn walk_of_a_string_handed_to_an_iri_parameter_has_no_error() {
+    let p = text_to_iri("", "@./target(link=s)", OPEN_IRI);
+    let walked = owners(&p, "main", &answers(&[]));
+    assert!(walked.iter().any(|(owner, passed)| owner == "target" && passed.get("link").map(String::as_str) == Some("<s>")), "{walked:?}");
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn walk_of_a_string_in_a_template_literal_argument_has_no_error() {
+    let p = text_to_iri("", "@./target(link=`${s}`)", OPEN_IRI);
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn walk_of_a_string_in_a_template_call_has_no_error() {
+    let tpl = "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: Iri,\n) {\n  return `Hi ${a}`;\n}\n";
+    let p = text_to_iri("import { tpl } from \"./target\";", "tpl(a=s)", tpl);
+    let res = step(&p, &walk_of_s(&p));
+    assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
+}
+
+#[test]
+fn real_run_of_a_string_handed_to_an_iri_parameter_checks_the_value() {
+    let p = text_to_iri("", "@./target(link=s)", OPEN_IRI);
+    let res = step(&p, &req_with("main", &[], &[("s", "not-a-link")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("must match format `iri`"), "{message}");
 }
 
 #[test]
@@ -682,7 +853,7 @@ fn struct_answer_field_reaches_the_hand_off() {
 
 #[test]
 fn shared_struct_answer_field_decides_a_branch() {
-    let main = "/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: @./pick = await request(`pick a PR`);\n  if (pick.urgent) {\n    return `Hurry ${pick.pr}.`;\n  }\n  return `Handle ${pick.pr}.`;\n}\n";
+    let main = "import { Pick } from \"./pick.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  if (pick.urgent) {\n    return `Hurry ${pick.pr}.`;\n  }\n  return `Handle ${pick.pr}.`;\n}\n";
     let shared = "/** A picked PR. */\nexport default interface Pick {\n  /** The PR link. */\n  pr: string;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n";
     let p = project(&[("main.rein", main), ("pick.struct.rein", shared)]);
     let res = step(&p, &req("main", &[("main.pick", "{\"pr\":\"u/1\",\"urgent\":true}")]));
@@ -701,6 +872,17 @@ fn struct_answer_is_a_json_object_on_the_wire() {
     assert_eq!(request.answers["main.ci"], "green");
     let back = serde_json::to_string(&request).unwrap();
     assert!(back.contains(r#""main.pick":{"pr":"u/1","task":"merge"}"#) && back.contains(r#""main.ci":"green""#), "{back}");
+}
+
+#[test]
+fn built_in_format_field_serializes_its_schema_in_the_step_json() {
+    let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
+    let res = step(&p, &req("main", &[]));
+    let value = serde_json::to_value(&res).unwrap();
+    assert_eq!(value["kind"], "request");
+    assert_eq!(value["response"]["fields"][0]["name"], "pr");
+    assert_eq!(value["response"]["fields"][0]["type"], "iri");
+    assert_eq!(value["response"]["fields"][0]["schema"], serde_json::json!({"type": "string", "format": "iri"}));
 }
 
 #[test]
@@ -723,8 +905,8 @@ fn double_equals_and_not_equal_branch_like_triple_forms() {
 /// `main` awaits `find`. `find` asks `ready`, then ends in text, or hands off to `find/build_list`.
 fn await_project() -> Project {
     project(&[
-        ("main.rein", "interface Found {\n  /** The repositories, comma-separated. */\n  repos: string;\n  /** Did the search find none? */\n  none: boolean;\n}\n/** Entry. */\nexport default async function main() {\n  /** The projects. */\n  const found: Found = await @./find(scope=`all`);\n\n  if (found.none) {\n    return `Nothing to do.`;\n  }\n\n  return `Work on ${found.repos}.`;\n}\n"),
-        ("find.rein", "interface Input {\n  /** Where to search. */\n  scope: string;\n  /** Is the list ready? */\n  ready: boolean;\n}\n/** Find projects. */\nexport default function find({ scope, ready }: Input) {\n  if (!ready) {\n    return @./find/build_list;\n  }\n\n  return `List the projects in ${scope}.`;\n}\n"),
+        ("main.rein", "import { find } from \"./find\";\n\ninterface Found {\n  /** The repositories, comma-separated. */\n  repos: string;\n  /** Did the search find none? */\n  none: boolean;\n}\n/** Entry. */\nexport default async function main() {\n  /** The projects. */\n  const found: Found = await find(scope=`all`);\n\n  if (found.none) {\n    return `Nothing to do.`;\n  }\n\n  return `Work on ${found.repos}.`;\n}\n"),
+        ("find.rein", "import { buildList } from \"./find/build_list\";\n\ninterface Input {\n  /** Where to search. */\n  scope: string;\n  /** Is the list ready? */\n  ready: boolean;\n}\n/** Find projects. */\nexport default function find({ scope, ready }: Input) {\n  if (!ready) {\n    return buildList;\n  }\n\n  return `List the projects in ${scope}.`;\n}\n"),
         ("find/build_list.rein", "/** Build the list. */\nexport default function buildList() {\n  return `Build the list, then list the projects.`;\n}\n"),
     ])
 }
@@ -776,8 +958,8 @@ fn a_given_caller_answer_replays_without_the_callee() {
 #[test]
 fn an_await_inside_the_callee_asks_the_inner_caller_first() {
     let p = project(&[
-        ("main.rein", "/** Entry. */\nexport default async function main() {\n  /** Is it done? */\n  const done: boolean = await @./outer;\n\n  if (done) {\n    return `Close it.`;\n  }\n\n  return `Keep it open.`;\n}\n"),
-        ("outer.rein", "/** Outer. */\nexport default async function outer() {\n  /** Is it ready? */\n  const ready: boolean = await @./outer/inner;\n\n  if (ready) {\n    return `Ship it.`;\n  }\n\n  return `Fix it.`;\n}\n"),
+        ("main.rein", "import { outer } from \"./outer\";\n\n/** Entry. */\nexport default async function main() {\n  /** Is it done? */\n  const done: boolean = await outer;\n\n  if (done) {\n    return `Close it.`;\n  }\n\n  return `Keep it open.`;\n}\n"),
+        ("outer.rein", "import { inner } from \"./outer/inner\";\n\n/** Outer. */\nexport default async function outer() {\n  /** Is it ready? */\n  const ready: boolean = await inner;\n\n  if (ready) {\n    return `Ship it.`;\n  }\n\n  return `Fix it.`;\n}\n"),
         ("outer/inner.rein", "/** Inner. */\nexport default function inner() {\n  return `Check it.`;\n}\n"),
     ]);
     let r = step(&p, &req("main", &[]));
@@ -819,7 +1001,7 @@ fn await_of_another_program_walks_it_with_its_own_keys() {
 #[test]
 fn each_await_of_the_same_function_gets_its_own_answers() {
     let p = project(&[
-        ("main.rein", "/** Found. */\ninterface Found {\n  /** Any? */\n  any: boolean;\n}\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: Found = await @./fn(subject=`first`);\n\n  /** Second? */\n  const b: Found = await @./fn(subject=`second`);\n\n  if (a.any) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("main.rein", "import { fn } from \"./fn\";\n\n/** Found. */\ninterface Found {\n  /** Any? */\n  any: boolean;\n}\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: Found = await fn(subject=`first`);\n\n  /** Second? */\n  const b: Found = await fn(subject=`second`);\n\n  if (a.any) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
         ("fn.rein", "/** Fn. */\nexport default async function fn(\n  /** The subject. */\n  subject: string,\n) {\n  /** Inner? */\n  const ok: boolean = await request(`Check ${subject}.`);\n\n  return `Fn ${subject} ends.`;\n}\n"),
     ]);
     let r = step(&p, &req("main", &[]));
@@ -842,7 +1024,7 @@ fn each_await_of_the_same_function_gets_its_own_answers() {
 fn a_recursive_await_asks_each_level_and_ends_when_the_answers_end_it() {
     let p = project(&[(
         "walk.rein",
-        "/** Next item. */\ninterface Next {\n  /** The next item. */\n  item: string;\n}\n\n/** Walk. */\nexport default async function walk(\n  /** The item. */\n  item: string,\n) {\n  /** Is this the last item? */\n  const last: boolean = await request(`Is ${item} the last item?`);\n\n  if (last) {\n    return `Walk ${item} ends.`;\n  }\n\n  /** Next item? */\n  const next: Next = await request(`Pick the item after ${item}.`);\n\n  /** Deeper? */\n  const deeper: boolean = await @./walk(item=next.item);\n\n  return `Walk ${item} returned.`;\n}\n",
+        "import { walk as walk2 } from \"./walk\";\n\n/** Next item. */\ninterface Next {\n  /** The next item. */\n  item: string;\n}\n\n/** Walk. */\nexport default async function walk(\n  /** The item. */\n  item: string,\n) {\n  /** Is this the last item? */\n  const last: boolean = await request(`Is ${item} the last item?`);\n\n  if (last) {\n    return `Walk ${item} ends.`;\n  }\n\n  /** Next item? */\n  const next: Next = await request(`Pick the item after ${item}.`);\n\n  /** Deeper? */\n  const deeper: boolean = await walk2(item=next.item);\n\n  return `Walk ${item} returned.`;\n}\n",
     )]);
     let top = [("walk.last", "false"), ("walk.next", r#"{"item": "mid"}"#)];
     let r = step(&p, &req_with("walk", &top, &[("item", "top")]));
@@ -884,8 +1066,8 @@ fn a_key_with_a_call_scope_that_is_not_an_answer_is_unknown() {
 #[test]
 fn a_prefixed_key_for_a_call_the_walk_never_makes_is_unknown() {
     let p = project(&[
-        ("main.rein", "/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: boolean = await @./fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
-        ("fn.rein", "/** Fn. */\nexport default async function fn() {\n  /** Inner? */\n  const ok: boolean = await @./leaf;\n\n  return `Fn ends.`;\n}\n"),
+        ("main.rein", "import { fn } from \"./fn\";\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: boolean = await fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "import { leaf } from \"./leaf\";\n\n/** Fn. */\nexport default async function fn() {\n  /** Inner? */\n  const ok: boolean = await leaf;\n\n  return `Fn ends.`;\n}\n"),
         ("leaf.rein", "/** Leaf. */\nexport default function leaf(\n  /** Leaf ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Leaf ok.`;\n  }\n\n  return `Leaf not ok.`;\n}\n"),
     ]);
     for key in ["main.a>leaf.ok", "main.a>fn.ok>fn.ok", "leaf.ok>leaf.ok"] {
@@ -905,8 +1087,8 @@ fn the_first_call_of_a_prefixed_key_must_be_reached_from_the_entry() {
     // The review's p1: `main` awaits `fn` as `a`; `fn` awaits `leaf` as `ok`.
     let leaf = "/** Leaf. */\nexport default function leaf(\n  /** Leaf ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Leaf ok.`;\n  }\n\n  return `Leaf not ok.`;\n}\n";
     let p1 = project(&[
-        ("main.rein", "/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: boolean = await @./fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
-        ("fn.rein", "/** Fn. */\nexport default async function fn() {\n  /** Inner? */\n  const ok: boolean = await @./leaf;\n\n  return `Fn ends.`;\n}\n"),
+        ("main.rein", "import { fn } from \"./fn\";\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: boolean = await fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "import { leaf } from \"./leaf\";\n\n/** Fn. */\nexport default async function fn() {\n  /** Inner? */\n  const ok: boolean = await leaf;\n\n  return `Fn ends.`;\n}\n"),
         ("leaf.rein", leaf),
     ]);
     let r = step(&p1, &req("main", &[("fn.ok>leaf.ok", "yes")]));
@@ -916,9 +1098,9 @@ fn the_first_call_of_a_prefixed_key_must_be_reached_from_the_entry() {
 
     // The review's p2: `fn` hands off to `other`, which awaits `leaf`. `other` runs only inside the call `main.a`.
     let p2 = project(&[
-        ("main.rein", "/** Main. */\nexport default async function main() {\n  /** A? */\n  const a: boolean = await @./fn;\n\n  /** B? */\n  const b: boolean = await @./fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
-        ("fn.rein", "/** Fn. */\nexport default function fn() {\n  return @./other;\n}\n"),
-        ("other.rein", "/** Other. */\nexport default async function other() {\n  /** Other ok? */\n  const ok: boolean = await @./leaf;\n\n  return `Other ends.`;\n}\n"),
+        ("main.rein", "import { fn } from \"./fn\";\n\n/** Main. */\nexport default async function main() {\n  /** A? */\n  const a: boolean = await fn;\n\n  /** B? */\n  const b: boolean = await fn;\n\n  if (a) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "import { other } from \"./other\";\n\n/** Fn. */\nexport default function fn() {\n  return other;\n}\n"),
+        ("other.rein", "import { leaf } from \"./leaf\";\n\n/** Other. */\nexport default async function other() {\n  /** Other ok? */\n  const ok: boolean = await leaf;\n\n  return `Other ends.`;\n}\n"),
         ("leaf.rein", leaf),
     ]);
     for bad in ["fn.ok>leaf.ok", "other.ok>leaf.ok"] {
@@ -938,8 +1120,8 @@ fn the_first_call_of_a_prefixed_key_must_be_reached_from_the_entry() {
 fn self_await_without_a_question_fails_at_the_hop_limit() {
     // Matches the checker warning for `a -> a` with no question before the await.
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n"),
-        ("a.rein", "/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n"),
+        ("main.rein", "import { a } from \"./a\";\n\n/** Entry. */\nexport default function main() {\n  return a;\n}\n"),
+        ("a.rein", "import { a as a2 } from \"./a\";\n\n/** d */\nexport default async function a() {\n  /** Again? */\n  const again: boolean = await a2;\n  return `done`;\n}\n"),
     ]);
     let StepResponse::Error { message, .. } = step(&project, &req("main", &[])) else {
         panic!("expected the hop limit error")
@@ -951,8 +1133,8 @@ fn self_await_without_a_question_fails_at_the_hop_limit() {
 fn self_await_after_a_question_asks_at_each_level() {
     // The question comes before the await, so the first step asks the agent.
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main() {\n  return @./a;\n}\n"),
-        ("a.rein", "/** d */\nexport default async function a(\n  /** Keep going? */\n  more: boolean,\n) {\n  if (!more) {\n    return `stopped`;\n  }\n  /** Again? */\n  const again: boolean = await @./a;\n  return `done`;\n}\n"),
+        ("main.rein", "import { a } from \"./a\";\n\n/** Entry. */\nexport default function main() {\n  return a;\n}\n"),
+        ("a.rein", "import { a as a2 } from \"./a\";\n\n/** d */\nexport default async function a(\n  /** Keep going? */\n  more: boolean,\n) {\n  if (!more) {\n    return `stopped`;\n  }\n  /** Again? */\n  const again: boolean = await a2;\n  return `done`;\n}\n"),
     ]);
     let StepResponse::Question { key, .. } = step(&project, &req("main", &[])) else {
         panic!("expected a question")
@@ -963,7 +1145,7 @@ fn self_await_after_a_question_asks_at_each_level() {
 #[test]
 fn a_passed_boolean_binds_and_the_callee_does_not_ask() {
     let project = project(&[
-        ("main.rein", "/** Entry. */\nexport default function main(\n  /** Keep order? */\n  keep: boolean,\n) {\n  return @./two(ok=keep);\n}\n"),
+        ("main.rein", "import { two } from \"./two\";\n\n/** Entry. */\nexport default function main(\n  /** Keep order? */\n  keep: boolean,\n) {\n  return two(ok=keep);\n}\n"),
         ("two.rein", "/** Two. */\nexport default function two(\n  /** Keep order? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `kept`;\n  }\n  return `swapped`;\n}\n"),
     ]);
     let res = step(&project, &req("main", &[("main.keep", "yes")]));
@@ -988,7 +1170,7 @@ const MERGE_CI: &str = "/** Merge. */\nexport default function merge(\n  /** CI?
 
 #[test]
 fn a_passed_union_binds_through_an_await() {
-    let main = "/** Entry. */\nexport default async function main() {\n  /** CI? */\n  const ci: \"green\" | \"red\" = await request(`Read CI.`);\n  /** Merged? */\n  const merged: boolean = await @./merge(ci=ci);\n  if (merged) {\n    return `done`;\n  }\n  return `not merged`;\n}\n";
+    let main = "import { merge } from \"./merge\";\n\n/** Entry. */\nexport default async function main() {\n  /** CI? */\n  const ci: \"green\" | \"red\" = await request(`Read CI.`);\n  /** Merged? */\n  const merged: boolean = await merge(ci=ci);\n  if (merged) {\n    return `done`;\n  }\n  return `not merged`;\n}\n";
     let project = project(&[("main.rein", main), ("merge.rein", MERGE_CI)]);
     let res = step(&project, &req("main", &[("main.ci", "red")]));
     let StepResponse::Request { key, instruction, .. } = res else { panic!("{res:?}") };
@@ -1010,7 +1192,7 @@ fn struct_fields_pass_to_another_program_through_step() {
 /// the stored answer `main.ready`.
 #[test]
 fn a_hand_off_back_passes_the_value_and_it_beats_the_stored_answer() {
-    let main = "/** Entry. */\nexport default function main(\n  /** Ready? */\n  ready: boolean,\n) {\n  if (ready) {\n    return `done`;\n  }\n  return @./fix;\n}\n";
+    let main = "import { fix } from \"./fix\";\n\n/** Entry. */\nexport default function main(\n  /** Ready? */\n  ready: boolean,\n) {\n  if (ready) {\n    return `done`;\n  }\n  return fix;\n}\n";
     let fix = |back: &str| format!("/** Fix. */\nexport default async function fix() {{\n  /** Ready now? */\n  const ready: boolean = await request(`Fix it.`);\n  if (ready) {{\n    return {back};\n  }}\n  return `give up`;\n}}\n");
     let passing = project(&[("main.rein", main), ("fix.rein", &fix("@./main(ready=ready)"))]);
     assert!(passing.check().values().flatten().all(|d| d.severity != crate::diagnostic::Severity::Error && !d.message.contains("missing")));
@@ -1021,4 +1203,110 @@ fn a_hand_off_back_passes_the_value_and_it_beats_the_stored_answer() {
     let bare = project(&[("main.rein", main), ("fix.rein", &fix("@./main"))]);
     let diags: Vec<_> = bare.check().into_values().flatten().filter(|d| d.severity == crate::check::MISSING_TYPED_ARG).collect();
     assert!(diags.iter().any(|d| d.message.contains("`@./main` takes 1 argument, got 0; pass `ready`")), "{diags:?}");
+}
+
+/// A hand-off passes a caller union into a wider union of the target. The target switches on it and does not
+/// ask for it; a union it was not passed is still a question.
+#[test]
+fn a_passed_union_is_not_a_question_and_an_unpassed_one_is() {
+    let main = "import { go } from \"./go\";\n\n/** Entry. */\nexport default function main(\n  /** Which account? */\n  account: \"work\" | \"home\",\n) {\n  return go(account=account);\n}\n";
+    let go = "import { merge } from \"./merge\";\n\ninterface Job {\n  /** Which account? */\n  account: \"work\" | \"home\" | \"shared\";\n  /** CI? */\n  ci: \"green\" | \"red\";\n}\n/** Go. */\nexport default function go({ account, ci }: Job) {\n  switch (account) {\n    case \"work\":\n      return `work`;\n    case \"home\":\n    case \"shared\":\n      return merge(ci=ci);\n  }\n}\n";
+    let project = project(&[("main.rein", main), ("go.rein", go), ("merge.rein", MERGE_CI)]);
+    let res = step(&project, &req("main", &[("main.account", "work")]));
+    let StepResponse::Done { instruction, answers, .. } = res else { panic!("{res:?}") };
+    assert_eq!((instruction.as_str(), answers.len()), ("work", 1));
+    let res = step(&project, &req("main", &[("main.account", "home")]));
+    let StepResponse::Question { key, .. } = res else { panic!("{res:?}") };
+    assert_eq!(key, "go.ci");
+}
+
+const TICKET_ENTRY: &str = "import { Ticket } from \"./ticket.schema\";\n\ninterface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
+
+#[test]
+fn schema_entry_input_must_match_the_schema() {
+    let p = project(&[("main.rein", TICKET_ENTRY), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+}
+
+#[test]
+fn struct_answer_field_of_a_schema_type_must_match_the_schema() {
+    let picker = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let p = project(&[("main.rein", picker), ("ticket.schema.json", TICKET_SCHEMA)]);
+    let StepResponse::Error { message, key, .. } = step(&p, &req("main", &[("main.pick", "{\"ticket\":\"abc\"}")])) else {
+        panic!("not an error")
+    };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+    assert_eq!(key.as_deref(), Some("main.pick"));
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.pick", "{\"ticket\":\"ABC-9\"}")])) else {
+        panic!("not done")
+    };
+    assert_eq!(instruction, "Fix ABC-9.");
+}
+
+#[test]
+fn schema_type_field_of_a_shared_struct_checks_the_value() {
+    let struct_file = "import { Ticket } from \"./ticket.schema\";\n\n/** The input. */\nexport default interface Input {\n  /** The ticket. */\n  ticket: Ticket;\n}\n";
+    let main = "import { Input } from \"./input.struct\";\n\n/** Entry. */\nexport default function main({ ticket }: Input) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
+    let p = project(&[
+        ("main.rein", main),
+        ("input.struct.rein", struct_file),
+        ("ticket.schema.json", TICKET_SCHEMA),
+    ]);
+    let res = step(&p, &req_with("main", &[], &[("ticket", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("ticket", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+}
+
+#[test]
+fn hand_off_to_a_schema_parameter_checks_the_value() {
+    // `main` passes its string input to `target`, which takes a `Ticket`. The hand-off checks the passed value.
+    let main = "import { target } from \"./target\";\n\n/** Entry. */\nexport default function main(\n  /** The ticket. */\n  s: string,\n) {\n  return target(ticket=s);\n}\n";
+    let target = "import { Ticket } from \"./ticket.schema\";\n\n/** Fix a ticket. */\nexport default function target(\n  /** The ticket. */\n  ticket: Ticket,\n) {\n  return delegate(model=`x`, task=`Fix ${ticket}.`);\n}\n";
+    let p = project(&[
+        ("main.rein", main),
+        ("target.rein", target),
+        ("ticket.schema.json", TICKET_SCHEMA),
+    ]);
+    let res = step(&p, &req_with("main", &[], &[("s", "ABC-123")]));
+    let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };
+    assert!(instruction.ends_with("Task: Fix ABC-123."), "{instruction}");
+    let res = step(&p, &req_with("main", &[], &[("s", "abc")]));
+    let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
+    assert!(message.contains("does not match `Ticket`"), "{message}");
+}
+
+const DATE_ANSWER: &str = "interface Date {\n  /** The day. */\n  day: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The day to plan. */\n  const d: Date = await request(`pick a day`);\n  return `Plan ${d.day}.`;\n}\n";
+
+#[test]
+fn local_interface_named_like_a_format_shadows_the_format() {
+    let p = crate::program_fixture::with_main(DATE_ANSWER.to_string());
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.d", "{\"day\":\"Monday\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Plan Monday.");
+}
+
+#[test]
+fn imported_struct_named_like_a_format_is_a_struct() {
+    let main = "import { Email } from \"./email.struct\";\n\n/** Entry. */\nexport default async function main() {\n  /** The address to write to. */\n  const e: Email = await request(`pick an address`);\n  return `Write ${e.address}.`;\n}\n";
+    let shared = "/** A mail address. */\nexport default interface Email {\n  /** The address. */\n  address: string;\n}\n";
+    let p = project(&[("main.rein", main), ("email.struct.rein", shared)]);
+    let StepResponse::Done { instruction, .. } = step(&p, &req("main", &[("main.e", "{\"address\":\"a@b.c\"}")])) else { panic!("not done") };
+    assert_eq!(instruction, "Write a@b.c.");
+}
+
+#[test]
+fn format_without_a_local_declaration_still_checks_its_value() {
+    let src = "interface Input {\n  /** The day. */\n  day: Date;\n}\n/** Entry. */\nexport default function main({ day }: Input) {\n  return delegate(model=`x`, task=`Plan ${day}.`);\n}\n";
+    let p = project(&[("main.rein", src)]);
+    let StepResponse::Error { message, .. } = step(&p, &req_with("main", &[], &[("day", "2026-13-45")])) else { panic!("not an error") };
+    assert!(message.contains("`day`"), "{message}");
+    let StepResponse::Done { instruction, .. } = step(&p, &req_with("main", &[], &[("day", "2026-11-23")])) else { panic!("not done") };
+    assert!(instruction.ends_with("Task: Plan 2026-11-23."), "{instruction}");
 }

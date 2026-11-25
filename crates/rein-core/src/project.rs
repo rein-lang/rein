@@ -4,12 +4,18 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::ast::{is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, InputType, ReturnValue, Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX};
+use crate::ast::{
+    is_struct, walk_stmts, Awaited, Binding, Callee, Function, Input, InputType, ReturnValue,
+    Spanned, Stmt, Struct, StructRef, Value, STRUCT_SUFFIX,
+};
 use crate::check::{check_function, check_if_blank_lines, check_length, check_line_length, Kind};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::flows::Flow;
+use crate::imports::missing_struct;
 use crate::parser::parse;
+use crate::schema_types::{FormatType, UserSchema, SCHEMA_FILE_EXT, SCHEMA_SUFFIX};
 
 /// The function every project starts from. It is `main.rein` at the project root.
 pub const ENTRY: &str = "main";
@@ -53,6 +59,8 @@ pub struct Project {
     manifest_diagnostics: Vec<Diagnostic>,
     /// The entry function: `entry` in `rein.json` without `.rein`, else [`ENTRY`].
     entry: String,
+    /// Each schema import, by the function that holds it and its path. Filled when the project loads.
+    schemas: BTreeMap<(String, String), Result<Arc<UserSchema>, String>>,
 }
 
 /// The `rein.json` field that sets the line limit of a function.
@@ -189,9 +197,39 @@ impl Project {
             max_line_length,
             manifest_diagnostics,
             entry,
+            schemas: BTreeMap::new(),
         };
+        project.bind_schemas();
         project.bind_structs();
         project
+    }
+
+    /// Loads each schema import: the `.schema.json` file that its import path names. This is the only place that
+    /// reads a schema file. The read happens once for each importing file, not once per project, so two files that
+    /// import the same schema each read it. Each schema type gets what its import loaded, so a check later in the
+    /// run never reads the disk again.
+    fn bind_schemas(&mut self) {
+        for (name, sf) in &self.files {
+            for import in sf.function.imports.iter().filter(|i| i.is_schema()) {
+                let loaded = load_schema(&self.root, name, &import.path.value);
+                self.schemas
+                    .insert((name.clone(), import.path.value.clone()), loaded);
+            }
+        }
+        let (schemas, files) = (&self.schemas, &mut self.files);
+        for (name, sf) in files.iter_mut() {
+            sf.function.for_each_input_mut(&mut |input| {
+                if let InputType::Format(FormatType::Schema(r)) = &mut input.ty {
+                    let key = (name.clone(), r.path.clone());
+                    r.loaded = Some(
+                        schemas
+                            .get(&key)
+                            .cloned()
+                            .unwrap_or_else(|| Err(format!("cannot find schema `{}`", r.path))),
+                    );
+                }
+            });
+        }
     }
 
     /// Binds each `{ ... }: @./name` parameter to the `export default interface` of `name.struct.rein`.
@@ -204,7 +242,11 @@ impl Project {
             let answers = f.answer_struct_refs().into_iter().map(|(a, r)| (Some(a), r));
             for (answer, r) in param.into_iter().chain(answers) {
                 if let StructRef::Ref(r) = &r {
-                    found.push((name.clone(), answer, self.struct_for(name, &r.value).map(|(_, s)| s.clone())));
+                    // A named import of the struct names the import form in its error. A `@` reference keeps its text.
+                    let named = f.imports.iter().find(|i| i.is_struct() && i.reference() == r.value);
+                    let bound = self.struct_for(name, &r.value).map(|(_, s)| s.clone());
+                    let bound = bound.map_err(|reason| named.map_or(reason, missing_struct));
+                    found.push((name.clone(), answer, bound));
                 }
             }
         }
@@ -216,6 +258,24 @@ impl Project {
                 }
             }
         }
+    }
+
+    /// The schema type that the import path `path`, written in `from`, names: the `.schema.json` file of that path.
+    /// It reads the schemas that [`Project::bind_schemas`] loaded when the project loaded, and never the disk. A
+    /// `from` that is not a file of this project, or a path it does not import, has no schema.
+    pub fn schema_for(&self, from: &str, path: &str) -> Result<Arc<UserSchema>, String> {
+        self.schemas
+            .get(&(from.to_string(), path.to_string()))
+            .cloned()
+            .unwrap_or_else(|| Err(format!("cannot find schema `{path}`")))
+    }
+
+    /// The project path of the schema file that the import path `path`, written in `from`, names, such as
+    /// `ticket.schema`. Two import paths that name one file give the same key. Unlike [`Project::schema_for`], it
+    /// reads no loaded schema, so it works for a path that has no schema.
+    pub fn schema_key(&self, from: &str, path: &str) -> Result<String, String> {
+        check_relative(path)?;
+        resolve(from, path)
     }
 
     /// The struct that the parameter type `@<source>`, written in `from`, names: the `export default interface`
@@ -293,7 +353,8 @@ impl Project {
     }
 
     /// One error per program reference that a hand-off from `name` can reach inside other programs and that does
-    /// not resolve: a program that is not installed, or a function it does not have. A reference written in `name`
+    /// not resolve: a program that is not installed, or a function it does not have. A named import of a program
+    /// that declares another name than the import gives is an error too. A reference written in `name`
     /// itself is the checker's error, so it is not repeated here. The run would fail when it reached the reference,
     /// so the agent learns it before the first step.
     fn missing_programs(&self, name: &str, f: &Function) -> Vec<Diagnostic> {
@@ -322,6 +383,16 @@ impl Project {
                         out.push(Diagnostic::error(Span::default(), format!("`{from}` hands off to `@{key}`: {reason}")));
                     }
                     None => {}
+                }
+            }
+            // A named import of a program reaches it by the same key as `@program`, so the name it gives must match
+            // what the entry declares, as `@program/function` must reach the entry. A missing program was reported above.
+            for import in sf.function.imports.iter().filter(|i| i.used && !i.is_struct() && !i.is_schema() && is_program_key(i.reference())) {
+                if !bindings.contains_key(import.reference()) {
+                    continue;
+                }
+                if let Some((_, reason)) = crate::import_check::name_problem(self, &from, import) {
+                    out.push(Diagnostic::error(Span::default(), format!("`{from}` hands off to `@{}`: {reason}", import.reference())));
                 }
             }
         }
@@ -422,7 +493,7 @@ impl Project {
         };
         if let Some(path) = path.filter(|p| *p != linked.entry) {
             return Err(format!(
-                "`@{program}/{path}` reaches inside program `{program}`; call its entry `@{program}` instead. \
+                "`@{program}/{path}` reaches inside program `{program}`; import its entry from `{program}` instead. \
                  If `{path}` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry"
             ));
         }
@@ -469,6 +540,8 @@ impl Project {
                 let resolve = |path: &str| self.kind_for(name, path);
                 diags.extend(check_function(&sf.function, name, &resolve));
                 diags.extend(self.missing_programs(name, &sf.function));
+                diags.extend(crate::import_check::check(self, name, &sf.function));
+                diags.extend(crate::deprecation::check(self, name, sf));
                 if !is_struct(name) {
                     diags.extend(check_length(&sf.function, name, &sf.text, self.max_function_lines));
                 }
@@ -665,7 +738,7 @@ impl Placement {
         if clash.is_empty() {
             return format!(
                 "`{name}` is only called by `{caller}`; move it to `{home}.rein` so the folders show the process. \
-                 The move changes its answer keys and breaks `@<program>/{name}` references from other programs"
+                 The move changes its answer keys"
             );
         }
         let others: Vec<String> = clash.iter().map(|c| format!("`{c}`")).collect();
@@ -691,12 +764,31 @@ fn callers_of(adj: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String, BTre
 /// The project path that `@<source>`, written in function `from`, points to. The path starts with `./` or
 /// `../`, has no extension, is relative to the folder of `from`, and stays inside the root.
 pub fn join(from: &str, source: &str) -> Result<String, String> {
-    if !(source.starts_with("./") || source.starts_with("../")) {
-        return Err(format!("references are relative: write `@./{source}`"));
-    }
-    if source.rsplit('/').next().is_some_and(|last| last.contains('.') && last != "..") {
+    check_relative(source)?;
+    if source
+        .rsplit('/')
+        .next()
+        .is_some_and(|last| last.contains('.') && last != "..")
+    {
         return Err("references have no extension".into());
     }
+    resolve(from, source)
+}
+
+/// Errors unless the import path `source` starts with `./` or `../`.
+fn check_relative(source: &str) -> Result<(), String> {
+    if source.starts_with("./") || source.starts_with("../") {
+        Ok(())
+    } else {
+        Err(format!(
+            "a file path is relative: write `import {{ name }} from \"./{source}\"`"
+        ))
+    }
+}
+
+/// The project path that the relative import path `source` names, written in function `from`. Unlike [`join`], it
+/// allows dots in the last segment, so `./x.v2` gives `x.v2`. It errors when the path leaves the root.
+fn resolve(from: &str, source: &str) -> Result<String, String> {
     // The importing file's directory, as name segments. `ci/fix` starts in `ci`.
     let mut parts: Vec<&str> = from.split('/').collect();
     parts.pop();
@@ -705,13 +797,35 @@ pub fn join(from: &str, source: &str) -> Result<String, String> {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    return Err(format!("`@{source}` leaves the project root"));
+                    return Err(format!(
+                        "the path \"{source}\" leaves the project root"
+                    ));
                 }
             }
             s => parts.push(s),
         }
     }
     Ok(parts.join("/"))
+}
+
+/// The schema type that the import path `path` of function `from` names. The path has no `.schema.json` extension in
+/// the import, so its file is `<same path>.schema.json` in the project. Errors when the file is missing or invalid,
+/// and the error names the file.
+fn load_schema(root: &Path, from: &str, path: &str) -> Result<Arc<UserSchema>, String> {
+    check_relative(path)?;
+    let resolved = resolve(from, path)?;
+    let base = resolved.strip_suffix(SCHEMA_SUFFIX).unwrap_or(&resolved);
+    let file = format!("{base}{SCHEMA_FILE_EXT}");
+    let text = match fs::read_to_string(root.join(&file)) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("cannot find schema `{path}`; add a `{file}` file"));
+        }
+        Err(e) => return Err(format!("cannot read schema `{file}`: {e}")),
+    };
+    UserSchema::load(&text)
+        .map(Arc::new)
+        .map_err(|e| format!("`{file}`: {e}"))
 }
 
 /// Walks `dir`. `seen` holds canonical directories already visited, so a symlink loop ends.
@@ -849,7 +963,7 @@ struct Edge {
 /// not edges, and a program is another project, not an edge.
 fn ref_sites(f: &Function, bindings: &BTreeMap<String, Binding<'_>>) -> Vec<Edge> {
     let mut out = Vec::new();
-    let asked = f.inputs.iter().any(|i| i.ty != InputType::Text);
+    let asked = f.inputs.iter().any(|i| !i.ty.is_text());
     sites_in(&f.body, asked, bindings, &mut out);
     out
 }

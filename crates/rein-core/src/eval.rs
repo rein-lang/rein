@@ -38,12 +38,16 @@ struct Env<'a> {
     answers: RefCell<Vec<&'a Input>>,
     /// What each import name refers to, from `Project::bindings`.
     bindings: &'a BTreeMap<String, Binding<'a>>,
+    /// True for a walk with stand-in values, which checks no format of a template argument.
+    walk: bool,
 }
 
+/// Runs `f`. `walk` is true for a walk with stand-in input values, which checks no format of a template argument.
 pub fn run(
     f: &Function,
     inputs: &HashMap<String, String>,
     bindings: &BTreeMap<String, Binding<'_>>,
+    walk: bool,
 ) -> Result<Outcome, String> {
     if f.is_template() {
         return Err("templates are called from functions, not run".to_string());
@@ -54,7 +58,7 @@ pub fn run(
         return Err(format!("unknown input `{name}`"));
     }
     let expanded = with_struct_fields(f, inputs);
-    let env = Env { f, inputs: &expanded, bindings, answers: RefCell::new(Vec::new()) };
+    let env = Env { f, inputs: &expanded, bindings, answers: RefCell::new(Vec::new()), walk };
     match exec(&env, &f.body) {
         Ok(Some(out)) => Ok(out),
         Ok(None) => Err("no return reached; every path must return".to_string()),
@@ -81,7 +85,8 @@ pub fn with_struct_fields(f: &Function, inputs: &HashMap<String, String>) -> Has
 pub fn holds(f: &Function, cond: &Expr, inputs: &HashMap<String, String>) -> Option<bool> {
     let bindings = BTreeMap::new();
     let answers = inputs.keys().filter_map(|k| f.response(k)).collect();
-    let env = Env { f, inputs, bindings: &bindings, answers: RefCell::new(answers) };
+    // A condition has no template argument, so no format check runs here.
+    let env = Env { f, inputs, bindings: &bindings, answers: RefCell::new(answers), walk: false };
     eval(&env, cond).ok()
 }
 
@@ -124,7 +129,9 @@ fn exec_stmts<'a>(env: &Env<'a>, stmts: &'a [Stmt]) -> Eval<Option<Outcome>> {
                 let input = declared(env, &subject.value)?;
                 let members = match &input.ty {
                     InputType::Choice(members) => members,
-                    InputType::Text => return Err(Stop::Error(string_in_condition(&subject.value))),
+                    InputType::Text | InputType::Format(_) => {
+                        return Err(Stop::Error(string_in_condition(&subject.value, &input.ty)));
+                    }
                     InputType::Bool => return Err(bool_in_switch(&subject.value)),
                     InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&subject.value))),
                 };
@@ -176,7 +183,7 @@ fn expand_template(env: &Env, lit: &TemplateLit) -> Eval<String> {
                     }
                     InputType::Choice(members) => check_member(&n.value, members, provided(env, &n.value)?)?,
                     InputType::Struct(_) => return Err(Stop::Error(struct_in_use(&n.value))),
-                    InputType::Text => {}
+                    InputType::Text | InputType::Format(_) => {}
                 }
                 out.push_str(provided(env, &n.value)?);
             }
@@ -200,7 +207,7 @@ fn arg_value(env: &Env, name: &str) -> Eval<String> {
     match &input.ty {
         InputType::Bool => Ok(parse_bool(name, raw)?.to_string()),
         InputType::Choice(members) => check_member(name, members, raw).map(|()| raw.to_string()),
-        InputType::Text | InputType::Struct(_) => Ok(raw.to_string()),
+        InputType::Text | InputType::Format(_) | InputType::Struct(_) => Ok(raw.to_string()),
     }
 }
 
@@ -231,7 +238,11 @@ fn expand_call(env: &Env, call: &Call) -> Eval<String> {
             Piece::Text(t) => out.push_str(t),
             Piece::Name(n) => {
                 let arg = args.iter().find(|(key, _)| *key == n.value).map(|(_, value)| value);
-                out.push_str(arg.ok_or_else(|| Stop::Error(format!("unknown parameter `{}`", n.value)))?);
+                let arg = arg.ok_or_else(|| Stop::Error(format!("unknown parameter `{}`", n.value)))?;
+                if let (false, Some(InputType::Format(format))) = (env.walk, function.input(&n.value).map(|i| &i.ty)) {
+                    format.check(&n.value, arg).map_err(Stop::Error)?;
+                }
+                out.push_str(arg);
             }
         }
     }
@@ -260,7 +271,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
         Expr::Var(v) => {
             let input = declared(env, &v.value)?;
             match input.ty {
-                InputType::Text => Err(Stop::Error(string_in_condition(&v.value))),
+                InputType::Text | InputType::Format(_) => Err(Stop::Error(string_in_condition(&v.value, &input.ty))),
                 InputType::Struct(_) => Err(Stop::Error(struct_in_use(&v.value))),
                 InputType::Bool => parse_bool(&v.value, provided(env, &v.value)?),
                 InputType::Choice(_) => Err(Stop::Error(format!(
@@ -273,7 +284,7 @@ fn eval(env: &Env, e: &Expr) -> Eval<bool> {
             let input = declared(env, &var.value)?;
             let InputType::Choice(members) = &input.ty else {
                 return Err(match input.ty {
-                    InputType::Text => Stop::Error(string_in_condition(&var.value)),
+                    InputType::Text | InputType::Format(_) => Stop::Error(string_in_condition(&var.value, &input.ty)),
                     InputType::Struct(_) => Stop::Error(struct_in_use(&var.value)),
                     _ => bool_compared(&var.value),
                 });
@@ -309,6 +320,7 @@ fn check_answer(f: &Function, input: &Input, raw: &str) -> Eval<()> {
         InputType::Bool => parse_bool(name, raw).map(|_| ()),
         InputType::Choice(members) => check_member(name, members, raw),
         InputType::Text => Ok(()),
+        InputType::Format(format) => format.check(name, raw).map_err(Stop::Error),
         InputType::Struct(_) => match f.answer_struct(name) {
             Some(Ok(s)) => struct_values(name, s, raw).map(|_| ()).map_err(Stop::Error),
             Some(Err(msg)) => Err(Stop::Error(msg.clone())),
@@ -322,8 +334,12 @@ fn check_answer(f: &Function, input: &Input, raw: &str) -> Eval<()> {
 pub fn struct_values(name: &str, s: &Struct, raw: &str) -> Result<Vec<(String, String)>, String> {
     let fields: Vec<&str> = s.fields.iter().map(|f| f.name.value.as_str()).collect();
     let example = fields.iter().map(|f| format!("\"{f}\": ...")).collect::<Vec<_>>().join(", ");
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str(raw) else {
-        return Err(format!("the answer `{name}` must be a JSON object, like {{{example}}}"));
+    let map = match serde_json::from_str(raw) {
+        Ok(serde_json::Value::Object(map)) => map,
+        Ok(_) => return Err(format!("the answer `{name}` must be a JSON object, like {{{example}}}; got `{raw}`")),
+        Err(e) => {
+            return Err(format!("the answer `{name}` is not valid JSON ({e}): `{raw}`; give a JSON object, like {{{example}}}"))
+        }
     };
     if let Some(extra) = map.keys().find(|k| !fields.contains(&k.as_str())) {
         return Err(format!("`{extra}` is not a field of `{}`; fields are {}", s.name.value, fields.join(", ")));
@@ -337,17 +353,23 @@ pub fn struct_values(name: &str, s: &Struct, raw: &str) -> Result<Vec<(String, S
         let text = match (&field.ty, value) {
             (InputType::Bool, serde_json::Value::Bool(b)) => b.to_string(),
             (InputType::Bool, _) => return Err(format!("field `{key}` must be true or false")),
-            (InputType::Text, serde_json::Value::String(t)) if t.is_empty() => {
+            (InputType::Text | InputType::Format(_), serde_json::Value::String(t)) if t.is_empty() => {
                 return Err(format!("field `{key}` is empty; give some text"));
             }
             (InputType::Text, serde_json::Value::String(t)) => t.clone(),
+            (InputType::Format(format), serde_json::Value::String(t)) => {
+                format.check(&key, t)?;
+                t.clone()
+            }
             (InputType::Choice(members), serde_json::Value::String(t)) => {
                 if let Err(Stop::Error(m)) = check_member(&key, members, t) {
                     return Err(m);
                 }
                 t.clone()
             }
-            (InputType::Text | InputType::Choice(_), _) => return Err(format!("field `{key}` must be a string")),
+            (InputType::Text | InputType::Format(_) | InputType::Choice(_), _) => {
+                return Err(format!("field `{key}` must be a string"));
+            }
             (InputType::Struct(_), _) => return Err(format!("field `{key}` cannot be a struct")),
         };
         out.push((key, text));

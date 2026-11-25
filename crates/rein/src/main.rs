@@ -10,6 +10,7 @@ mod live_run;
 mod list;
 mod lsp;
 mod mcp;
+mod migrate;
 mod packages;
 mod programs;
 mod run_log;
@@ -45,6 +46,9 @@ enum Command {
         /// Project directory or .rein file.
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Make each deprecated `@` reference and default import an error.
+        #[arg(long)]
+        deny_deprecated: bool,
     },
     /// Run a process live. Writes one step per line, reads one answer per line on stdin.
     Run {
@@ -93,7 +97,7 @@ enum Command {
         /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
         #[arg(long = "answer", value_name = "KEY=VALUE")]
         answer: Vec<String>,
-        /// Value of a `string` parameter of the entry function, as name=value. Repeat for each input.
+        /// Value of a `string`, format or schema parameter of the entry function, as name=value. Repeat for each input.
         #[arg(long = "input", value_name = "NAME=VALUE")]
         input: Vec<String>,
         /// Read the whole request as JSON from stdin. Output is always JSON.
@@ -183,6 +187,11 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
         args: Vec<String>,
     },
+    /// Migrate the project to named imports, such as `rein migrate imports`.
+    Migrate {
+        #[command(subcommand)]
+        command: migrate::MigrateCommand,
+    },
     /// Run the language server on stdio.
     Lsp,
     /// Run the debug adapter on stdio (Debug Adapter Protocol). The VS Code extension starts it.
@@ -194,7 +203,7 @@ enum Command {
 
 fn main() -> ExitCode {
     let code = match Cli::parse().command {
-        Command::Check { path } => cli::check(&path),
+        Command::Check { path, deny_deprecated } => cli::check(&path, deny_deprecated),
         Command::Run { flow, root, entry, json } => live_run::run(flow, root, entry, json),
         Command::Eval { function, root, set, json } => cli::eval(&function, root, &set, json),
         Command::Step { program, entry, root, flow, answer, input, stdin, json } => {
@@ -216,6 +225,7 @@ fn main() -> ExitCode {
         Command::Install { args } => packages::run("add", &args),
         Command::Uninstall { args } => packages::run("remove", &args),
         Command::Update { args } => packages::run("update", &args),
+        Command::Migrate { command } => migrate::run(command),
         Command::Lsp => lsp::serve(),
         Command::Dap => dap::serve(),
         Command::DocsCli => {

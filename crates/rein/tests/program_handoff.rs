@@ -24,21 +24,24 @@ fn program(home: &Path, name: &str, main: &str) {
 
 const TARGET: &str = "interface Input {\n  /** The PR link. */\n  pr: string;\n  /** Is it a draft? */\n  draft: boolean;\n}\n/** Handle a PR. */\nexport default function main({ pr, draft }: Input) {\n  if (draft) {\n    return `Skip ${pr}.`;\n  }\n  return `Handle ${pr}.`;\n}\n";
 
-fn caller(call: &str) -> String {
-    format!("/** Handler. */\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {{\n  return {call};\n}}\n")
+/// The named import of the `pr-handling` program's entry.
+const IMPORT_PR: &str = "import { main as prHandling } from \"pr-handling\";\n\n";
+
+fn caller(import: &str, call: &str) -> String {
+    format!("{import}/** Handler. */\nexport default function main(\n  /** The PR link. */\n  pr: string,\n) {{\n  return {call};\n}}\n")
 }
 
-fn sandbox(tag: &str, call: &str) -> PathBuf {
+fn sandbox(tag: &str, import: &str, call: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!("rein-handoff-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     program(&home, "pr-handling", TARGET);
-    program(&home, "handler", &caller(call));
+    program(&home, "handler", &caller(import, call));
     home
 }
 
 #[test]
 fn check_step_and_graph_follow_a_program_hand_off() {
-    let home = sandbox("ok", "@pr-handling/main(pr=pr)");
+    let home = sandbox("ok", IMPORT_PR, "prHandling(pr=pr)");
     let handler = home.join("handler");
     let out = rein(&home, &["check", handler.to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -59,7 +62,7 @@ fn check_step_and_graph_follow_a_program_hand_off() {
 
 #[test]
 fn check_rejects_an_unknown_program() {
-    let home = sandbox("unknown", "@pr-handlng/main(pr=pr)");
+    let home = sandbox("unknown", "", "@pr-handlng/main(pr=pr)");
     let out = rein(&home, &["check", home.join("handler").to_str().unwrap()]);
     assert!(!out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
@@ -72,7 +75,7 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
     let home = std::env::temp_dir().join(format!("rein-handoff-struct-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     program(&home, "pr-handling", TARGET);
-    program(&home, "picker", "interface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n}\n/** Picks a PR. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`Pick the next pull request notification.`);\n  return @pr-handling/main(pr=pick.pr);\n}\n");
+    program(&home, "picker", "import { main as prHandling } from \"pr-handling\";\n\ninterface Pick {\n  /** The link of the pull request. */\n  pr: string;\n  /** Which task runs. */\n  task: \"review\" | \"merge\";\n}\n/** Picks a PR. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`Pick the next pull request notification.`);\n  return prHandling(pr=pick.pr);\n}\n");
     let out = rein(&home, &["check", home.join("picker").to_str().unwrap()]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 
@@ -111,13 +114,18 @@ fn step_carries_a_struct_answer_field_into_a_program_hand_off() {
 /// Installs `a`, which asks one question and hands off to `b`, and `b`, which asks one question and returns
 /// `b_call`, and `c`, which is done at once. Returns the REIN_HOME.
 fn chain(tag: &str, b_call: &str) -> PathBuf {
+    chain_with(tag, "", b_call)
+}
+
+/// [`chain`], with `b_imports` (import lines, each ending in a newline) written before the function of `b`.
+fn chain_with(tag: &str, b_imports: &str, b_call: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!("rein-handoff-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     let ask = |name: &str, call: &str| {
         format!("/** {name}. */\nexport default function main(\n  /** Go on? */\n  go: boolean,\n) {{\n  if (go) {{\n    return {call};\n  }}\n  return `stop`;\n}}\n")
     };
     program(&home, "a", &ask("A", "@b/main"));
-    program(&home, "b", &ask("B", b_call));
+    program(&home, "b", &format!("{b_imports}{}", ask("B", b_call)));
     program(&home, "c", "/** C. */\nexport default function main() {\n  return `done c`;\n}\n");
     home
 }
@@ -159,7 +167,7 @@ fn first_step_names_a_program_missing_behind_another_program() {
 #[test]
 fn first_step_names_a_hand_off_inside_an_installed_program() {
     let home = chain("nofn", "@c/other");
-    assert_first_step_names(&home, "`@b/main` hands off to `@c/other`: `@c/other` reaches inside program `c`; call its entry `@c` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry");
+    assert_first_step_names(&home, "`@b/main` hands off to `@c/other`: `@c/other` reaches inside program `c`; import its entry from `c` instead. If `other` must run alone, move it to its own program: https://rein-lang.com/docs/call-programs-by-entry");
     fs::remove_dir_all(&home).unwrap();
 }
 
@@ -172,8 +180,33 @@ fn first_step_names_a_program_missing_from_the_entry() {
 }
 
 #[test]
+fn a_chain_of_named_imports_with_every_program_installed_runs() {
+    let home = chain_with("imports-present", "import { main as c } from \"c\";\n\n", "c");
+    let out = rein(&home, &["check", home.join("a").to_str().unwrap()]);
+    assert!(out.status.success(), "{out:?}");
+    let out = rein(&home, &["step", "a", "--answer", "main.go=true", "--answer", "@b/main.go=true", "--json"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("done c") && text.contains("@c/main"), "{text}");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_named_import_of_a_program_missing_behind_another_program() {
+    let home = chain_with("imports-missing", "import { main as d } from \"d\";\n\n", "d");
+    assert_first_step_names(&home, "`@b/main` hands off to `@d`: unknown program `d`; run `rein list` to list programs, or `rein install -g d` to install it");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn first_step_names_a_named_import_of_a_function_the_program_does_not_declare() {
+    let home = chain_with("imports-nofn", "import { other as c } from \"c\";\n\n", "c");
+    assert_first_step_names(&home, "`@b/main` hands off to `@c`: `c` declares `main`, not `other`; write `import { main } from ");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
 fn a_package_reaches_only_the_programs_its_package_json_declares() {
-    let home = sandbox("deps", "@pr-handling/main(pr=pr)");
+    let home = sandbox("deps", IMPORT_PR, "prHandling(pr=pr)");
     let handler = home.join("handler");
     fs::write(handler.join("package.json"), r#"{"name": "handler"}"#).unwrap();
     let out = rein(&home, &["check", handler.to_str().unwrap()]);
@@ -190,7 +223,7 @@ fn a_package_reaches_only_the_programs_its_package_json_declares() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
 }
 
-const AWAITER: &str = "/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR handled? */\n  const handled: boolean = await @pr-handling/main(pr=pr);\n\n  if (handled) {\n    return `Report ${pr} as handled.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
+const AWAITER: &str = "import { main as prHandling } from \"pr-handling\";\n\n/** Handler. */\nexport default async function main(\n  /** The PR link. */\n  pr: string,\n) {\n  /** Was the PR handled? */\n  const handled: boolean = await prHandling(pr=pr);\n\n  if (handled) {\n    return `Report ${pr} as handled.`;\n  }\n\n  return `Report ${pr} as open.`;\n}\n";
 
 #[test]
 fn await_of_a_program_follows_the_dependency_rule_and_returns_its_result() {

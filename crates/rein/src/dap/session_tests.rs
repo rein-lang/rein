@@ -1,11 +1,113 @@
 use super::*;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
-/// The `pr-handling` example, which asks for `main.draft`, `main.task` and then the `merge` questions.
+/// The `pr-handling` flow with its named imports, written inline. It asks for `main.draft`, `main.task` and then the
+/// `merge` questions. The programs that `main` and `merge` call are stubs, because the tests stop at `main` and `merge`.
+const MAIN: &str = r#"import { review } from "./review";
+import { address } from "./comments/address";
+import { fix } from "./ci/fix";
+import { merge } from "./merge";
+
+interface Input {
+  /** The link of the pull request to handle. */
+  pr: string;
+  /** Is the pull request still a draft? */
+  draft: boolean;
+  /** Which task does the agent do on the pull request? */
+  task: "review" | "address comments" | "fix ci" | "merge";
+}
+
+/**
+ * Decide the next step for a pull request: review it, fix it, or merge it.
+ */
+export default function main({ pr, draft, task }: Input) {
+  if (draft) {
+    return `Stop. The pull request ${pr} is a draft. Wait until the author
+    marks it ready.`;
+  }
+
+  switch (task) {
+    case "review":
+      return review(pr=pr);
+    case "address comments":
+      return address(pr=pr);
+    case "fix ci":
+      return fix(pr=pr);
+    case "merge":
+      return merge(pr=pr);
+  }
+}
+"#;
+
+const MERGE: &str = r#"import { fix } from "./ci/fix";
+import { address } from "./comments/address";
+import { review as openReview } from "./review";
+
+interface Input {
+  /** The link of the pull request to merge. */
+  pr: string;
+  /** What is the CI status of the PR? */
+  ci: "green" | "red" | "pending";
+  /** Does the PR conflict with its base branch? */
+  conflicts: boolean;
+  /** What is the review state of the PR? */
+  review: "approved" | "changes requested" | "no review";
+}
+
+/**
+ * Decide whether a pull request can merge now.
+ */
+export default function merge({ pr, ci, conflicts, review }: Input) {
+  switch (ci) {
+    case "red":
+      return fix(pr=pr);
+    case "pending":
+      return `Wait for CI to finish on ${pr}. Then start this program again.`;
+    case "green":
+      if (conflicts) {
+        return `Rebase ${pr} on its base. Push. Then start this program again.`;
+      }
+
+      switch (review) {
+        case "approved":
+          return `Merge the pull request ${pr}. Then delete its branch.`;
+        case "changes requested":
+          return address(pr=pr);
+        case "no review":
+          return openReview(pr=pr);
+      }
+  }
+}
+"#;
+
+/// The folder with the inline flow, written once for all tests in this process.
+fn fixture() -> &'static PathBuf {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = std::env::temp_dir().join(format!("rein-dap-flow-{}", std::process::id()));
+        let write = |file: &str, text: &str| {
+            let path = root.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write("main.rein", MAIN);
+        write("merge.rein", MERGE);
+        write("rein.json", "{\n  \"entry\": \"main.rein\"\n}\n");
+        for file in ["review", "comments/address", "ci/fix"] {
+            let name = file.rsplit('/').next().unwrap();
+            write(
+                &format!("{file}.rein"),
+                &format!("/** Stub. */\nexport default function {name}(\n  /** The link. */\n  pr: string,\n) {{\n  return `done ${{pr}}`;\n}}\n"),
+            );
+        }
+        root
+    })
+}
+
+/// The path of `file` in the inline `pr-handling` flow.
 fn example(file: &str) -> String {
-    format!(
-        "{}/../../examples/rein/pr-handling/{file}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    fixture().join(file).display().to_string()
 }
 
 /// The 1-based line of the first line of `file` that contains `needle`.
@@ -122,6 +224,52 @@ fn missing_string_input_is_asked_first() {
 }
 
 #[test]
+fn missing_format_input_is_asked_with_its_format_name() {
+    let root = std::env::temp_dir().join(format!("rein-dap-iri-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: Iri,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    fs::write(root.join("main.rein"), main).unwrap();
+    fs::write(root.join("rein.json"), "{\n  \"entry\": \"main.rein\"\n}\n").unwrap();
+    let mut session = Session::default();
+    session.handle(&request("initialize", json!({})));
+    let program = root.join("main.rein").display().to_string();
+    let out = session.handle(&request("launch", json!({"program": program})));
+    assert!(out[0]["success"].as_bool().unwrap(), "{out:?}");
+    let out = session.handle(&request("configurationDone", json!({})));
+    let asks = events(&out, "rein/ask");
+    assert_eq!(asks[0]["body"]["key"], "link");
+    assert_eq!(asks[0]["body"]["type"], "iri");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn invalid_format_answer_is_refused_and_asked_again() {
+    let root = std::env::temp_dir().join(format!("rein-dap-iri-retry-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: Iri,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    fs::write(root.join("main.rein"), main).unwrap();
+    fs::write(root.join("rein.json"), "{\n  \"entry\": \"main.rein\"\n}\n").unwrap();
+    let mut session = Session::default();
+    session.handle(&request("initialize", json!({})));
+    let program = root.join("main.rein").display().to_string();
+    let out = session.handle(&request("launch", json!({"program": program})));
+    assert!(out[0]["success"].as_bool().unwrap(), "{out:?}");
+    let out = session.handle(&request("configurationDone", json!({})));
+    assert_eq!(asked(&out), "link");
+
+    let out = answer(&mut session, "link", "example.com");
+    assert_eq!(out[0]["success"], false, "{out:?}");
+    assert!(out[0]["message"].as_str().unwrap().contains("`link` must match format `iri`"), "{out:?}");
+    assert!(events(&out, "terminated").is_empty(), "{out:?}");
+    assert!(events(&out, "output").is_empty(), "{out:?}");
+
+    let out = answer(&mut session, "link", "https://example.com/a");
+    assert_eq!(out[0]["success"], true, "{out:?}");
+    assert_eq!(events(&out, "terminated").len(), 1, "{out:?}");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn stop_on_entry_stops_before_the_first_question() {
     let mut session = started(json!({"stopOnEntry": true}));
     let out = session.handle(&request("configurationDone", json!({})));
@@ -171,7 +319,7 @@ fn breakpoint_on_a_question_stops_before_it_is_asked() {
 #[test]
 fn breakpoint_on_a_hand_off_stops_at_the_next_question() {
     let mut session = started(json!({}));
-    let line = line_with("main.rein", "@./merge(pr=pr)");
+    let line = line_with("main.rein", "merge(pr=pr)");
     let source = json!({"path": example("main.rein")});
     session.handle(&request(
         "setBreakpoints",
@@ -197,11 +345,11 @@ fn stack_trace_has_a_frame_per_function_with_its_lines() {
     assert_eq!(frames[0]["name"], "merge");
     assert_eq!(frames[0]["line"], line_with("merge.rein", "switch (ci)"));
     assert_eq!(frames[1]["name"], "main");
-    assert_eq!(frames[1]["line"], line_with("main.rein", "@./merge(pr=pr)"));
+    assert_eq!(frames[1]["line"], line_with("main.rein", "merge(pr=pr)"));
     assert!(frames[0]["source"]["path"]
         .as_str()
         .unwrap()
-        .ends_with("pr-handling/merge.rein"));
+        .ends_with("/merge.rein"));
 }
 
 #[test]

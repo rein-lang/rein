@@ -1,16 +1,24 @@
 pub mod ast;
 pub mod check;
 pub mod dependencies;
+pub mod deprecation;
 pub mod doc;
 pub mod diagnostic;
 pub mod eval;
 pub mod flows;
+pub mod formats;
 pub mod graph;
+pub mod import_check;
+pub mod imports;
 pub mod lexer;
+pub mod migrate_imports;
 pub mod naming;
 pub mod parser;
 pub mod project;
 #[cfg(test)]
 mod program_fixture;
+#[cfg(test)]
+mod project_fixture;
+pub mod schema_types;
 pub mod stdlib;
 pub mod step;

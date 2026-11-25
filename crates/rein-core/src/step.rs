@@ -64,9 +64,13 @@ pub struct StepRequest {
     /// passes a root instead. The stepping itself ignores it: it runs on the project it is given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<String>,
-    /// The values of the entry function's `string` parameters, by name. The agent is never asked for them.
+    /// The values of the entry function's `string`, format and schema parameters, by name. The agent is never asked for them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, String>,
+    /// True for a walk with stand-in input values, such as rein graph or the debug walk: format checks are skipped,
+    /// because the values are not real.
+    #[serde(skip)]
+    pub walk: bool,
 }
 
 fn default_version() -> u32 {
@@ -137,12 +141,15 @@ pub struct ResponseSpec {
 }
 
 /// One field of a struct answer. `type` is `boolean`, `union` or `string`; a union lists its `options`.
+/// `schema` is the JSON Schema of a format type, such as `{"type": "string", "format": "iri"}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldSpec {
     pub name: String,
     pub r#type: String,
     pub options: Option<Vec<String>>,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 /// One error from the checker. `file` is the project path, such as `ci/fix.rein`.
@@ -159,15 +166,21 @@ pub fn step(project: &Project, req: &StepRequest) -> StepResponse {
     run(project, req, &mut Vec::new())
 }
 
+/// The value that a walk gives an unset `string` or format input: `<name>`.
+pub fn walk_value(input: &Input) -> String {
+    format!("<{}>", input.name.value)
+}
+
 /// The owner of each function a step walks, in walk order, as [`scoped`] gives it: `main`, then `main.b>fn`.
-/// `rein graph` reads a function's answers through the first of its owners. A `string` input of `entry` is walked
-/// as `<name>`: no condition reads an input, so the walk is the same as with the real inputs.
-/// Each owner comes with the values passed to that visit, so a walk reads a passed `boolean` as `rein step` does.
+/// `rein graph` reads a function's answers through the first of its owners. An unset `string` or format input of
+/// `entry` is walked with [`walk_value`]: no condition reads an input, so the walk is the same as with the real inputs.
+/// The walk sets [`StepRequest::walk`], so it checks no format. Each owner comes with the values passed to that visit,
+/// so a walk reads a passed `boolean` as `rein step` does.
 pub fn owners(project: &Project, entry: &str, answers: &Answers) -> Vec<(String, BTreeMap<String, String>)> {
     let inputs = project.get(entry).map_or_else(BTreeMap::new, |sf| {
-        sf.function.text_inputs().map(|i| (i.name.value.clone(), format!("<{}>", i.name.value))).collect()
+        sf.function.text_inputs().map(|i| (i.name.value.clone(), walk_value(i))).collect()
     });
-    let req = StepRequest { version: PROTOCOL_VERSION, entry: entry.to_string(), answers: answers.clone(), flow: None, inputs };
+    let req = StepRequest { version: PROTOCOL_VERSION, entry: entry.to_string(), answers: answers.clone(), flow: None, inputs, walk: true };
     let mut owners = Vec::new();
     run(project, &req, &mut owners);
     owners
@@ -206,7 +219,7 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<(String, BTreeMap<
         let message = "templates are called from functions, not run";
         return failure(message, None, Vec::new(), answers, Vec::new());
     }
-    if let Err(message) = check_entry_inputs(&entry.function, &req.inputs) {
+    if let Err(message) = check_entry_inputs(&entry.function, &req.inputs, req.walk) {
         return failure(message, None, Vec::new(), answers, Vec::new());
     }
 
@@ -236,18 +249,18 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<(String, BTreeMap<
         owners.push((owner.clone(), strings.clone()));
         let mut inputs = inputs_of(&owner, &req.answers);
         inputs.extend(strings.iter().map(|(k, v)| (k.clone(), v.clone())));
-        let outcome = match eval::run(&sf.function, &inputs, &project.bindings(&current)) {
+        let outcome = match eval::run(&sf.function, &inputs, &project.bindings(&current), req.walk) {
             Ok(outcome) => outcome,
             Err(message) => return failure(message, None, Vec::new(), answers, trace),
         };
         match outcome {
             // Auto-follow: the agent does not need to see a hop that asks nothing.
-            Outcome::Ref { target, args } => match bind(project, &current, &target, args) {
+            Outcome::Ref { target, args } => match bind(project, &current, &target, args, req.walk) {
                 Ok((target, bound)) => (current, strings) = (target, bound),
                 Err(message) => return failure(message, None, Vec::new(), answers, trace),
             },
             // A call with return: walk the callee as a hand-off, and remember who waits for its text.
-            Outcome::Call { target, args, response } => match bind(project, &current, &target, args) {
+            Outcome::Call { target, args, response } => match bind(project, &current, &target, args, req.walk) {
                 Ok((target, bound)) => {
                     // Each call gets its own keys, so a second call of `fn`, or a recursive call, asks again.
                     let caller = std::mem::replace(&mut current, target);
@@ -284,7 +297,7 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<(String, BTreeMap<
                 };
                 // The agent is never asked for a `string` input. The entry's are checked up front, so this
                 // only guards a value that did not reach the function.
-                if input.ty == InputType::Text {
+                if input.ty.is_text() {
                     return failure(missing_input(&name), None, Vec::new(), answers, trace);
                 }
                 let (r#type, options) = type_of(input);
@@ -311,12 +324,14 @@ fn run(project: &Project, req: &StepRequest, owners: &mut Vec<(String, BTreeMap<
 
 /// The function a hand-off or a call from `from` goes to, and the values of all its parameters, bound by name
 /// from `args`. Every `string` parameter is given. A `boolean` or union parameter that the caller did not pass is
-/// asked as a question, until the checker makes passing it required (see `check::MISSING_TYPED_ARG`).
+/// asked as a question, until the checker makes passing it required (see `check::MISSING_TYPED_ARG`). A walk
+/// (`walk`) checks no format of a passed value.
 fn bind(
     project: &Project,
     from: &str,
     target: &str,
     args: Vec<(String, String)>,
+    walk: bool,
 ) -> Result<(String, BTreeMap<String, String>), String> {
     let target = project.qualify(from, target);
     let Some(next) = project.get(&target) else {
@@ -327,8 +342,13 @@ fn bind(
     for input in &next.function.inputs {
         let name = &input.name.value;
         match given.remove(name) {
-            Some(value) => _ = bound.insert(name.clone(), value),
-            None if input.ty == InputType::Text => return Err(format!("`{target}` is missing argument `{name}`")),
+            Some(value) => {
+                if let (InputType::Format(format), false) = (&input.ty, walk) {
+                    format.check(name, &value).map_err(|msg| format!("`{target}`: {msg}"))?;
+                }
+                _ = bound.insert(name.clone(), value);
+            }
+            None if input.ty.is_text() => return Err(format!("`{target}` is missing argument `{name}`")),
             None => {}
         }
     }
@@ -397,10 +417,11 @@ pub fn type_of(input: &Input) -> (String, Option<Vec<String>>) {
         .ty
         .options()
         .map(|o| o.into_iter().map(str::to_string).collect());
-    let name = match input.ty {
+    let name = match &input.ty {
         InputType::Bool => "boolean",
         InputType::Choice(_) => "union",
         InputType::Text => "string",
+        InputType::Format(f) => f.json_name(),
         InputType::Struct(_) => "struct",
     };
     (name.to_string(), options)
@@ -411,7 +432,13 @@ fn field_specs(s: &Struct) -> Vec<FieldSpec> {
         .iter()
         .map(|f| {
             let (r#type, options) = type_of(f);
-            FieldSpec { name: f.name.value.clone(), r#type, options, description: f.description.value.clone() }
+            FieldSpec {
+                name: f.name.value.clone(),
+                r#type,
+                options,
+                description: f.description.value.clone(),
+                schema: f.ty.json_schema(),
+            }
         })
         .collect()
 }
@@ -454,11 +481,14 @@ fn check_answers(project: &Project, entry: &str, answers: &Answers) -> Result<()
         let Some((function, input)) = declared(project, entry, key) else {
             return Err((key.clone(), format!("unknown key `{key}`")));
         };
-        if input.ty == InputType::Text {
-            return Err((
-                key.clone(),
-                format!("`{key}` is a string parameter; only a template takes one"),
-            ));
+        if input.ty.is_text() {
+            let message = match input.ty {
+                InputType::Format(_) => {
+                    format!("`{key}` is a parameter of type `{}`; only a caller passes one", input.ty.ts_type())
+                }
+                _ => format!("`{key}` is a string parameter; only a template takes one"),
+            };
+            return Err((key.clone(), message));
         }
         eval::check_value(function, input, raw).map_err(|message| (key.clone(), message))?;
     }
@@ -570,15 +600,30 @@ fn missing_input(name: &str) -> String {
     format!("missing input `{name}`; give it with --input {name}=<value>")
 }
 
-/// The entry's `string` inputs must all be given, and no other name may be. Checked before the flow runs.
-fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>) -> Result<(), String> {
+/// The entry's `string` inputs must all be given, and no other name may be. Checked before the flow runs. A walk
+/// (`walk`) checks no format of a given value.
+fn check_entry_inputs(entry: &Function, given: &BTreeMap<String, String>, walk: bool) -> Result<(), String> {
     if let Some(name) = given.keys().find(|k| !entry.text_inputs().any(|i| i.name.value == **k)) {
         return Err(format!("unknown input `{name}`"));
     }
-    match entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
-        Some(input) => Err(missing_input(&input.name.value)),
-        None => Ok(()),
+    if let Some(input) = entry.text_inputs().find(|i| !given.contains_key(&i.name.value)) {
+        return Err(missing_input(&input.name.value));
     }
+    if !walk {
+        check_formats(entry, |name| given.get(name).map(String::as_str))?;
+    }
+    Ok(())
+}
+
+/// Checks each format input of `entry` that `value_of` gives a value to against its format. A name with no
+/// value is skipped. `rein step` and `rein eval` both check their `string` inputs with it.
+pub fn check_formats<'a>(entry: &Function, value_of: impl Fn(&str) -> Option<&'a str>) -> Result<(), String> {
+    for input in entry.text_inputs() {
+        if let (InputType::Format(format), Some(value)) = (&input.ty, value_of(&input.name.value)) {
+            format.check(&input.name.value, value)?;
+        }
+    }
+    Ok(())
 }
 
 /// The answers that belong to `function`, keyed by the bare name the evaluator uses.

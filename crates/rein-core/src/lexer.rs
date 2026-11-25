@@ -36,6 +36,8 @@ pub enum Tok {
     Semi,
     Pipe,
     Bang,
+    /// A single `*`. Rein has no multiplication; the lexer reads it so `import *` gets its own message.
+    Star,
     /// A single `=`. Rein has no assignment, but the lexer reads it so `const x = 1` gets its own message.
     Assign,
     AndAnd,
@@ -90,6 +92,7 @@ impl Tok {
             Tok::Semi => ";",
             Tok::Pipe => "|",
             Tok::Bang => "!",
+            Tok::Star => "*",
             Tok::Assign => "=",
             Tok::AndAnd => "&&",
             Tok::OrOr => "||",
@@ -243,14 +246,14 @@ fn lex_ref(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
     let segments: Vec<&str> = path.split('/').collect();
     let dotted = segments.iter().any(|s| s.contains('.') && *s != "." && *s != "..");
     if dotted {
-        return Err(Diagnostic::error(span, "references have no extension; write `@./name`"));
+        return Err(Diagnostic::error(span, "references have no extension; write `import { name } from \"./name\"`"));
     }
     let names = &segments[1..];
     let ok = !names.is_empty()
         && names.iter().all(|s| *s == ".." || (!s.is_empty() && s.chars().all(is_ident_char)))
         && !matches!(names.last(), Some(&"..") | None);
     if !ok {
-        return Err(Diagnostic::error(span, "a reference is `@./path` or `@../path`, with path names made of letters, digits and `_`"));
+        return Err(Diagnostic::error(span, "an import path is `./path` or `../path`, with path names made of letters, digits and `_`"));
     }
     Ok((Tok::Ref(path.to_string()), pos + 1 + len))
 }
@@ -268,7 +271,7 @@ fn lex_program(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
         && !program.starts_with('-')
         && segments.all(|s| !s.is_empty() && s.chars().all(is_ident_char));
     if !ok {
-        let message = "a reference is `@./path`, `@../path`, or `@program/function` for another program";
+        let message = "an import path is `./path`, `../path`, or `program` for another program";
         return Err(Diagnostic::error(span, message));
     }
     Ok((Tok::Ref(path.to_string()), pos + 1 + len))
@@ -394,6 +397,7 @@ fn lex_punct(src: &str, pos: usize) -> Result<(Tok, usize), Diagnostic> {
         '!' if rest.starts_with("!==") => (Tok::NotEqEq, 3),
         '!' if rest.starts_with("!=") => (Tok::NotEqEq, 2),
         '!' => (Tok::Bang, 1),
+        '*' => (Tok::Star, 1),
         '/' if rest.starts_with("/*") => {
             return Err(Diagnostic::error(
                 Span::new(pos, pos + 2),
