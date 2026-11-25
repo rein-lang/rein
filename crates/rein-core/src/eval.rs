@@ -228,9 +228,8 @@ fn expand_call(env: &Env, call: &Call) -> Eval<String> {
         return Err(Stop::Error(format!("`{name}` is not an imported template")));
     };
     let args = named_values(env, &call.args)?;
-    let lit = match function.body.as_slice() {
-        [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => lit,
-        _ => return Err(Stop::Error(format!("`{name}` is not a template"))),
+    let [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] = function.body.as_slice() else {
+        return Err(Stop::Error(format!("`{name}` is not a template")));
     };
     let mut out = String::new();
     for piece in &lit.pieces {

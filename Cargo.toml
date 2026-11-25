@@ -11,3 +11,6 @@ homepage = "https://rein-lang.com"
 
 [workspace.lints.clippy]
 redundant_clone = "deny"
+# Prefer `let PATTERN = expr else { diverge };` over a `match` whose only other arm
+# diverges (return/continue/break). The happy path stays unindented.
+manual_let_else = "deny"
