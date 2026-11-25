@@ -875,7 +875,8 @@ fn format_answer_is_an_error_with_its_type() {
     let answer = |ty: &str| {
         format!("/** d */\nexport default async function f() {{\n  /** The link. */\n  const pr: {ty} = await request(`pick a PR`);\n  return `x`;\n}}")
     };
-    expect_diag(&answer("Iri"), Severity::Error, "a value of type `Iri` is not allowed as an answer; answer a struct with a field of type `Iri`");    expect_diag(&answer("Email"), Severity::Error, "a value of type `Email` is not allowed as an answer");
+    expect_diag(&answer("Iri"), Severity::Error, "a value of type `Iri` is not allowed as an answer; answer a struct with a field of type `Iri`");
+    expect_diag(&answer("Email"), Severity::Error, "a value of type `Email` is not allowed as an answer");
     expect_diag(&answer("Uri"), Severity::Error, "a value of type `Uri` is not allowed as an answer");
 }
 
