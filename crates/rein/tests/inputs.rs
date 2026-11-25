@@ -298,11 +298,11 @@ fn rein_eval_set_gives_a_string_parameter_its_value() {
 fn rein_eval_set_checks_an_iri_value_against_its_format() {
     let flow = Flow::new(&[(
         "main.rein",
-        "interface Input {\n  /** The link. */\n  link: IRI;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ link, ok }: Input) {\n  if (ok) {\n    return `Open ${link}.`;\n  }\n  return `none`;\n}\n",
+        "interface Input {\n  /** The link. */\n  link: Iri;\n  /** Ok? */\n  ok: boolean;\n}\n\n/** Entry. */\nexport default function main({ link, ok }: Input) {\n  if (ok) {\n    return `Open ${link}.`;\n  }\n  return `none`;\n}\n",
     )]);
     let bad = rein(&["eval", "main", "--root", flow.path(), "--set", "link=not-a-link", "--set", "ok=yes"], None);
     assert_eq!(code(&bad), 1, "{}{}", stdout(&bad), stderr(&bad));
-    assert!(stderr(&bad).contains("must be an absolute IRI"), "{}", stderr(&bad));
+    assert!(stderr(&bad).contains("must match format `iri`"), "{}", stderr(&bad));
 
     let good = rein(&["eval", "main", "--root", flow.path(), "--set", &format!("link={LINK}"), "--set", "ok=yes"], None);
     assert_eq!(code(&good), 0, "{}{}", stdout(&good), stderr(&good));
@@ -451,7 +451,7 @@ fn eval_need_input_of_a_schema_type_carries_its_json_schema() {
 
 #[test]
 fn eval_need_input_of_a_builtin_format_carries_its_json_schema() {
-    let main = "interface Input {\n  /** The link. */\n  link: IRI;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ link, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${link}.`;\n  }\n\n  return `Open ${link}.`;\n}\n";
+    let main = "interface Input {\n  /** The link. */\n  link: Iri;\n  /** Is it urgent? */\n  urgent: boolean;\n}\n/** Entry. */\nexport default function main({ link, urgent }: Input) {\n  if (urgent) {\n    return `Hurry ${link}.`;\n  }\n\n  return `Open ${link}.`;\n}\n";
     let flow = Flow::new(&[("main.rein", main)]);
     let out = rein(&["eval", "main", "--root", flow.path(), "--set", "urgent=no", "--json"], None);
     assert_eq!(code(&out), 2, "{}", stderr(&out));
@@ -478,7 +478,7 @@ fn eval_need_input_of_a_schema_type_text_mode_is_unchanged() {
 
 #[test]
 fn step_text_mode_struct_answer_lists_fields_without_schema() {
-    let pick = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
+    let pick = "import { Ticket } from \"./ticket.schema\";\n\ninterface Pick {\n  /** The ticket. */\n  ticket: Ticket;\n  /** The link. */\n  link: Iri;\n}\n/** Entry. */\nexport default async function main() {\n  /** The ticket to fix. */\n  const pick: Pick = await request(`pick a ticket`);\n  return `Fix ${pick.ticket}.`;\n}\n";
     let flow = Flow::new(&[("main.rein", pick), ("ticket.schema.json", TICKET_JSON)]);
     let out = step_in(flow.path(), &[]);
     assert_eq!(code(&out), 3, "{}", stderr(&out));

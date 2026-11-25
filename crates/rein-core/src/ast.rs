@@ -347,7 +347,7 @@ pub enum InputType {
     Choice(Vec<Spanned<String>>),
     /// `string`. Only a template takes it, and a field of a struct answer.
     Text,
-    /// A string with a fixed shape, such as `IRI`. It goes where `string` goes; the run checks each value.
+    /// A string with a fixed shape, such as `Iri`. It goes where `string` goes; the run checks each value.
     Format(crate::schema_types::FormatType),
     /// A struct answer: an inline `interface` or a shared `@./name`. Only a `request` answer has it.
     Struct(StructRef),

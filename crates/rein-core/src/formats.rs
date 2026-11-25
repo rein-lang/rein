@@ -1,213 +1,100 @@
-//! Format types: string types with a fixed shape, such as `IRI`. A program uses one where it would use `string`.
+//! Format types: string types with a fixed shape, such as `Iri`. A program uses one where it would use `string`.
 //! The checker treats a format type as a `string`; the run checks each value against the format.
-//! The checks are the built-in `format` keywords of the jsonschema crate, so no format logic lives here.
-//! A new built-in format needs four edits: a variant in `Format`, an entry in `Format::ALL`, an entry in `Format::spec`, and an arm in `Format::article`.
-//! The compiler checks the variant, the `spec` entry and the `article` arm. Nothing checks the `Format::ALL` entry.
 //!
-//! The jsonschema crate keeps its list of formats private, so `Format` repeats it by hand for now.
-//! TODO: replace `Format` and `Format::spec` with `ValidationOptions::known_formats` once it is released:
-//! https://github.com/Stranger6667/jsonschema/pull/2032 (issue https://github.com/Stranger6667/jsonschema/issues/2031).
+//! The list of formats comes from the jsonschema crate: `ValidationOptions::known_formats` under draft 2020-12.
+//! Rein keeps no list of its own. Each JSON Schema format name gives its type name by one rule: split the name
+//! on `-`, upper-case the first letter of each part, and join the parts. So `iri` is `Iri`, `date-time` is
+//! `DateTime`, and `relative-json-pointer` is `RelativeJsonPointer`. A format that a later jsonschema release
+//! adds appears in rein once rein moves its `jsonschema` pin to that release. No rein code changes for it.
 
 use std::sync::OnceLock;
 
-use jsonschema::Validator;
+use jsonschema::{Draft, Validator};
 use serde_json::{Value, json};
 
+/// A built-in format type: an index into the formats that the jsonschema crate knows. It is `Copy`, like a tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
-    Iri,
-    IriReference,
-    Uri,
-    UriReference,
-    UriTemplate,
-    Email,
-    IdnEmail,
-    Hostname,
-    IdnHostname,
-    Ipv4,
-    Ipv6,
-    Date,
-    Time,
-    DateTime,
-    Duration,
-    Uuid,
-    JsonPointer,
-    RelativeJsonPointer,
-    Regex,
+pub struct Format(usize);
+
+/// One built-in format: its JSON Schema name, its type name, and the compiled check.
+struct Entry {
+    json: String,
+    name: String,
+    validator: Validator,
 }
 
 impl Format {
-    /// Every built-in format, in the order the docs list them.
-    pub const ALL: [Format; 19] = [
-        Format::Iri,
-        Format::IriReference,
-        Format::Uri,
-        Format::UriReference,
-        Format::UriTemplate,
-        Format::Email,
-        Format::IdnEmail,
-        Format::Hostname,
-        Format::IdnHostname,
-        Format::Ipv4,
-        Format::Ipv6,
-        Format::Date,
-        Format::Time,
-        Format::DateTime,
-        Format::Duration,
-        Format::Uuid,
-        Format::JsonPointer,
-        Format::RelativeJsonPointer,
-        Format::Regex,
-    ];
+    /// Every built-in format, in the order that the jsonschema crate sorts their JSON names.
+    #[cfg(test)]
+    pub fn all() -> impl Iterator<Item = Format> {
+        (0..entries().len()).map(Format)
+    }
 
-    /// The format that a program writes as `name`, such as `IRI`.
+    /// The format that a program writes as `name`, such as `Iri`.
     pub fn from_name(name: &str) -> Option<Format> {
-        Format::ALL.into_iter().find(|f| f.name() == name)
+        entries().iter().position(|e| e.name == name).map(Format)
     }
 
-    /// The type name as a program writes it.
+    /// The type name as a program writes it, such as `Iri`.
     pub fn name(self) -> &'static str {
-        self.spec().0
+        &entries()[self.0].name
     }
 
-    /// The type name in JSON, such as the `type` of a question or a field.
+    /// The JSON Schema format name, such as `iri`.
     pub fn json_name(self) -> &'static str {
-        self.spec().1
-    }
-
-    /// The indefinite article for the type name, by its first sound: `an IRI`, `a URI`, `an Email`.
-    pub fn article(self) -> &'static str {
-        match self {
-            Format::Iri
-            | Format::IriReference
-            | Format::Email
-            | Format::IdnEmail
-            | Format::IdnHostname
-            | Format::Ipv4
-            | Format::Ipv6 => "an",
-            Format::Uri
-            | Format::UriReference
-            | Format::UriTemplate
-            | Format::Hostname
-            | Format::Date
-            | Format::Time
-            | Format::DateTime
-            | Format::Duration
-            | Format::Uuid
-            | Format::JsonPointer
-            | Format::RelativeJsonPointer
-            | Format::Regex => "a",
-        }
+        &entries()[self.0].json
     }
 
     /// Checks that `raw`, the value of `name`, has this format. Returns the error text when it does not.
     pub fn check(self, name: &str, raw: &str) -> Result<(), String> {
-        if self.validator().is_valid(&Value::String(raw.to_owned())) {
+        let entry = &entries()[self.0];
+        if entry.validator.is_valid(&Value::String(raw.to_owned())) {
             return Ok(());
         }
-        Err(format!("`{name}` must be {}; got `{raw}`", self.expected()))
-    }
-
-    /// The rein name, the JSON Schema format name, and a short description with an example.
-    fn spec(self) -> (&'static str, &'static str, &'static str) {
-        match self {
-            Format::Iri => (
-                "IRI",
-                "iri",
-                "an absolute IRI, like `https://example.com/page`",
-            ),
-            Format::IriReference => (
-                "IRIReference",
-                "iri-reference",
-                "an IRI reference, like `/docs/page`",
-            ),
-            Format::Uri => (
-                "URI",
-                "uri",
-                "an absolute URI, like `https://example.com/page`",
-            ),
-            Format::UriReference => (
-                "URIReference",
-                "uri-reference",
-                "a URI reference, like `/docs/page`",
-            ),
-            Format::UriTemplate => (
-                "URITemplate",
-                "uri-template",
-                "a URI template, like `https://example.com/items/{id}`",
-            ),
-            Format::Email => (
-                "Email",
-                "email",
-                "an email address, like `someone@example.com`",
-            ),
-            Format::IdnEmail => (
-                "IdnEmail",
-                "idn-email",
-                "an email address, like `someone@example.com`",
-            ),
-            Format::Hostname => ("Hostname", "hostname", "a hostname, like `example.com`"),
-            Format::IdnHostname => (
-                "IdnHostname",
-                "idn-hostname",
-                "a hostname, like `example.com`",
-            ),
-            Format::Ipv4 => ("IPv4", "ipv4", "an IPv4 address, like `192.0.2.1`"),
-            Format::Ipv6 => ("IPv6", "ipv6", "an IPv6 address, like `2001:db8::1`"),
-            Format::Date => ("Date", "date", "a date, like `2026-11-23`"),
-            Format::Time => ("Time", "time", "a time with an offset, like `13:45:00Z`"),
-            Format::DateTime => (
-                "DateTime",
-                "date-time",
-                "a date and time, like `2026-11-23T13:45:00Z`",
-            ),
-            Format::Duration => (
-                "Duration",
-                "duration",
-                "an ISO 8601 duration, like `P1DT2H`",
-            ),
-            Format::Uuid => (
-                "UUID",
-                "uuid",
-                "a UUID, like `123e4567-e89b-12d3-a456-426614174000`",
-            ),
-            Format::JsonPointer => (
-                "JSONPointer",
-                "json-pointer",
-                "a JSON Pointer, like `/items/0`",
-            ),
-            Format::RelativeJsonPointer => (
-                "RelativeJSONPointer",
-                "relative-json-pointer",
-                "a relative JSON Pointer, like `1/items`",
-            ),
-            Format::Regex => ("Regex", "regex", "a regular expression, like `^[a-z]+$`"),
-        }
-    }
-
-    fn expected(self) -> &'static str {
-        self.spec().2
-    }
-
-    /// The compiled check for this format, built once per process.
-    fn validator(self) -> &'static Validator {
-        static VALIDATORS: OnceLock<Vec<(Format, Validator)>> = OnceLock::new();
-        VALIDATORS
-            .get_or_init(|| Format::ALL.into_iter().map(|f| (f, compile(f))).collect())
-            .iter()
-            .find(|(f, _)| *f == self)
-            .map(|(_, v)| v)
-            .expect("every format has a compiled check")
+        Err(format!(
+            "`{name}` must match format `{}`; got `{raw}`",
+            entry.json
+        ))
     }
 }
 
+/// The formats of the jsonschema crate under draft 2020-12, built once per process.
+fn entries() -> &'static [Entry] {
+    static ENTRIES: OnceLock<Vec<Entry>> = OnceLock::new();
+    ENTRIES.get_or_init(|| {
+        jsonschema::options()
+            .known_formats(Draft::Draft202012)
+            .into_iter()
+            .map(|json| Entry {
+                json: json.to_owned(),
+                name: type_name(json),
+                validator: compile(json),
+            })
+            .collect()
+    })
+}
+
+/// The type name of a JSON Schema format name: each part of the name split on `-` has its first letter upper-cased.
+fn type_name(json: &str) -> String {
+    json.split('-')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Compiles `{"type": "string", "format": ...}` with format validation on.
-fn compile(format: Format) -> Validator {
-    let schema = json!({"type": "string", "format": format.json_name()});
+fn compile(format: &str) -> Validator {
+    let schema = json!({"type": "string", "format": format});
     jsonschema::options()
+        .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
         .build(&schema)
-        .expect("a string schema with a built-in format compiles")
+        .expect("a string schema with a known format compiles")
 }
 
 #[cfg(test)]
