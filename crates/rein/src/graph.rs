@@ -161,8 +161,11 @@ fn html(g: &Graph, request: Option<&StepRequest>) -> String {
 
 /// Opens `path` in the default browser, without waiting for it: the servers start to answer right after this call.
 pub(crate) fn open(path: impl AsRef<std::ffi::OsStr>) {
-    // ponytail: a browser that does not start is not an error; the path is on stderr.
-    let _ = ::open::that_detached(path);
+    // A browser that does not start is not an error: the caller printed the path or URL, so the user can open it.
+    // The `open` crate sends the launcher's own output to null, so say once that the launch failed.
+    if let Err(e) = ::open::that_detached(path) {
+        eprintln!("warning: cannot open a browser: {e}");
+    }
 }
 
 /// Renders DOT source to an image with Graphviz `dot`.
