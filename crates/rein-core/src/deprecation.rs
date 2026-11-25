@@ -63,9 +63,8 @@ fn declared_name(project: &Project, from: &str, reference: &str, is_struct: bool
         return project.schema_for(from, reference).ok().map(|s| s.title.clone());
     }
     if is_program(reference) {
-        let linked = match project.programs.get(program_or_path(reference)) {
-            Some(Ok(linked)) => linked,
-            _ => return None,
+        let Some(Ok(linked)) = project.programs.get(program_or_path(reference)) else {
+            return None;
         };
         return linked
             .project
