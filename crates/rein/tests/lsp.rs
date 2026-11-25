@@ -10,6 +10,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+#[path = "fixtures/support_ticket.rs"]
+mod support_ticket;
+use support_ticket::SUPPORT_TICKET;
+
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Kills the server if a test panics before it exits.
@@ -598,6 +602,462 @@ fn reference_completion_replaces_the_whole_token() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+/// Opens `text` as file `name` of the project and asserts that it checks with no error and no warning.
+fn assert_clean(server: &mut Server, root: &Path, name: &str, text: &str) {
+    let uri = uri_of(root, name);
+    server.open(&uri, text);
+    let diags = server.wait_diagnostics(&uri, |_| true);
+    // The scratch file is not reachable from `main`, so that one warning is expected.
+    let bad: Vec<&Value> = diags
+        .iter()
+        .filter(|d| d["severity"] == 1 || d["severity"] == 2)
+        .filter(|d| !d["message"].as_str().unwrap().contains("is not reachable from"))
+        .collect();
+    assert!(bad.is_empty(), "{name}: {bad:?}");
+}
+
+/// The quick fix actions of `uri` for the diagnostic with `code`, as their titles and the new text of each.
+fn deprecation_fixes(server: &mut Server, id: i64, uri: &str, code: &str) -> Vec<(String, String)> {
+    let diags = server.wait_diagnostics(uri, |d| d.iter().any(|x| x["code"] == code));
+    let diag = diags.iter().find(|d| d["code"] == code).unwrap().clone();
+    let params = json!({"textDocument": {"uri": uri}, "range": diag["range"], "context": {"diagnostics": [diag]}});
+    let actions = server.request(id, "textDocument/codeAction", params);
+    actions["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            assert_eq!(a["kind"], "quickfix", "{actions}");
+            let new_text = a["edit"]["changes"][uri][0]["newText"].as_str().unwrap().to_string();
+            (a["title"].as_str().unwrap().to_string(), new_text)
+        })
+        .collect()
+}
+
+#[test]
+fn deprecated_reference_has_quick_fixes_that_leave_no_at_reference() {
+    let root = temp_project("deprecated-fix");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, START);
+    let fixes = deprecation_fixes(&mut server, 2, &start, "deprecated-reference");
+    let titles: Vec<&str> = fixes.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(titles, ["Convert to named import", "Convert all in this file"], "{fixes:?}");
+    for (i, (_, new_text)) in fixes.iter().enumerate() {
+        assert!(!new_text.contains('@'), "{new_text}");
+        assert!(new_text.contains("import { target } from \"./target\";"), "{new_text}");
+        assert_clean(&mut server, &root, &format!("fixed_{i}.rein"), new_text);
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn deprecated_default_import_has_a_named_import_quick_fix() {
+    let root = temp_project("deprecated-default-fix");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let uses = uri_of(&root, "uses.rein");
+    let text = "import target from \"./target\";\n\n/** Uses. */\nexport default function uses() {\n  return target;\n}\n";
+    server.open(&uses, text);
+    let fixes = deprecation_fixes(&mut server, 2, &uses, "deprecated-reference");
+    let (title, new_text) = &fixes[0];
+    assert_eq!(title, "Convert to named import", "{fixes:?}");
+    assert!(new_text.contains("import { target } from \"./target\";"), "{new_text}");
+    assert!(!new_text.contains("import target from"), "{new_text}");
+    assert_clean(&mut server, &root, "fixed_default.rein", new_text);
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_wrong_import_name_has_a_quick_fix_to_the_declared_name() {
+    let root = temp_project("wrong-name");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let uses = uri_of(&root, "uses.rein");
+    server.open(
+        &uses,
+        "import { targetX } from \"./target\";\n\n/** Uses. */\nexport default function uses() {\n  return targetX;\n}\n",
+    );
+    let (title, edit) = quick_fix(&mut server, 2, &uses, "declares `target`");
+    assert_eq!(title, "Use the declared name `target`");
+    assert_eq!(edit["newText"], "target");
+    // `targetX` starts after `import { ` at column 9.
+    assert_eq!(edit["range"]["start"]["character"], 9, "{edit}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn definition_of_a_named_import_goes_to_its_function() {
+    let root = temp_project("import-definition");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(
+        &start,
+        "import { target } from \"./target\";\n\n/** Start. */\nexport default function start() {\n  return target;\n}\n",
+    );
+    // Line 0, column 9 is the imported name. Line 4, column 9 is its use. Both go to the header of `target`.
+    for (id, (line, character)) in [(2, (0, 9)), (3, (4, 9))] {
+        let def = server.request(
+            id,
+            "textDocument/definition",
+            json!({"textDocument": {"uri": start}, "position": {"line": line, "character": character}}),
+        );
+        assert!(def["result"]["uri"].as_str().unwrap().ends_with("/target.rein"), "{def}");
+        assert_eq!(def["result"]["range"]["start"]["line"], 1, "{def}");
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+const TARGET_SRC: &str = "/** Target function does X. */\nexport default function target() {\n  return `done`;\n}\n";
+const START_NAMED: &str = "import { target } from \"./target\";\n\n/** Start. */\nexport default function start() {\n  return target;\n}\n";
+const ALIAS_NAMED: &str = "import { target as t } from \"./target\";\n\n/** Alias. */\nexport default function alias() {\n  return t;\n}\n";
+
+/// A project with `target.rein` and each of `files`. Returns its canonical root.
+fn import_project(tag: &str, files: &[(&str, &str)]) -> PathBuf {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("target.rein"), TARGET_SRC).unwrap();
+    for (file, text) in files {
+        fs::write(root.join(file), text).unwrap();
+    }
+    fs::canonicalize(root).unwrap()
+}
+
+#[test]
+fn references_of_an_import_name_stay_in_its_file_and_include_the_declaration() {
+    let root = import_project("import-refs", &[("start.rein", START_NAMED)]);
+    let mut server = Server::start();
+    initialize(&mut server);
+    let start = open_file(&mut server, &root, "start.rein");
+
+    // On the name in the import line, and on a use of it in the body.
+    for (id, line, character) in [(2, 0, 9), (3, 4, 9)] {
+        let mut params = at(&start, line, character);
+        params["context"] = json!({"includeDeclaration": false});
+        let refs = server.request(id, "textDocument/references", params);
+        assert_eq!(spots(&root, &refs["result"]), vec![spot("start.rein", 0, 9, 0, 15), spot("start.rein", 4, 9, 4, 15)], "{refs}");
+    }
+
+    let mut params = at(&start, 0, 9);
+    params["context"] = json!({"includeDeclaration": true});
+    let refs = server.request(4, "textDocument/references", params);
+    let mut expected = vec![spot("start.rein", 0, 9, 0, 15), spot("start.rein", 4, 9, 4, 15), spot("target.rein", 1, 24, 1, 30)];
+    expected.sort();
+    assert_eq!(spots(&root, &refs["result"]), expected, "{refs}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn references_of_an_alias_stay_in_its_file() {
+    let root = import_project("alias-refs", &[("alias.rein", ALIAS_NAMED)]);
+    let mut server = Server::start();
+    initialize(&mut server);
+    let alias = open_file(&mut server, &root, "alias.rein");
+
+    for (id, line, character) in [(2, 0, 19), (3, 4, 9)] {
+        let mut params = at(&alias, line, character);
+        params["context"] = json!({"includeDeclaration": false});
+        let refs = server.request(id, "textDocument/references", params);
+        assert_eq!(spots(&root, &refs["result"]), vec![spot("alias.rein", 0, 19, 0, 20), spot("alias.rein", 4, 9, 4, 10)], "{refs}");
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn references_of_a_function_include_the_import_lines_and_uses_of_other_files() {
+    let root = import_project("import-of-refs", &[("start.rein", START_NAMED), ("alias.rein", ALIAS_NAMED)]);
+    let mut server = Server::start();
+    initialize(&mut server);
+    let target = open_file(&mut server, &root, "target.rein");
+
+    let mut params = at(&target, 1, 24);
+    params["context"] = json!({"includeDeclaration": false});
+    let refs = server.request(2, "textDocument/references", params);
+    assert_eq!(
+        spots(&root, &refs["result"]),
+        vec![
+            spot("alias.rein", 0, 9, 0, 15),
+            spot("alias.rein", 4, 9, 4, 10),
+            spot("start.rein", 0, 9, 0, 15),
+            spot("start.rein", 4, 9, 4, 15),
+        ],
+        "{refs}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_an_import_name_without_alias_adds_the_alias() {
+    let root = import_project("import-rename-plain", &[("start.rein", START_NAMED)]);
+    let mut server = start_with_file_renames();
+    let start = open_file(&mut server, &root, "start.rein");
+
+    let prepared = server.request(2, "textDocument/prepareRename", at(&start, 4, 9));
+    assert_eq!(prepared["result"]["placeholder"], "target", "{prepared}");
+    assert_eq!(prepared["result"]["range"], json!({"start": {"line": 4, "character": 9}, "end": {"line": 4, "character": 15}}));
+
+    let mut params = at(&start, 0, 9);
+    params["newName"] = json!("t");
+    let edit = server.request(3, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                (spot("start.rein", 0, 9, 0, 15), "target as t".to_string()),
+                (spot("start.rein", 4, 9, 4, 15), "t".to_string()),
+            ],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_an_alias_changes_the_alias_and_drops_it_for_the_declared_name() {
+    let root = import_project("import-rename-alias", &[("alias.rein", ALIAS_NAMED)]);
+    let mut server = start_with_file_renames();
+    let alias = open_file(&mut server, &root, "alias.rein");
+
+    let mut params = at(&alias, 4, 9);
+    params["newName"] = json!("x");
+    let edit = server.request(2, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![(spot("alias.rein", 0, 19, 0, 20), "x".to_string()), (spot("alias.rein", 4, 9, 4, 10), "x".to_string())],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    // The new name is the declared name, so `as` goes: from the end of `target` to the end of the alias.
+    let mut params = at(&alias, 4, 9);
+    params["newName"] = json!("target");
+    let edit = server.request(3, "textDocument/rename", params);
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![(spot("alias.rein", 0, 15, 0, 20), String::new()), (spot("alias.rein", 4, 9, 4, 10), "target".to_string())],
+            vec![]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_an_import_name_refuses_a_clash_with_another_name() {
+    let clash = "import { target as t } from \"./target\";\nimport { target as u } from \"./target\";\n\n/** Clash. */\nexport default function clash() {\n  return t;\n}\n";
+    let root = import_project("import-rename-clash", &[("clash.rein", clash)]);
+    let mut server = start_with_file_renames();
+    let file = open_file(&mut server, &root, "clash.rein");
+
+    // Another import holds `u`, and `delegate` is a std name.
+    for (id, new) in [(2, "u"), (3, "delegate")] {
+        let mut params = at(&file, 5, 9);
+        params["newName"] = json!(new);
+        let failed = server.request(id, "textDocument/rename", params);
+        assert_eq!(failed["error"]["code"], -32803, "{failed}");
+    }
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_a_function_updates_the_import_lines_of_other_files() {
+    let root = import_project("import-move", &[("start.rein", START_NAMED), ("alias.rein", ALIAS_NAMED)]);
+    let mut server = start_with_file_renames();
+    let target = open_file(&mut server, &root, "target.rein");
+
+    let mut params = at(&target, 1, 24);
+    params["newName"] = json!("fixed");
+    let edit = server.request(2, "textDocument/rename", params);
+    let fixed = |s: Spot| (s, "fixed".to_string());
+    let path = |s: Spot| (s, "./fixed".to_string());
+    assert_eq!(
+        edits_of(&root, &edit["result"]),
+        (
+            vec![
+                fixed(spot("alias.rein", 0, 9, 0, 15)),
+                path(spot("alias.rein", 0, 29, 0, 37)),
+                fixed(spot("start.rein", 0, 9, 0, 15)),
+                path(spot("start.rein", 0, 24, 0, 32)),
+                fixed(spot("start.rein", 4, 9, 4, 15)),
+                fixed(spot("target.rein", 1, 24, 1, 30)),
+            ],
+            vec![("target.rein".to_string(), "fixed.rein".to_string())]
+        ),
+        "{edit}"
+    );
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn rename_a_function_refuses_a_name_that_clashes_with_an_import_without_alias() {
+    let both = "import { target } from \"./target\";\nimport { target as t } from \"./target\";\n\n/** Both. */\nexport default function both() {\n  return target;\n}\n";
+    let root = import_project("import-move-clash", &[("both.rein", both)]);
+    let mut server = start_with_file_renames();
+    let target = open_file(&mut server, &root, "target.rein");
+
+    // The import without `as` would take the name `t`, which the other import holds.
+    let mut params = at(&target, 1, 24);
+    params["newName"] = json!("t");
+    let failed = server.request(2, "textDocument/rename", params);
+    assert_eq!(failed["error"]["code"], -32803, "{failed}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_deprecated_reference_is_tagged_with_its_code_and_docs_link() {
+    let root = temp_project("deprecated-tag");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, START);
+    let diags = server.wait_diagnostics(&start, |d| has_message(d, "is deprecated"));
+    let diag = diags.iter().find(|d| d["code"] == "deprecated-reference").unwrap();
+    assert_eq!(diag["tags"], json!([2]), "{diag}");
+    assert_eq!(diag["codeDescription"]["href"], "https://rein-lang.com/docs/reference/roadmap", "{diag}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn hover_on_a_deprecated_reference_says_when_it_is_removed() {
+    let root = temp_project("deprecated-hover");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    // Line 2 is `  return @./target;`. Column 10 is inside the reference.
+    let start = uri_of(&root, "start.rein");
+    server.open(&start, START);
+    let hover = server.request(
+        2,
+        "textDocument/hover",
+        json!({"textDocument": {"uri": start}, "position": {"line": 2, "character": 10}}),
+    );
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("is deprecated"), "{text}");
+    assert!(text.contains("becomes an error on 2026-12-19"), "{text}");
+    assert!(text.contains("import { target } from \"./target\""), "{text}");
+    assert!(text.contains("Target function does X"), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn hover_on_a_default_import_says_when_it_is_removed() {
+    let root = temp_project("deprecated-default");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let uses = uri_of(&root, "uses.rein");
+    server.open(
+        &uses,
+        "import target from \"./target\";\n\n/** Uses. */\nexport default function uses() {\n  return `x`;\n}\n",
+    );
+    let hover = server.request(
+        2,
+        "textDocument/hover",
+        json!({"textDocument": {"uri": uses}, "position": {"line": 0, "character": 8}}),
+    );
+    let text = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(text.contains("default imports are deprecated"), "{text}");
+    assert!(text.contains("become an error on 2026-12-19"), "{text}");
+    assert!(text.contains("import { target } from \"./target\""), "{text}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn import_completion_offers_the_declared_name_between_the_braces() {
+    let root = temp_project("import-name");
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(
+        &start,
+        "import {  } from \"./target\";\n\n/** Start. */\nexport default function start() {\n  return `x`;\n}\n",
+    );
+    // Line 0, column 9 is between the braces.
+    let items = server.request(
+        2,
+        "textDocument/completion",
+        json!({"textDocument": {"uri": start}, "position": {"line": 0, "character": 9}}),
+    );
+    assert_eq!(labels(&items), ["target"], "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn import_completion_offers_project_paths_after_from() {
+    let root = temp_project("import-path");
+    fs::create_dir_all(root.join("ci")).unwrap();
+    fs::write(root.join("ci/fix.rein"), "/** Fix. */\nexport default function fix() {\n  return `f`;\n}\n").unwrap();
+    let mut server = Server::start();
+    initialize(&mut server);
+
+    let start = uri_of(&root, "start.rein");
+    server.open(
+        &start,
+        "import { target } from \"./\";\n\n/** Start. */\nexport default function start() {\n  return `x`;\n}\n",
+    );
+    // The path starts at column 24, after the quote. Column 26 is after `./`.
+    let items = server.request(
+        2,
+        "textDocument/completion",
+        json!({"textDocument": {"uri": start}, "position": {"line": 0, "character": 26}}),
+    );
+    let got = labels(&items);
+    assert!(got.contains(&"./target".to_string()), "{items}");
+    assert!(got.contains(&"./ci/fix".to_string()), "{items}");
+    assert!(!got.contains(&"./start".to_string()), "{items}");
+    let edit = &items["result"][0]["textEdit"];
+    assert_eq!(edit["range"]["start"]["character"], 24, "{items}");
+    assert_eq!(edit["range"]["end"]["character"], 26, "{items}");
+
+    server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn hover_and_completion_know_the_std_library() {
     let root = temp_project("std");
@@ -632,9 +1092,35 @@ fn hover_and_completion_know_the_std_library() {
     fs::remove_dir_all(&root).unwrap();
 }
 
-/// The real example program `examples/rein/<name>`, as a canonical path.
-fn example(name: &str) -> PathBuf {
-    fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rein").join(name)).unwrap()
+/// A second program with no `@` references, for the workspace symbol search.
+const PING: &[(&str, &str)] = &[
+    ("package.json", "{\n  \"name\": \"ping\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n"),
+    ("rein.json", "{\n  \"entry\": \"main.rein\"\n}\n"),
+    ("main.rein", "/** Ping the service. */\nexport default function ping() {\n  return `pong`;\n}\n"),
+];
+
+/// A new empty directory named after `tag`. Returns its canonical path.
+fn fresh_dir(tag: &str) -> PathBuf {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::canonicalize(root).unwrap()
+}
+
+/// Writes each `(path, text)` of `files` under `dir`.
+fn write_files(dir: &Path, files: &[(&str, &str)]) {
+    for (file, text) in files {
+        let path = dir.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+}
+
+/// A fresh copy of the support-ticket program. Returns its canonical root.
+fn support_ticket_project(tag: &str) -> PathBuf {
+    let root = fresh_dir(tag);
+    write_files(&root, SUPPORT_TICKET);
+    root
 }
 
 /// Opens `file` of the project at `root` with its text on disk. Returns its URI.
@@ -675,7 +1161,7 @@ fn at(uri: &str, line: u64, character: u64) -> Value {
     json!({"textDocument": {"uri": uri}, "position": {"line": line, "character": character}})
 }
 
-/// Every `@./escalate` in examples/rein/support-ticket.
+/// Every `@./escalate` in the support-ticket program.
 fn escalate_calls() -> Vec<Spot> {
     vec![
         spot("faq.rein", 8, 11, 8, 22),
@@ -688,7 +1174,7 @@ fn escalate_calls() -> Vec<Spot> {
 
 #[test]
 fn references_list_every_call_of_a_function() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("references_list_every_call_of_a_function");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -712,11 +1198,12 @@ fn references_list_every_call_of_a_function() {
     assert_eq!(spots(&root, &refs["result"]), expected, "{refs}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn references_of_a_parameter_include_named_arguments() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("references_of_a_parameter_include_named_arguments");
     let mut server = Server::start();
     initialize(&mut server);
     let refund = open_file(&mut server, &root, "refund.rein");
@@ -740,11 +1227,12 @@ fn references_of_a_parameter_include_named_arguments() {
     );
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn code_lens_counts_references_and_carries_them() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("code_lens_counts_references_and_carries_them");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -766,11 +1254,12 @@ fn code_lens_counts_references_and_carries_them() {
     assert_eq!(lenses["result"][0]["command"]["title"], "0 references", "{lenses}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn definition_goes_to_functions_parameters_and_std() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("definition_goes_to_functions_parameters_and_std");
     let mut server = Server::start();
     initialize(&mut server);
     let refund = open_file(&mut server, &root, "refund.rein");
@@ -799,12 +1288,13 @@ fn definition_goes_to_functions_parameters_and_std() {
     assert!(def["result"].is_null(), "{def}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
     fs::remove_dir_all(&tmp).unwrap();
 }
 
 #[test]
 fn hover_shows_function_docs_and_callee_parameters() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("hover_shows_function_docs_and_callee_parameters");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -823,6 +1313,7 @@ fn hover_shows_function_docs_and_callee_parameters() {
     assert!(text.contains("The first part of the sentence, such as the action taken."), "{text}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The names and reference spans of call hierarchy calls, under key `item` ("from" or "to").
@@ -842,7 +1333,7 @@ fn calls_of(root: &Path, result: &Value, item: &str) -> Vec<(String, Vec<Spot>)>
 
 #[test]
 fn call_hierarchy_lists_incoming_and_outgoing_calls() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("call_hierarchy_lists_incoming_and_outgoing_calls");
     let mut server = Server::start();
     initialize(&mut server);
     let escalate = open_file(&mut server, &root, "escalate.rein");
@@ -875,11 +1366,12 @@ fn call_hierarchy_lists_incoming_and_outgoing_calls() {
     assert_eq!(ranges[1], json!({"start": {"line": 19, "character": 13}, "end": {"line": 19, "character": 24}}));
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn document_symbols_outline_the_function_and_its_names() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("document_symbols_outline_the_function_and_its_names");
     let mut server = Server::start();
     initialize(&mut server);
     let faq = open_file(&mut server, &root, "faq.rein");
@@ -907,11 +1399,16 @@ fn document_symbols_outline_the_function_and_its_names() {
     );
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn workspace_symbols_search_every_program() {
-    let examples = example("");
+    // Two programs in one workspace folder: `support-ticket` and `ping`.
+    let examples = fresh_dir("workspace_symbols_search_every_program");
+    write_files(&examples.join("support-ticket"), SUPPORT_TICKET);
+    write_files(&examples.join("ping"), PING);
+    let root = examples.join("support-ticket");
     let mut server = Server::start();
     let folders = json!([{"uri": format!("file://{}", examples.display()), "name": "examples"}]);
     let init = server.request(1, "initialize", json!({"capabilities": {}, "processId": null, "workspaceFolders": folders}));
@@ -924,21 +1421,21 @@ fn workspace_symbols_search_every_program() {
     assert_eq!(found.len(), 2, "{found:?}");
     let refund = found.iter().find(|s| s["name"] == "refund").expect("refund symbol");
     assert_eq!(refund["containerName"], "support-ticket");
-    let root = example("support-ticket");
     assert_eq!(spot_of(&root, &refund["location"]), spot("refund.rein", 3, 24, 3, 30));
     let tell = found.iter().find(|s| s["name"] == "refund/tell_customer").expect("tell_customer symbol");
     assert_eq!(spot_of(&root, &tell["location"]), spot("refund/tell_customer.rein", 3, 24, 3, 36));
 
-    // An empty query lists every function of the five example programs.
+    // An empty query lists every function of both programs.
     let all = server.request(3, "workspace/symbol", json!({"query": ""}));
     let all_symbols = all["result"].as_array().unwrap();
-    assert_eq!(all_symbols.len(), 26, "{all}");
+    assert_eq!(all_symbols.len(), 8, "{all}");
     assert!(
         all_symbols.iter().any(|s| s["name"] == "message" && s["kind"] == 23 && s["containerName"] == "support-ticket"),
         "{all}"
     );
 
     server.shutdown();
+    fs::remove_dir_all(&examples).unwrap();
 }
 
 /// Starts a server whose client can rename files in a workspace edit.
@@ -975,7 +1472,7 @@ fn edits_of(root: &Path, edit: &Value) -> EditSummary {
 
 #[test]
 fn rename_a_parameter_updates_named_arguments() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("rename_a_parameter_updates_named_arguments");
     let mut server = start_with_file_renames();
     let refund = open_file(&mut server, &root, "refund.rein");
 
@@ -1011,11 +1508,12 @@ fn rename_a_parameter_updates_named_arguments() {
     assert_eq!(failed["error"]["code"], -32803, "{failed}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
 fn rename_a_function_renames_its_file_and_references() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("rename_a_function_renames_its_file_and_references");
     let mut server = start_with_file_renames();
     let main = open_file(&mut server, &root, "main.rein");
 
@@ -1048,6 +1546,7 @@ fn rename_a_function_renames_its_file_and_references() {
     assert_eq!(changes.last().unwrap()["kind"], "rename");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -1494,7 +1993,7 @@ fn rename_moves_the_editor_leftovers_of_the_folder_with_it() {
 
 #[test]
 fn rename_a_function_needs_a_client_that_renames_files() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("rename_a_function_needs_a_client_that_renames_files");
     let mut server = Server::start();
     initialize(&mut server);
     let main = open_file(&mut server, &root, "main.rein");
@@ -1505,6 +2004,7 @@ fn rename_a_function_needs_a_client_that_renames_files() {
     assert_eq!(failed["error"]["message"], "this editor cannot rename files, so a function cannot be renamed", "{failed}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The labels of a completion list.
@@ -1518,7 +2018,7 @@ const PARTIAL_CALL: &str =
 
 #[test]
 fn completion_offers_argument_names_and_union_members() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("completion_offers_argument_names_and_union_members");
     let mut server = Server::start();
     initialize(&mut server);
 
@@ -1549,6 +2049,7 @@ fn completion_offers_argument_names_and_union_members() {
     assert_eq!(items["result"][0]["textEdit"]["range"], range);
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
     fs::remove_dir_all(&tmp).unwrap();
 }
 
@@ -1588,7 +2089,7 @@ fn double_equals_has_no_diagnostic_and_completes_members() {
 
 #[test]
 fn signature_help_shows_the_callee_parameters() {
-    let root = example("support-ticket");
+    let root = support_ticket_project("signature_help_shows_the_callee_parameters");
     let mut server = Server::start();
     initialize(&mut server);
     let partial = uri_of(&root, "partial.rein");
@@ -1607,6 +2108,7 @@ fn signature_help_shows_the_callee_parameters() {
     assert_eq!(help["result"]["activeParameter"], 0, "{help}");
 
     server.shutdown();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 /// The quick fix for the first diagnostic of `uri` that contains `part`: its title and its one edit.
@@ -1780,7 +2282,7 @@ fn quick_fix_moves_the_folder_of_nested_functions_with_the_file() {
 
 #[test]
 fn structs_hover_define_reference_rename_and_list() {
-    // Canonical, like `example()`: the server reports renamed files under the canonical path.
+    // Canonical, like `fresh_dir()`: the server reports renamed files under the canonical path.
     let root = fs::canonicalize(temp_project("structs")).unwrap();
     let ticket_text = "/** A support ticket. */\nexport default interface Ticket {\n  /** The ticket title. */\n  title: string;\n  /** Is the customer a VIP? */\n  vip: boolean;\n}\n";
     let a_text = "/** A. */\nexport default function a({ title, vip }: @./ticket) {\n  if (vip) {\n    return `VIP: ${title}`;\n  }\n  return `Answer ${title}`;\n}\n";
@@ -1965,8 +2467,9 @@ fn a_project_without_program_refs_checks_and_completes_without_programs() {
     // The file references only a local function, so the checker finds nothing wrong.
     let main = uri_of(&root, "main.rein");
     server.open(&main, &fs::read_to_string(root.join("main.rein")).unwrap());
-    let diags = server.wait_diagnostics(&main, |d| d.is_empty());
-    assert!(diags.is_empty(), "{diags:?}");
+    // The `@./target` reference is deprecated, so its warning is the only diagnostic.
+    let diags = server.wait_diagnostics(&main, |d| d.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("is deprecated"))));
+    assert!(diags.iter().all(|x| x["message"].as_str().is_some_and(|m| m.contains("is deprecated"))), "{diags:?}");
 
     // After `@./` the local functions only. The installed program is not offered.
     let items = server.request(2, "textDocument/completion", at(&main, 2, 12));

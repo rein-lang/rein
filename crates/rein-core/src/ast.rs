@@ -1,6 +1,7 @@
 //! Syntax tree of one function file.
 
 use crate::diagnostic::Span;
+use crate::schema_types::SCHEMA_SUFFIX;
 
 /// A `.struct.rein` file's project path ends with this, such as `ticket.struct` for `ticket.struct.rein`.
 pub const STRUCT_SUFFIX: &str = ".struct";
@@ -49,6 +50,45 @@ pub struct Function {
     pub span: Span,
     /// From `export` to the function name: the header the line-limit error points at.
     pub header: Span,
+    /// The `import` lines, in file order. A use of a local name builds the same node as its `@` reference.
+    pub imports: Vec<Import>,
+}
+
+/// One `import` line. Its local name stands for what the target declares: a function, a struct, or a program's
+/// entry. A use of the local name builds the same node as the `@` reference of the path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Import {
+    /// The name the target declares. A default import has its local name here.
+    pub name: Spanned<String>,
+    /// The name this file uses. The same as `name`, unless `as` gives another.
+    pub local: Spanned<String>,
+    /// The path as written: `./ci/fix`, `../x`, `./message.struct`, or a program name such as `pr-handling`.
+    pub path: Spanned<String>,
+    /// `import fix from "./ci/fix"`: the default form. It resolves like the named form.
+    pub default: bool,
+    /// `as` was written. Set even when it keeps the name.
+    pub aliased: bool,
+    /// From `import` to the path.
+    pub span: Span,
+    /// The file uses the local name. Set by the parser.
+    pub used: bool,
+}
+
+impl Import {
+    /// True when the path names a `.struct.rein` file.
+    pub fn is_struct(&self) -> bool {
+        self.path.value.ends_with(STRUCT_SUFFIX)
+    }
+
+    /// True when the path names a schema file, such as `./ticket.schema`: a string type from `ticket.schema.json`.
+    pub fn is_schema(&self) -> bool {
+        self.path.value.ends_with(SCHEMA_SUFFIX)
+    }
+
+    /// The path the `@` reference of this import would write: `./message` for `./message.struct`, else the path.
+    pub fn reference(&self) -> &str {
+        self.path.value.strip_suffix(STRUCT_SUFFIX).unwrap_or(&self.path.value)
+    }
 }
 
 /// A parsed `/** */` doc block.
@@ -115,16 +155,46 @@ impl Function {
         self.template_literal().is_some()
     }
 
-    /// The template literal of a template: every parameter is `string`, there is at least one, and the body is
-    /// exactly one `return` of a template literal. Any other function is a normal function.
+    /// The template literal of a template: every parameter is `string` or a format type, there is at least one, and
+    /// the body is exactly one `return` of a template literal. Any other function is a normal function.
     pub fn template_literal(&self) -> Option<&TemplateLit> {
-        if self.inputs.is_empty() || self.inputs.iter().any(|i| i.ty != InputType::Text) {
+        if self.inputs.is_empty() || self.inputs.iter().any(|i| !i.ty.is_text()) {
             return None;
         }
         match self.body.as_slice() {
             [Stmt::Return(Spanned { value: ReturnValue::Template(lit), .. })] => Some(lit),
             _ => None,
         }
+    }
+
+    /// Calls `f` on every Input value the function holds, including the copies the parser makes (struct parameter
+    /// fields in `inputs`, inline answer fields in `answer_fields`), so a value can be visited more than once. `f`
+    /// must give the same result when called again.
+    pub fn for_each_input_mut(&mut self, f: &mut impl FnMut(&mut Input)) {
+        for p in &mut self.params {
+            if let Param::Scalar(i) = p {
+                f(i);
+            }
+        }
+        for i in &mut self.inputs {
+            f(i);
+        }
+        for s in &mut self.structs {
+            for i in &mut s.fields {
+                f(i);
+            }
+        }
+        // An inline struct answer is parsed into `answer_structs` and copied into `answer_fields`.
+        let found = self.answer_structs.values_mut().chain(self.input_struct.iter_mut());
+        for s in found.filter_map(|r| r.as_mut().ok()) {
+            for i in &mut s.fields {
+                f(i);
+            }
+        }
+        for i in &mut self.answer_fields {
+            f(i);
+        }
+        for_each_answer_mut(&mut self.body, f);
     }
 
     /// The struct parameter, when the function has one.
@@ -154,9 +224,9 @@ impl Function {
         self.input_struct = Some(found);
     }
 
-    /// The `string` parameters, in declaration order. Their values come from the caller.
+    /// The `string` and format parameters, in declaration order. Their values come from the caller.
     pub fn text_inputs(&self) -> impl Iterator<Item = &Input> {
-        self.inputs.iter().filter(|i| i.ty == InputType::Text)
+        self.inputs.iter().filter(|i| i.ty.is_text())
     }
 }
 
@@ -277,6 +347,8 @@ pub enum InputType {
     Choice(Vec<Spanned<String>>),
     /// `string`. Only a template takes it, and a field of a struct answer.
     Text,
+    /// A string with a fixed shape, such as `Iri`. It goes where `string` goes; the run checks each value.
+    Format(crate::schema_types::FormatType),
     /// A struct answer: an inline `interface` or a shared `@./name`. Only a `request` answer has it.
     Struct(StructRef),
 }
@@ -284,8 +356,21 @@ pub enum InputType {
 impl InputType {
     pub fn options(&self) -> Option<Vec<&str>> {
         match self {
-            InputType::Bool | InputType::Text | InputType::Struct(_) => None,
+            InputType::Bool | InputType::Text | InputType::Format(_) | InputType::Struct(_) => None,
             InputType::Choice(o) => Some(o.iter().map(|s| s.value.as_str()).collect()),
+        }
+    }
+
+    /// `string` or a format type: a value the caller passes as text.
+    pub fn is_text(&self) -> bool {
+        matches!(self, InputType::Text | InputType::Format(_))
+    }
+
+    /// The JSON Schema of a format type. `None` for every other type, and for a schema type not loaded.
+    pub fn json_schema(&self) -> Option<serde_json::Value> {
+        match self {
+            InputType::Format(f) => f.json_schema(),
+            _ => None,
         }
     }
 
@@ -294,6 +379,7 @@ impl InputType {
         match self {
             InputType::Bool => "boolean".to_string(),
             InputType::Text => "string".to_string(),
+            InputType::Format(f) => f.name(),
             InputType::Struct(r) => r.name().value.clone(),
             InputType::Choice(o) => o.iter().map(|s| format!("\"{}\"", s.value)).collect::<Vec<_>>().join(" | "),
         }
@@ -383,7 +469,7 @@ pub struct TemplateLit {
 pub enum Value {
     Str(Spanned<String>),
     Template(TemplateLit),
-    /// A bare name of a `string` parameter of the caller. Only a call argument can be one.
+    /// A bare name of a parameter or an answer of the caller, or `true`/`false`. Only a call argument can be one.
     Name(Spanned<String>),
     Call(Call),
 }
@@ -409,9 +495,10 @@ pub struct Arg {
     pub span: Span,
 }
 
-/// `callee(args)`: a template call, or a hand-off to a function that has `string` parameters.
-/// Each arg is `name=value`, where the value is a string, a template literal, or a bare name of the caller's
-/// `string` parameter. The order of the args does not matter.
+/// `callee(args)`: a template call, or a hand-off to a function with parameters.
+/// Each arg is `name=value`. For a `string` parameter the value is a string, a template literal, or a bare name of
+/// a caller `string`. For a `boolean` or union parameter it is a bare name of a caller value of a fitting type, or a
+/// literal: `true`/`false`, or a quoted member. The order of the args does not matter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub callee: Callee,
@@ -466,6 +553,22 @@ pub fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                 }
             }
             Stmt::Request { .. } | Stmt::Return(_) => {}
+        }
+    }
+}
+
+/// Calls `f` on the response input of each `const` answer in `stmts`, depth first.
+fn for_each_answer_mut(stmts: &mut [Stmt], f: &mut impl FnMut(&mut Input)) {
+    for s in stmts {
+        match s {
+            Stmt::Request { response, .. } => f(response),
+            Stmt::If { then, .. } => for_each_answer_mut(then, f),
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    for_each_answer_mut(&mut c.body, f);
+                }
+            }
+            Stmt::Return(_) => {}
         }
     }
 }

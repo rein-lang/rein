@@ -9,6 +9,7 @@ use rein_core::diagnostic::{Diagnostic as ReinDiagnostic, Severity};
 use rein_core::project::Project;
 
 use super::definition::std_dir;
+use super::deprecation;
 use super::text::range;
 use super::workspace::{build_project, doc_path, skipped_folder_of, uri_for, Docs};
 use super::BoxResult;
@@ -87,7 +88,7 @@ fn skipped_hint(folder: &Path) -> Diagnostic {
 }
 
 fn to_lsp(text: &str, d: &ReinDiagnostic) -> Diagnostic {
-    Diagnostic {
+    let mut out = Diagnostic {
         range: range(text, d.span),
         severity: Some(match d.severity {
             Severity::Error => DiagnosticSeverity::ERROR,
@@ -96,5 +97,7 @@ fn to_lsp(text: &str, d: &ReinDiagnostic) -> Diagnostic {
         source: Some("rein".to_string()),
         message: d.message.clone(),
         ..Default::default()
-    }
+    };
+    deprecation::mark(&mut out, d);
+    out
 }

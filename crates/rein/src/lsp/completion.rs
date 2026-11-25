@@ -11,6 +11,7 @@ use rein_core::project::Project;
 
 use super::call_context::{call_at, callee_params};
 use super::hover::input_sig;
+use super::import_completion::import_completion;
 use super::occurrences::declaration;
 use super::text::{is_path_char, is_token_char, line_before, offset, position, relative_import};
 use super::workspace::{locate, State};
@@ -19,7 +20,8 @@ pub fn completion(state: &State, p: &TextDocumentPositionParams) -> Option<Compl
     let (project, name) = locate(&state.docs, &p.text_document.uri)?;
     let sf = project.get(&name)?;
     let off = offset(&sf.text, p.position);
-    let items = ref_completions(&sf.text, off, &project, &name)
+    let items = import_completion(&sf.text, off, &project, &name)
+        .or_else(|| ref_completions(&sf.text, off, &project, &name))
         .or_else(|| arg_name_completions(&sf.text, off, &project, &name))
         .or_else(|| option_completions(&sf.text, off, &sf.function))
         .unwrap_or_else(|| {

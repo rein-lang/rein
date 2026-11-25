@@ -6,6 +6,7 @@ use rein_core::diagnostic::Span;
 use rein_core::lexer::{lex, Tok};
 use rein_core::project::Project;
 
+use super::import_symbols::named_at;
 use super::structs::struct_of;
 
 /// What a name under the cursor stands for.
@@ -19,6 +20,9 @@ pub enum Symbol {
     Struct { file: String, name: String },
     /// A field of a struct. Each function that takes the struct reads the field by its name.
     Field { file: String, strukt: String, name: String },
+    /// The local name of an import in file `file`: `fix` in `import { fix } from "./ci/fix";`, or `ciFix` in
+    /// `import { fix as ciFix }`. `target` is the function it names.
+    ImportLocal { file: String, local: String, target: String },
     /// A std item, such as `delegate`.
     Std(String),
 }
@@ -138,6 +142,15 @@ pub fn symbol_at(project: &Project, name: &str, off: usize) -> Option<(Symbol, S
     let sf = project.get(name)?;
     let f = &sf.function;
     let local = |n: &Spanned<String>| (param_symbol(project, name, &n.value), n.span);
+    if let Some((import, span, is_local)) = named_at(f, &sf.text, off) {
+        let path = target(project, name, import.reference())?;
+        let symbol = if is_local {
+            Symbol::ImportLocal { file: name.to_string(), local: import.local.value.clone(), target: path }
+        } else {
+            Symbol::Function(path)
+        };
+        return Some((symbol, span));
+    }
     if let Some((r, _)) = refs(f).into_iter().find(|(r, _)| r.span.contains(off)) {
         return Some((Symbol::Function(target(project, name, &r.value)?), r.span));
     }

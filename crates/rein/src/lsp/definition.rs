@@ -17,7 +17,9 @@ pub fn definition(state: &State, p: &TextDocumentPositionParams) -> Option<Locat
     let sf = project.get(&name)?;
     let (symbol, _) = symbol_at(&project, &name, offset(&sf.text, p.position))?;
     match symbol {
-        Symbol::Function(target) => location(&state.docs, &project, &target, header_span(&project, &target)),
+        Symbol::Function(target) | Symbol::ImportLocal { target, .. } => {
+            location(&state.docs, &project, &target, header_span(&project, &target))
+        }
         Symbol::Param { function, name: n } => {
             let input = declaration(&project.get(&function)?.function, &n)?;
             location(&state.docs, &project, &function, input.name.span)

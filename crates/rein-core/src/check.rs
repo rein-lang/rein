@@ -226,7 +226,7 @@ pub fn check_length(f: &Function, name: &str, text: &str, max: u64) -> Vec<Diagn
     vec![Diagnostic::error(
         f.header,
         format!(
-            "function `{name}` has {lines} lines; the limit is {max}. Move part of it into its own function and call it with `@./name`"
+            "function `{name}` has {lines} lines; the limit is {max}. Move part of it into its own function and import it by name"
         ),
     )]
 }
@@ -237,7 +237,7 @@ fn has_request(stmts: &[Stmt]) -> bool {
     found
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.split('/').all(|seg| {
             let mut chars = seg.chars();
@@ -279,9 +279,14 @@ pub fn struct_in_use(name: &str) -> String {
     format!("`{name}` is a struct answer; read one of its fields, like `{name}.field`")
 }
 
-/// A `string` input cannot decide a branch. A condition and a switch subject both give this error.
-pub fn string_in_condition(name: &str) -> String {
-    format!("`{name}` is a string input; a condition cannot read it")
+/// A `string` or format input cannot decide a branch. A condition and a switch subject both give this error.
+/// The input's kind is `a string input`, or `an input of type` followed by the format type name.
+pub fn string_in_condition(name: &str, ty: &InputType) -> String {
+    let kind = match ty {
+        InputType::Format(f) => format!("an input of type `{}`", f.name()),
+        _ => "a string input".to_string(),
+    };
+    format!("`{name}` is {kind}; a condition cannot read it")
 }
 
 fn members_text(members: &[Spanned<String>]) -> String {
@@ -374,7 +379,7 @@ impl<'a> Checker<'a> {
     fn string_arg(&mut self, name: &Spanned<String>) {
         self.used.insert(name.value.clone());
         match self.lookup(&name.value) {
-            Some(InputType::Text) => {}
+            Some(InputType::Text | InputType::Format(_)) => {}
             None if name.value.contains('.') => self.unknown(name),
             _ => self.error(name.span, format!("`{}` is not a string input", name.value)),
         }
@@ -640,6 +645,13 @@ impl<'a> Checker<'a> {
                             self.error(r.name().span, msg.clone());
                         }
                     }
+                    InputType::Format(f) => self.error(
+                        response.name.span,
+                        format!(
+                            "a value of type `{name}` is not allowed as an answer; answer a struct with a field of type `{name}`",
+                            name = f.name(),
+                        ),
+                    ),
                     InputType::Bool | InputType::Choice(_) => {}
                 }
                 if self.f.input(name).is_some() || self.names.contains(name) {
@@ -689,14 +701,14 @@ impl<'a> Checker<'a> {
             Err(msg) => self.error(reference.span, msg),
             Ok(Kind::Template { .. }) => self.error(
                 reference.span,
-                format!("`@{path}` is a template; call it with arguments, like `@{path}(...)`"),
+                format!("`@{path}` is a template; import it, then call it with arguments, like `{}(...)`", path.rsplit('/').next().unwrap_or(path)),
             ),
             Ok(Kind::Function { params }) if !params.is_empty() => {
-                let strings = params.iter().any(|(_, t)| *t == InputType::Text);
+                let strings = params.iter().any(|(_, t)| t.is_text());
                 let names: Vec<String> = params.into_iter().map(|(n, _)| n).collect();
                 let message = format!("`@{path}` takes {}, got 0; pass {}", count_args(names.len()), and_list(&names));
                 let severity = if strings { Severity::Error } else { MISSING_TYPED_ARG };
-                self.out.push(Diagnostic { severity, span: reference.span, message });
+                self.out.push(Diagnostic { severity, span: reference.span, message, code: None });
             }
             Ok(Kind::Function { .. } | Kind::Request) => {}
         }
@@ -738,7 +750,7 @@ impl<'a> Checker<'a> {
         for arg in &call.args {
             let param = arg.name.as_ref().and_then(|n| typed.iter().find(|(p, _)| *p == n.value));
             match param {
-                Some((p, ty)) if *ty != InputType::Text => self.typed_arg(&arg.value, p, ty, call.callee.key()),
+                Some((p, ty)) if !ty.is_text() => self.typed_arg(&arg.value, p, ty, call.callee.key()),
                 _ => self.value(&arg.value),
             }
         }
@@ -760,6 +772,11 @@ impl<'a> Checker<'a> {
         let members = |m: &[Spanned<String>], value: &str| m.iter().any(|w| w.value == value);
         let name = match (v, ty) {
             (Value::Str(s), InputType::Choice(m)) if members(m, &s.value) => return self.literals.push(s.span),
+            (Value::Str(s), InputType::Choice(m)) => {
+                self.literals.push(s.span);
+                let msg = format!("`{}` is not a member of `{param}` of `@{target}`; members are {}", s.value, members_text(m));
+                return self.error(s.span, msg);
+            }
             (Value::Name(name), _) => name,
             _ => {
                 let msg = format!(
@@ -773,7 +790,19 @@ impl<'a> Checker<'a> {
             (None, InputType::Bool) if matches!(name.value.as_str(), "true" | "false") => return,
             (None, _) => return self.unknown(name),
             (Some(InputType::Bool), InputType::Bool) => return,
-            (Some(InputType::Choice(have)), InputType::Choice(m)) if have.iter().all(|h| members(m, &h.value)) => return,
+            (Some(InputType::Choice(have)), InputType::Choice(m)) => {
+                let extra: Vec<Spanned<String>> = have.into_iter().filter(|h| !members(m, &h.value)).collect();
+                if extra.is_empty() {
+                    return;
+                }
+                let msg = format!(
+                    "`{}` can be {}, which `{param}` of `@{target}` does not have; its members are {}",
+                    name.value,
+                    members_text(&extra),
+                    members_text(m)
+                );
+                return self.error(name.span, msg);
+            }
             (Some(have), _) => have.ts_type(),
         };
         self.error(name.span, format!("`{}` is `{have}`, but `{param}` of `@{target}` is `{want}`", name.value));
@@ -802,9 +831,9 @@ impl<'a> Checker<'a> {
         for (i, (p, ty)) in params.iter().enumerate() {
             let positional = call.args.get(i).is_some_and(|a| a.name.is_none());
             if !given.contains(p.as_str()) && !positional {
-                let severity = if *ty == InputType::Text { Severity::Error } else { MISSING_TYPED_ARG };
+                let severity = if ty.is_text() { Severity::Error } else { MISSING_TYPED_ARG };
                 let message = format!("missing argument `{p}` in call to `{target}`; write `{p}=value`");
-                self.out.push(Diagnostic { severity, span: call.span, message });
+                self.out.push(Diagnostic { severity, span: call.span, message, code: None });
             }
         }
     }
@@ -840,7 +869,7 @@ impl<'a> Checker<'a> {
                             format!("union parameter `{n}` needs a comparison, like `{n} === \"...\"`"),
                         );
                     }
-                    Some(InputType::Text) => self.error(v.span, string_in_condition(&v.value)),
+                    Some(ty @ (InputType::Text | InputType::Format(_))) => self.error(v.span, string_in_condition(&v.value, &ty)),
                     Some(InputType::Struct(_)) => self.error(v.span, struct_in_use(&v.value)),
                     Some(InputType::Bool) => {}
                 }
@@ -855,7 +884,7 @@ impl<'a> Checker<'a> {
                         format!("boolean parameter `{n}` cannot be compared; use `if ({n})` or `if (!{n})`"),
                     ),
                     Some(InputType::Choice(members)) => self.check_member(n, value, &members),
-                    Some(InputType::Text) => self.error(var.span, string_in_condition(n)),
+                    Some(ty @ (InputType::Text | InputType::Format(_))) => self.error(var.span, string_in_condition(n, &ty)),
                     Some(InputType::Struct(_)) => self.error(var.span, struct_in_use(n)),
                 }
             }
@@ -886,7 +915,7 @@ impl<'a> Checker<'a> {
                 subject.span,
                 format!("boolean parameter `{n}` cannot be used in a switch; use `if ({n})` or `if (!{n})`"),
             ),
-            Some(InputType::Text) => self.error(subject.span, string_in_condition(n)),
+            Some(ty @ (InputType::Text | InputType::Format(_))) => self.error(subject.span, string_in_condition(n, &ty)),
             Some(InputType::Struct(_)) => self.error(subject.span, struct_in_use(n)),
             Some(InputType::Choice(members)) => {
                 let mut seen: Vec<&str> = Vec::new();
