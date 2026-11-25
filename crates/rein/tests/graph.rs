@@ -126,7 +126,7 @@ fn unknown_program_is_an_error() {
 fn ids_are_unique_and_labels_are_escaped() {
     let root = temp_dir("ids");
     fs::create_dir_all(root.join("ci")).unwrap();
-    fs::write(root.join("main.rein"), "/** Entry. */\nexport default function main() {\n  return @./ci/fix;\n}\n").unwrap();
+    fs::write(root.join("main.rein"), "import { fix } from \"./ci/fix\";\n\n/** Entry. */\nexport default function main() {\n  return fix;\n}\n").unwrap();
     fs::write(root.join("ci/fix.rein"), "/** F. */\nexport default function fix() {\n  return \"say \\\"f\\\"\";\n}\n").unwrap();
     fs::write(root.join("ci__fix.rein"), "/** C. */\nexport default function ci__fix() {\n  return `c`;\n}\n").unwrap();
     fs::write(root.join("my task.rein"), "/** M. */\nexport default function m() {\n  return `m`;\n}\n").unwrap();

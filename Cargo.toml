@@ -3,10 +3,11 @@ resolver = "2"
 members = ["crates/rein-core", "crates/rein"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
-publish = false
+repository = "https://github.com/rein-lang/rein"
+homepage = "https://rein-lang.com"
 
 [workspace.lints.clippy]
 redundant_clone = "deny"

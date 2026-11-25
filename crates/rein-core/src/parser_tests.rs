@@ -155,7 +155,7 @@ fn return_needs_a_value() {
     let msg = one_error("/** d */\nexport default function f() {\n  return;\n}");
     assert_eq!(
         msg,
-        "`return` needs a value: a string, a template, or `@./function`"
+        "`return` needs a value: a string, a template, or an imported function"
     );
 }
 
@@ -172,20 +172,16 @@ fn return_without_value_is_one_error_with_partial_tree() {
 }
 
 #[test]
-fn imports_are_not_in_rein() {
-    let msg =
-        one_error("import a from \"./a\";\n/** d */\nexport default function f() { return @./a }");
-    assert_eq!(
-        msg,
-        "Rein has no imports; reference functions with `@./path` and use std functions directly"
-    );
+fn default_import_parses_and_its_name_is_a_reference() {
+    let f = ok("import a from \"./a\";\n/** d */\nexport default function f() { return a }");
+    assert_eq!(f.imports.len(), 1);
 }
 
 #[test]
 fn bare_name_is_not_a_return_value() {
     let msg = one_error("/** d */\nexport default function f() { return nope; }");
     assert!(
-        msg.contains("expected a string, a template literal, or a reference"),
+        msg.contains("expected a string, a template literal, or an imported function"),
         "{msg}"
     );
 }
@@ -373,6 +369,23 @@ fn string_parameter_type_is_text() {
 }
 
 #[test]
+fn format_parameter_type_is_the_iri_format() {
+    let f = ok("/** d */\nexport default function f(\n  /** L */ link: Iri,\n) { return \"x\" }");
+    assert_eq!(f.inputs[0].ty, InputType::Format(crate::schema_types::FormatType::Builtin(crate::formats::Format::from_name("Iri").unwrap())));
+}
+
+#[test]
+fn imported_template_named_like_a_format_shadows_the_format() {
+    // Any import of the name shadows the format, whatever the imported thing is. A template import is no exception.
+    let src = "import { Email } from \"./email\";\n\n/** d */\nexport default function f(\n  /** The address. */ mail: Email,\n) { return Email(a=`x`) }";
+    let (_, diags) = parse(src);
+    assert!(
+        diags.iter().any(|d| d.message.contains("a struct parameter is destructured") && d.message.contains("Email")),
+        "{diags:?}"
+    );
+}
+
+#[test]
 fn request_const_parses_with_its_doc_and_type() {
     let f = ok(r#"/** d */
 export default async function f() {
@@ -420,7 +433,7 @@ fn request_answer_needs_a_doc_comment() {
 #[test]
 fn only_request_can_be_awaited() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q */\n  const x: boolean = await fetch(\"a\");\n  return \"y\"\n}");
-    assert!(msg.contains("only `request` or a reference like `@program` can be awaited"), "{msg}");
+    assert!(msg.contains("only `request` or an imported program can be awaited"), "{msg}");
 }
 
 #[test]
@@ -544,12 +557,37 @@ export default async function f() {
 fn await_outside_a_const_answer_gives_the_fix() {
     for body in ["  await @./x;\n  return `y`", "  return await @./x;"] {
         let msg = one_error(&format!("/** d */\nexport default async function f() {{\n{body}\n}}"));
-        assert!(msg.contains("const name: Type = await @program(...)"), "{body}: {msg}");
+        assert!(msg.contains("const name: Type = await program(...)"), "{body}: {msg}");
     }
 }
 
 #[test]
 fn a_doc_comment_before_a_bare_await_gives_the_await_hint() {
     let msg = one_error("/** d */\nexport default async function f() {\n  /** Q? */\n  await @./x;\n  return `y`\n}");
-    assert!(msg.contains("const name: Type = await @program(...)"), "{msg}");
+    assert!(msg.contains("const name: Type = await program(...)"), "{msg}");
+}
+
+#[test]
+fn schema_import_as_parameter_type_is_a_schema_format() {
+    let f = ok("import { Ticket } from \"./ticket.schema\";\n/** d */\nexport default function f(\n  /** T */ t: Ticket,\n) { return `${t}` }");
+    assert!(
+        matches!(&f.inputs[0].ty, InputType::Format(crate::schema_types::FormatType::Schema(r)) if r.name.value == "Ticket"),
+        "{:?}",
+        f.inputs[0].ty
+    );
+}
+
+#[test]
+fn for_each_input_visits_every_copy_of_a_struct_field() {
+    // A local struct parameter: the field is in `structs` and its copy is in `inputs`. Both must be visited.
+    let src = "interface Pair {\n  /** A */\n  a: string;\n  /** B */\n  b: string;\n}\n\n/** d */\nexport default function f({ a, b }: Pair) { return `${a}${b}` }";
+    let mut f = ok(src);
+    let mut visited = 0;
+    f.for_each_input_mut(&mut |i| {
+        visited += 1;
+        i.span = Default::default();
+    });
+    assert!(visited >= 4, "each field has a struct copy and an input copy: {visited}");
+    assert!(f.structs[0].fields.iter().all(|i| i.span == Default::default()));
+    assert!(f.inputs.iter().all(|i| i.span == Default::default()));
 }

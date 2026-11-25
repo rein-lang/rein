@@ -131,6 +131,7 @@ fn walk_follows_a_compound_condition_and_stops_at_a_missing_answer() {
         answers: Default::default(),
         flow: None,
         inputs: Default::default(),
+        walk: false,
     };
     req.answers.insert("main.a".into(), "yes".into());
     req.answers.insert("main.b".into(), "no".into());
@@ -149,7 +150,7 @@ fn walk_follows_a_compound_condition_and_stops_at_a_missing_answer() {
 #[test]
 fn await_is_a_request_node_with_a_call_edge_and_the_flow_goes_on() {
     let p = project(&[
-        ("main.rein", "/** M. */\nexport default async function main() {\n  /** Done? */\n  const done: boolean = await @./work(task=`t`);\n\n  if (done) {\n    return `close`;\n  }\n\n  return `open`;\n}\n"),
+        ("main.rein", "import { work } from \"./work\";\n\n/** M. */\nexport default async function main() {\n  /** Done? */\n  const done: boolean = await work(task=`t`);\n\n  if (done) {\n    return `close`;\n  }\n\n  return `open`;\n}\n"),
         ("work.rein", "interface Input {\n  /** The task. */\n  task: string;\n  /** Ready? */\n  ready: boolean;\n}\n/** W. */\nexport default function work({ task, ready }: Input) {\n  if (ready) {\n    return `do ${task}`;\n  }\n\n  return `wait`;\n}\n"),
     ]);
     let g = flow(&p, "main");
@@ -166,8 +167,8 @@ fn await_is_a_request_node_with_a_call_edge_and_the_flow_goes_on() {
 #[test]
 fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
     let p = project(&[
-        ("main.rein", "/** Found. */\ninterface Found {\n  /** Any? */\n  any: boolean;\n}\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: Found = await @./fn(subject=`first`);\n\n  /** Second? */\n  const b: Found = await @./fn(subject=`second`);\n\n  if (a.any) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
-        ("fn.rein", "/** Fn. */\nexport default async function fn(\n  /** The subject. */\n  subject: string,\n) {\n  /** Inner? */\n  const ok: boolean = await @./leaf;\n\n  return `Fn ${subject} ends.`;\n}\n"),
+        ("main.rein", "import { fn } from \"./fn\";\n\n/** Found. */\ninterface Found {\n  /** Any? */\n  any: boolean;\n}\n\n/** Main. */\nexport default async function main() {\n  /** First? */\n  const a: Found = await fn(subject=`first`);\n\n  /** Second? */\n  const b: Found = await fn(subject=`second`);\n\n  if (a.any) {\n    return `a`;\n  }\n\n  return `b`;\n}\n"),
+        ("fn.rein", "import { leaf } from \"./leaf\";\n\n/** Fn. */\nexport default async function fn(\n  /** The subject. */\n  subject: string,\n) {\n  /** Inner? */\n  const ok: boolean = await leaf;\n\n  return `Fn ${subject} ends.`;\n}\n"),
         ("leaf.rein", "/** Leaf. */\nexport default function leaf(\n  /** Leaf ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `Leaf ok.`;\n  }\n\n  return `Leaf not ok.`;\n}\n"),
     ]);
     // The text `rein step` gives, and the label of the node the graph marks current.
@@ -178,6 +179,7 @@ fn walk_marks_the_call_that_step_walks_when_one_function_is_called_twice() {
             answers: Default::default(),
             flow: None,
             inputs: Default::default(),
+            walk: false,
         };
         for (k, v) in pairs {
             req.answers.insert(k.to_string(), v.to_string());
@@ -214,21 +216,21 @@ fn a_parameter_every_caller_passes_is_a_condition_not_a_question() {
         g.nodes.iter().find(|n| n.name.as_deref() == Some("ok")).map(|n| n.kind).unwrap()
     };
     assert_eq!(kind_of_ok(PASSES_OK), NodeKind::Condition);
-    let bare = "/** M. */\nexport default function main() {\n  return @./two;\n}\n";
+    let bare = "import { two } from \"./two\";\n\n/** M. */\nexport default function main() {\n  return two;\n}\n";
     assert_eq!(kind_of_ok(bare), NodeKind::Question);
     // Two callers, and only one passes `ok`: the other call asks it.
-    let one_passes = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  if (go) {\n    return @./two(ok=go);\n  }\n\n  return @./two;\n}\n";
+    let one_passes = "import { two } from \"./two\";\n\n/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  if (go) {\n    return two(ok=go);\n  }\n\n  return two;\n}\n";
     assert_eq!(kind_of_ok(one_passes), NodeKind::Question);
     // No caller: a run that starts at `two` asks it.
     assert_eq!(kind_of_ok("/** M. */\nexport default function main() {\n  return `done`;\n}\n"), NodeKind::Question);
     // An `await` that passes it is a call site too.
-    let awaits = "/** M. */\nexport default async function main(\n  /** Go? */\n  go: boolean,\n) {\n  /** Done? */\n  const done: boolean = await @./two(ok=go);\n\n  if (done) {\n    return `a`;\n  }\n\n  return `b`;\n}\n";
+    let awaits = "import { two } from \"./two\";\n\n/** M. */\nexport default async function main(\n  /** Go? */\n  go: boolean,\n) {\n  /** Done? */\n  const done: boolean = await two(ok=go);\n\n  if (done) {\n    return `a`;\n  }\n\n  return `b`;\n}\n";
     assert_eq!(kind_of_ok(awaits), NodeKind::Condition);
 }
 
 #[test]
 fn a_passed_union_is_a_condition_and_json_names_the_kind() {
-    let main = "/** M. */\nexport default function main(\n  /** Size? */\n  size: \"s\" | \"l\",\n) {\n  return @./two(size=size);\n}\n";
+    let main = "import { two } from \"./two\";\n\n/** M. */\nexport default function main(\n  /** Size? */\n  size: \"s\" | \"l\",\n) {\n  return two(size=size);\n}\n";
     let two = "/** Two. */\nexport default function two(\n  /** Size? */\n  size: \"s\" | \"l\",\n) {\n  if (size === \"s\") {\n    return `small`;\n  }\n  return `large`;\n}\n";
     let g = flow(&project(&[("main.rein", main), ("two.rein", two)]), "main");
     let size = g.nodes.iter().find(|n| n.function == "two" && n.name.as_deref() == Some("size")).unwrap();
@@ -239,12 +241,12 @@ fn a_passed_union_is_a_condition_and_json_names_the_kind() {
 }
 
 const TWO_OK: &str = "/** Two. */\nexport default function two(\n  /** Ok? */\n  ok: boolean,\n) {\n  if (ok) {\n    return `yes`;\n  }\n  return `no`;\n}\n";
-const PASSES_OK: &str = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  return @./two(ok=go);\n}\n";
+const PASSES_OK: &str = "import { two } from \"./two\";\n\n/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  return two(ok=go);\n}\n";
 
 #[test]
 fn the_entry_asks_its_parameter_even_when_a_caller_passes_it() {
-    let back = "/** Two. */\nexport default function two() {\n  return @./main(go=true);\n}\n";
-    let main = "/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  if (go) {\n    return `done`;\n  }\n  return @./two;\n}\n";
+    let back = "import { main } from \"./main\";\n\n/** Two. */\nexport default function two() {\n  return main(go=true);\n}\n";
+    let main = "import { two } from \"./two\";\n\n/** M. */\nexport default function main(\n  /** Go? */\n  go: boolean,\n) {\n  if (go) {\n    return `done`;\n  }\n  return two;\n}\n";
     let g = flow(&project(&[("main.rein", main), ("two.rein", back)]), "main");
     let go = g.nodes.iter().find(|n| n.name.as_deref() == Some("go")).unwrap();
     assert_eq!(go.kind, NodeKind::Question);
@@ -270,6 +272,7 @@ fn a_walk_reads_a_passed_value_and_marks_its_branch() {
         answers: Default::default(),
         flow: None,
         inputs: Default::default(),
+        walk: false,
     };
     for go in ["no", "yes"] {
         req.answers.insert("main.go".into(), go.into());

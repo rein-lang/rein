@@ -21,7 +21,7 @@ impl Sandbox {
     fn new(tag: &str) -> Self {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let base = std::env::temp_dir().join(format!("rein-packages-{tag}-{}-{nanos}-{n}", std::process::id()));
+        let base = sandbox_root().join(format!("rein-packages-{tag}-{}-{nanos}-{n}", std::process::id()));
         fs::create_dir_all(base.join("home")).unwrap();
         fs::create_dir_all(base.join("work")).unwrap();
         fs::create_dir_all(base.join("repo/.git")).unwrap();
@@ -61,6 +61,21 @@ impl Drop for Sandbox {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.base);
     }
+}
+
+/// The folder the sandboxes go in. Rein takes the nearest `rein/` folder above the working directory, and otherwise the
+/// nearest `.git` folder. So the folder and each of its parents must hold neither. Tries the cargo target temp folder,
+/// then `$HOME/.cache/rein-test` (absolute `HOME` only), then the shared temp folder.
+fn sandbox_root() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|h| h.is_absolute())
+        .map(|h| h.join(".cache/rein-test"));
+    [Some(PathBuf::from(env!("CARGO_TARGET_TMPDIR"))), home, Some(std::env::temp_dir())]
+        .into_iter()
+        .flatten()
+        .find(|root| root.ancestors().all(|d| !d.join("rein").is_dir() && !d.join(".git").exists()))
+        .expect("no clean folder: none of the target temp, $HOME/.cache/rein-test or the temp folder is free of `rein/` and `.git`")
 }
 
 fn write(path: &Path, text: &str) {

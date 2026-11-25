@@ -40,11 +40,20 @@ fn question_is_the_line_that_first_tests_it() {
 
 #[test]
 fn handoff_is_the_return_that_calls_the_target() {
-    let p = project("pr-handling");
-    assert_eq!(
-        handoff(&p, "main", "merge"),
-        line_with("pr-handling", "main.rein", "@./merge(pr=pr)")
-    );
+    let main = "import { merge } from \"./merge\";\n/** Entry. */\nexport default function main(\n  /** The link. */\n  pr: string,\n) {\n  return merge(pr=pr);\n}\n";
+    let root = std::env::temp_dir().join(format!("rein-lines-handoff-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("main.rein"), main).unwrap();
+    fs::write(root.join("merge.rein"), "/** Merge. */\nexport default function merge(\n  /** The link. */\n  pr: string,\n) {\n  const text = `done ${pr}`;\n  return text;\n}\n").unwrap();
+    fs::write(root.join("rein.json"), "{\n  \"entry\": \"main.rein\"\n}\n").unwrap();
+    let p = Project::load(&root).unwrap();
+    let line = main
+        .lines()
+        .position(|l| l.contains("merge(pr=pr)"))
+        .map(|i| i + 1)
+        .unwrap();
+    assert_eq!(handoff(&p, "main", "merge"), line);
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
