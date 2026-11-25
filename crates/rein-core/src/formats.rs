@@ -25,6 +25,7 @@ struct Entry {
 
 impl Format {
     /// Every built-in format, in the order that the jsonschema crate sorts their JSON names.
+    #[cfg(test)]
     pub fn all() -> impl Iterator<Item = Format> {
         (0..entries().len()).map(Format)
     }
@@ -90,6 +91,7 @@ fn type_name(json: &str) -> String {
 fn compile(format: &str) -> Validator {
     let schema = json!({"type": "string", "format": format});
     jsonschema::options()
+        .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
         .build(&schema)
         .expect("a string schema with a known format compiles")

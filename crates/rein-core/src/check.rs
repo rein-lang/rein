@@ -280,7 +280,7 @@ pub fn struct_in_use(name: &str) -> String {
 }
 
 /// A `string` or format input cannot decide a branch. A condition and a switch subject both give this error.
-/// The input's kind is `a string input`, or `an input of type` with the format type name.
+/// The input's kind is `a string input`, or `an input of type` followed by the format type name.
 pub fn string_in_condition(name: &str, ty: &InputType) -> String {
     let kind = match ty {
         InputType::Format(f) => format!("an input of type `{}`", f.name()),
