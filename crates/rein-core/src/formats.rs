@@ -5,7 +5,7 @@
 //! Rein keeps no list of its own. Each JSON Schema format name gives its type name by one rule: split the name
 //! on `-`, upper-case the first letter of each part, and join the parts. So `iri` is `Iri`, `date-time` is
 //! `DateTime`, and `relative-json-pointer` is `RelativeJsonPointer`. A format that a later jsonschema release
-//! adds appears in rein with no change here.
+//! adds appears in rein once rein moves its `jsonschema` pin to that release. No rein code changes for it.
 
 use std::sync::OnceLock;
 

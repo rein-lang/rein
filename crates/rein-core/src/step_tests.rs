@@ -749,7 +749,7 @@ fn template_with_an_iri_parameter_behaves_like_a_string_one() {
 const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: Iri;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
 
 #[test]
-fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
+fn struct_answer_field_of_iri_must_match_its_format() {
     let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
     let cases = [
         ("{\"pr\":\"example.com\"}", "`pick.pr` must match format `iri`"),
@@ -768,7 +768,7 @@ fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
 const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: Iri;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
 
 #[test]
-fn iri_entry_input_must_be_an_absolute_iri() {
+fn iri_entry_input_must_match_its_format() {
     let p = project(&[("main.rein", IRI_ENTRY)]);
     let res = step(&p, &req_with("main", &[], &[("link", "https://example.com/a")]));
     let StepResponse::Done { instruction, .. } = res else { panic!("not done: {res:?}") };

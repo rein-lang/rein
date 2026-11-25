@@ -871,7 +871,7 @@ fn bare_string_answer_is_an_error() {
 }
 
 #[test]
-fn format_answer_is_an_error_with_its_article() {
+fn format_answer_is_an_error_with_its_type() {
     let answer = |ty: &str| {
         format!("/** d */\nexport default async function f() {{\n  /** The link. */\n  const pr: {ty} = await request(`pick a PR`);\n  return `x`;\n}}")
     };

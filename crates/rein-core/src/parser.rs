@@ -404,7 +404,7 @@ impl Parser {
         if *self.peek() == Tok::Pipe {
             self.bump();
         }
-        let example = Format::all().next().map_or("Iri", Format::name);
+        let example = "Iri";
         let expected = format!("`boolean`, `string`, a format type like `{example}`, or a string type, like \"green\"");
         let mut members = vec![self.string(&expected)?];
         while *self.peek() == Tok::Pipe {

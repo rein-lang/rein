@@ -369,7 +369,7 @@ fn string_parameter_type_is_text() {
 }
 
 #[test]
-fn format_parameter_type_is_iri() {
+fn format_parameter_type_is_the_iri_format() {
     let f = ok("/** d */\nexport default function f(\n  /** L */ link: Iri,\n) { return \"x\" }");
     assert_eq!(f.inputs[0].ty, InputType::Format(crate::schema_types::FormatType::Builtin(crate::formats::Format::from_name("Iri").unwrap())));
 }
