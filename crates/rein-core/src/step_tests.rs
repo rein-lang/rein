@@ -712,7 +712,7 @@ fn struct_answer_is_validated_field_by_field() {
 
 #[test]
 fn empty_format_field_is_rejected_like_an_empty_string_field() {
-    for ty in ["Regex", "JSONPointer"] {
+    for ty in ["Regex", "JsonPointer"] {
         let source = format!(
             "interface Pick {{\n  /** The value. */\n  value: {ty};\n  /** The name. */\n  name: string;\n}}\n/** Entry. */\nexport default async function main() {{\n  /** The pick. */\n  const pick: Pick = await request(`pick`);\n  return `done`;\n}}\n"
         );
@@ -733,7 +733,7 @@ fn template_with_an_iri_parameter_behaves_like_a_string_one() {
         ])
     };
     let as_string = step(&template("string"), &req("main", &[]));
-    let as_iri = step(&template("IRI"), &req("main", &[]));
+    let as_iri = step(&template("Iri"), &req("main", &[]));
     assert_eq!(
         as_iri,
         StepResponse::Done {
@@ -746,13 +746,13 @@ fn template_with_an_iri_parameter_behaves_like_a_string_one() {
     assert_eq!(as_iri, as_string);
 }
 
-const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: IRI;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
+const LINK_PICKER: &str = "interface Pick {\n  /** The PR link. */\n  pr: Iri;\n}\n/** Entry. */\nexport default async function main() {\n  /** The pull request of the next notification. */\n  const pick: Pick = await request(`pick a PR`);\n  return `Open ${pick.pr}.`;\n}\n";
 
 #[test]
 fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
     let p = crate::program_fixture::with_main(LINK_PICKER.to_string());
     let cases = [
-        ("{\"pr\":\"example.com\"}", "`pick.pr` must be an absolute IRI"),
+        ("{\"pr\":\"example.com\"}", "`pick.pr` must match format `iri`"),
         ("{\"pr\":1}", "field `pick.pr` must be a string"),
     ];
     for (raw, part) in cases {
@@ -765,7 +765,7 @@ fn struct_answer_field_of_iri_must_be_an_absolute_iri() {
     assert_eq!(instruction, "Open https://example.com/pr/1.");
 }
 
-const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: IRI;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+const IRI_ENTRY: &str = "interface Input {\n  /** The link. */\n  link: Iri;\n}\n/** Entry. */\nexport default function main({ link }: Input) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
 
 #[test]
 fn iri_entry_input_must_be_an_absolute_iri() {
@@ -775,14 +775,14 @@ fn iri_entry_input_must_be_an_absolute_iri() {
     assert!(instruction.ends_with("Task: Open https://example.com/a."), "{instruction}");
     let res = step(&p, &req_with("main", &[], &[("link", "not a link")]));
     let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
-    assert!(message.contains("`link` must be an absolute IRI"), "{message}");
+    assert!(message.contains("`link` must match format `iri`"), "{message}");
 }
 
 #[test]
 fn hand_off_to_an_iri_parameter_checks_the_value() {
     let files = [
         ("main.rein", "import { other } from \"./other\";\n\ninterface Pick {\n  /** The link. */\n  link: string;\n}\n/** Entry. */\nexport default async function main() {\n  /** The link to open. */\n  const pick: Pick = await request(`pick a link`);\n  return other(link=pick.link);\n}\n"),
-        ("other.rein", "/** Open a link. */\nexport default function other(\n  /** The link. */ link: IRI,\n) {\n  return `Open ${link}.`;\n}\n"),
+        ("other.rein", "/** Open a link. */\nexport default function other(\n  /** The link. */ link: Iri,\n) {\n  return `Open ${link}.`;\n}\n"),
     ];
     let p = project(&files);
     let valid = "{\"link\":\"https://example.com/pr/1\"}";
@@ -790,7 +790,7 @@ fn hand_off_to_an_iri_parameter_checks_the_value() {
     assert_eq!(instruction, "Open https://example.com/pr/1.");
     let invalid = "{\"link\":\"example.com\"}";
     let StepResponse::Error { message, .. } = step(&p, &req("main", &[("main.pick", invalid)])) else { panic!("not an error") };
-    assert!(message.contains("must be an absolute IRI"), "{message}");
+    assert!(message.contains("must match format `iri`"), "{message}");
 }
 
 /// `main` has a `string` input `s` and passes it with `call`, its return statement, to a function in `target`.
@@ -805,8 +805,8 @@ fn walk_of_s(p: &Project) -> StepRequest {
     StepRequest { inputs: BTreeMap::from([("s".to_string(), value)]), walk: true, ..req("main", &[]) }
 }
 
-/// A hand-off target with an `IRI` parameter. It is not a template, so a walk hands off to it.
-const OPEN_IRI: &str = "/** Open a link. */\nexport default function target(\n  /** The link. */ link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+/// A hand-off target with an `Iri` parameter. It is not a template, so a walk hands off to it.
+const OPEN_IRI: &str = "/** Open a link. */\nexport default function target(\n  /** The link. */ link: Iri,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
 
 #[test]
 fn walk_of_a_string_handed_to_an_iri_parameter_has_no_error() {
@@ -826,7 +826,7 @@ fn walk_of_a_string_in_a_template_literal_argument_has_no_error() {
 
 #[test]
 fn walk_of_a_string_in_a_template_call_has_no_error() {
-    let tpl = "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: IRI,\n) {\n  return `Hi ${a}`;\n}\n";
+    let tpl = "/** Template. */\nexport default function tpl(\n  /** Greeting. */\n  a: Iri,\n) {\n  return `Hi ${a}`;\n}\n";
     let p = text_to_iri("import { tpl } from \"./target\";", "tpl(a=s)", tpl);
     let res = step(&p, &walk_of_s(&p));
     assert!(matches!(res, StepResponse::Done { .. }), "{res:?}");
@@ -837,7 +837,7 @@ fn real_run_of_a_string_handed_to_an_iri_parameter_checks_the_value() {
     let p = text_to_iri("", "@./target(link=s)", OPEN_IRI);
     let res = step(&p, &req_with("main", &[], &[("s", "not-a-link")]));
     let StepResponse::Error { message, .. } = res else { panic!("not an error: {res:?}") };
-    assert!(message.contains("must be an absolute IRI"), "{message}");
+    assert!(message.contains("must match format `iri`"), "{message}");
 }
 
 #[test]

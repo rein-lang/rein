@@ -40,7 +40,7 @@ fn a_quoted_string_as_text_is_an_error() {
 }
 
 /// Test resolver: `./tpl` is a template with parameters `a` and `b`, paths with `missing` do not resolve,
-/// `./merge` is a function with one `string` parameter `pr`, `./iri` takes `link: IRI`, `./review` takes `pr: string`, `big: boolean` and
+/// `./merge` is a function with one `string` parameter `pr`, `./iri` takes `link: Iri`, `./review` takes `pr: string`, `big: boolean` and
 /// `ci: "green" | "red"`, `./typed` takes `ok: boolean`, and every other path is a function with none.
 fn resolves(path: &str) -> Result<Kind, String> {
     if path == "./tpl" {
@@ -63,7 +63,7 @@ fn resolves(path: &str) -> Result<Kind, String> {
         return Ok(Kind::Function { params: vec![("ok".into(), InputType::Bool)] });
     }
     if path == "./iri" {
-        return Ok(Kind::Function { params: vec![("link".into(), InputType::Format(crate::schema_types::FormatType::Builtin(crate::formats::Format::Iri)))] });
+        return Ok(Kind::Function { params: vec![("link".into(), InputType::Format(crate::schema_types::FormatType::Builtin(crate::formats::Format::from_name("Iri").unwrap())))] });
     }
     Ok(Kind::Function { params: Vec::new() })
 }
@@ -875,8 +875,8 @@ fn format_answer_is_an_error_with_its_article() {
     let answer = |ty: &str| {
         format!("/** d */\nexport default async function f() {{\n  /** The link. */\n  const pr: {ty} = await request(`pick a PR`);\n  return `x`;\n}}")
     };
-    expect_diag(&answer("IRI"), Severity::Error, "an `IRI` answer is not allowed; answer a struct with an `IRI` field");    expect_diag(&answer("Email"), Severity::Error, "an `Email` answer is not allowed");
-    expect_diag(&answer("URI"), Severity::Error, "a `URI` answer is not allowed");
+    expect_diag(&answer("Iri"), Severity::Error, "a value of type `Iri` is not allowed as an answer; answer a struct with a field of type `Iri`");    expect_diag(&answer("Email"), Severity::Error, "a value of type `Email` is not allowed as an answer");
+    expect_diag(&answer("Uri"), Severity::Error, "a value of type `Uri` is not allowed as an answer");
 }
 
 #[test]
@@ -1004,15 +1004,15 @@ fn string_input_cannot_be_a_switch_subject() {
 #[test]
 fn format_input_cannot_be_a_condition_or_a_switch_subject() {
     let with_link = |ret: &str| {
-        format!("/** d */\nexport default function f(\n  /** Link */ link: IRI,\n) {{\n  {ret}\n}}")
+        format!("/** d */\nexport default function f(\n  /** Link */ link: Iri,\n) {{\n  {ret}\n}}")
     };
     for cond in ["if (link) { return `a` }", "if (link === \"x\") { return `a` }", "if (!link) { return `a` }"] {
-        expect_diag(&with_link(&format!("{cond}\n  return `b`")), Severity::Error, "`link` is an IRI input; a condition cannot read it");
+        expect_diag(&with_link(&format!("{cond}\n  return `b`")), Severity::Error, "`link` is an input of type `Iri`; a condition cannot read it");
     }
     expect_diag(
         &with_link("switch (link) { case \"x\": return `a`; case \"y\": return `b` }"),
         Severity::Error,
-        "`link` is an IRI input; a condition cannot read it",
+        "`link` is an input of type `Iri`; a condition cannot read it",
     );
 }
 

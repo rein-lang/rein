@@ -227,7 +227,7 @@ fn missing_string_input_is_asked_first() {
 fn missing_format_input_is_asked_with_its_format_name() {
     let root = std::env::temp_dir().join(format!("rein-dap-iri-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
-    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: Iri,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
     fs::write(root.join("main.rein"), main).unwrap();
     fs::write(root.join("rein.json"), "{\n  \"entry\": \"main.rein\"\n}\n").unwrap();
     let mut session = Session::default();
@@ -246,7 +246,7 @@ fn missing_format_input_is_asked_with_its_format_name() {
 fn invalid_format_answer_is_refused_and_asked_again() {
     let root = std::env::temp_dir().join(format!("rein-dap-iri-retry-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
-    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: IRI,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
+    let main = "/** Entry. */\nexport default function main(\n  /** The link. */\n  link: Iri,\n) {\n  return delegate(model=`x`, task=`Open ${link}.`);\n}\n";
     fs::write(root.join("main.rein"), main).unwrap();
     fs::write(root.join("rein.json"), "{\n  \"entry\": \"main.rein\"\n}\n").unwrap();
     let mut session = Session::default();
@@ -259,7 +259,7 @@ fn invalid_format_answer_is_refused_and_asked_again() {
 
     let out = answer(&mut session, "link", "example.com");
     assert_eq!(out[0]["success"], false, "{out:?}");
-    assert!(out[0]["message"].as_str().unwrap().contains("`link` must be an absolute IRI"), "{out:?}");
+    assert!(out[0]["message"].as_str().unwrap().contains("`link` must match format `iri`"), "{out:?}");
     assert!(events(&out, "terminated").is_empty(), "{out:?}");
     assert!(events(&out, "output").is_empty(), "{out:?}");
 

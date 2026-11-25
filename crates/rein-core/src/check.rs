@@ -280,13 +280,13 @@ pub fn struct_in_use(name: &str) -> String {
 }
 
 /// A `string` or format input cannot decide a branch. A condition and a switch subject both give this error.
-/// The input's kind is `a string`, or the format name with its article, such as `an IRI`.
+/// The input's kind is `a string input`, or `an input of type` with the format type name.
 pub fn string_in_condition(name: &str, ty: &InputType) -> String {
     let kind = match ty {
-        InputType::Format(f) => format!("{} {}", f.article(), f.name()),
-        _ => "a string".to_string(),
+        InputType::Format(f) => format!("an input of type `{}`", f.name()),
+        _ => "a string input".to_string(),
     };
-    format!("`{name}` is {kind} input; a condition cannot read it")
+    format!("`{name}` is {kind}; a condition cannot read it")
 }
 
 fn members_text(members: &[Spanned<String>]) -> String {
@@ -648,8 +648,7 @@ impl<'a> Checker<'a> {
                     InputType::Format(f) => self.error(
                         response.name.span,
                         format!(
-                            "{article} `{name}` answer is not allowed; answer a struct with {article} `{name}` field",
-                            article = f.article(),
+                            "a value of type `{name}` is not allowed as an answer; answer a struct with a field of type `{name}`",
                             name = f.name(),
                         ),
                     ),

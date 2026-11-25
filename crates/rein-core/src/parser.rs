@@ -378,7 +378,7 @@ impl Parser {
         }
     }
 
-    /// `boolean`, `string`, a format type such as `IRI`, or a union of strings with an optional leading `|`.
+    /// `boolean`, `string`, a format type such as `Iri`, or a union of strings with an optional leading `|`.
     fn param_type(&mut self) -> Result<InputType, Diagnostic> {
         if *self.peek() == Tok::Boolean {
             self.bump();
@@ -404,7 +404,7 @@ impl Parser {
         if *self.peek() == Tok::Pipe {
             self.bump();
         }
-        let example = crate::formats::Format::ALL[0].name();
+        let example = Format::all().next().map_or("Iri", Format::name);
         let expected = format!("`boolean`, `string`, a format type like `{example}`, or a string type, like \"green\"");
         let mut members = vec![self.string(&expected)?];
         while *self.peek() == Tok::Pipe {

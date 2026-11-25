@@ -2,7 +2,7 @@
 //! `import { Ticket } from "./ticket.schema";`. A schema type goes where `string` goes. The checker treats it as a
 //! `string`; the run checks each value against the schema, with the `jsonschema` crate.
 //! A built-in format type and a schema type are both [`FormatType`]: the rest of the code asks one type for its name,
-//! its article, its JSON name and its check.
+//! its JSON name and its check.
 
 use std::sync::Arc;
 
@@ -103,23 +103,11 @@ pub enum FormatType {
 }
 
 impl FormatType {
-    /// The type name as a program writes it, such as `IRI` or `Ticket`.
+    /// The type name as a program writes it, such as `Iri` or `Ticket`.
     pub fn name(&self) -> String {
         match self {
             FormatType::Builtin(f) => f.name().to_string(),
             FormatType::Schema(r) => r.name.value.clone(),
-        }
-    }
-
-    /// The article before the type name in a message: `an` for `IRI`, `a` for `Ticket`. A schema type takes `an`
-    /// when its name starts with a vowel letter.
-    pub fn article(&self) -> &'static str {
-        match self {
-            FormatType::Builtin(f) => f.article(),
-            FormatType::Schema(r) => match r.name.value.chars().next() {
-                Some('A' | 'E' | 'I' | 'O' | 'U' | 'a' | 'e' | 'i' | 'o' | 'u') => "an",
-                _ => "a",
-            },
         }
     }
 
