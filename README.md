@@ -101,6 +101,15 @@ $ rein step --json --answer main.vip=no --answer main.category=how_to --answer f
 
 A call follows each reference in the same call. The `trace` lists the functions it visited. For a `question` or a `request`, the agent asks the user or does the step, adds the key to its answers, and steps again. Without `--json`, `rein step` prints plain text. `rein eval` evaluates one function, for debugging. The protocol and exit codes are in [spec.md section 11](https://github.com/rein-lang/rein-lang.com/blob/main/language/spec/stepping.md#11-stepping-agent-interface).
 
+## Homebrew
+
+```sh
+brew tap rein-lang/rein https://github.com/rein-lang/rein
+brew install rein
+```
+
+The formula builds `rein` from source, so the first install takes a few minutes.
+
 ## Quickstart
 
 ```sh
