@@ -33,10 +33,7 @@ impl Run {
 
     /// The key the run waits on. `None` when the run ended.
     pub fn asked(&self) -> Option<&str> {
-        match &self.last {
-            StepResponse::Question { key, .. } | StepResponse::Request { key, .. } => Some(key),
-            _ => None,
-        }
+        self.last.asked()
     }
 
     /// Answers `key` (default: the asked key) and steps. An error step leaves the run as it was.

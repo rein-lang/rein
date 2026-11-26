@@ -1,8 +1,7 @@
-//! `rein serve --mcp`: the MCP host. A long-running process that holds live runs in memory, so an
-//! agent can start a program and answer it across many tool calls.
+//! `rein serve --mcp`: the MCP host. A run is saved to a file, so an agent can start a program and answer it across
+//! many tool calls, and the run survives a restart of this server.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -12,16 +11,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::cli::load_flow;
-use crate::live_run::Run;
 use crate::programs;
 use crate::run_log::Log;
+use crate::saved_run;
 
-// ponytail: runs live until rein_stop or until the server exits; add disk snapshots to resume after a crash.
 #[derive(Clone)]
 struct Host {
-    runs: Arc<Mutex<BTreeMap<String, Run>>>,
-    next: Arc<AtomicUsize>,
     log: Arc<Mutex<Log>>,
 }
 
@@ -29,6 +24,15 @@ struct Host {
 struct Name {
     /// The program name, as rein_programs lists it.
     name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct Start {
+    /// The program name, as rein_programs lists it.
+    name: String,
+    /// Values of the program's string, format and schema inputs, by name. Give them once here. The run keeps them.
+    #[serde(default)]
+    inputs: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -45,32 +49,11 @@ struct Answer {
     value: String,
 }
 
-/// The step as JSON, with the run id added as `run`.
-fn step_value(run_id: Option<&str>, step: &StepResponse) -> Value {
-    let mut v = serde_json::to_value(step).unwrap_or_default();
-    if let (Some(id), Some(map)) = (run_id, v.as_object_mut()) {
-        map.insert("run".into(), id.into());
-    }
-    v
-}
-
-fn unknown(run_id: &str) -> String {
-    format!("unknown run `{run_id}`; rein_list shows the live runs")
-}
-
 impl Host {
     fn new() -> Host {
         let mut log = Log::process("mcp");
         log.announce();
-        Host {
-            runs: Arc::default(),
-            next: Arc::default(),
-            log: Arc::new(Mutex::new(log)),
-        }
-    }
-
-    fn runs(&self) -> MutexGuard<'_, BTreeMap<String, Run>> {
-        self.runs.lock().unwrap_or_else(|e| e.into_inner())
+        Host { log: Arc::new(Mutex::new(log)) }
     }
 
     fn log(&self) -> MutexGuard<'_, Log> {
@@ -90,50 +73,42 @@ impl Host {
         programs::source(&name)
     }
 
-    #[tool(description = "Start a Rein program as a live run. Returns `run` (the run id) and the first step. Answer each question or request with rein_answer until kind is done, then do the done instruction.")]
-    fn rein_start(&self, Parameters(Name { name }): Parameters<Name>) -> Result<String, String> {
-        let (project, entry) = load_flow(None, Some(name.clone()))?;
-        let run = Run::start(project, entry.clone());
-        if matches!(run.last(), StepResponse::Error { .. }) {
-            // A failed start has no run id, so its log line has `run` null.
-            self.log().start(None, Some(&name), &entry, run.last());
-            return Err(step_value(None, run.last()).to_string());
+    #[tool(description = "Start a Rein program as a saved run. Pass its inputs once here: the run keeps them, so later calls send only answers. Returns `run` (the run id) and the first step. Answer each question or request with rein_answer until kind is done, then do the done instruction.")]
+    fn rein_start(&self, Parameters(Start { name, inputs }): Parameters<Start>) -> Result<String, String> {
+        let (run, entry, first) = saved_run::start(&name, inputs);
+        self.log().start(run.as_deref(), Some(&name), &entry, &first);
+        if matches!(first, StepResponse::Error { .. }) {
+            return Err(saved_run::value(None, &first).to_string());
         }
-        let id = format!("run-{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
-        let out = step_value(Some(&id), run.last()).to_string();
-        self.log().start(Some(&id), Some(&name), &entry, run.last());
-        self.runs().insert(id, run);
-        Ok(out)
+        Ok(saved_run::value(run.as_deref(), &first).to_string())
     }
 
-    #[tool(description = "Answer the key the run waits on. For a request, do the instruction first. Returns the next step. A wrong value returns an error step; the run stays alive and waits on the same key.")]
+    #[tool(description = "Answer the key the run waits on. For a request, do the instruction first. Returns the next step. A wrong value returns an error step; the run stays alive and waits on the same key. The run keeps its inputs and earlier answers, so send only the new answer.")]
     fn rein_answer(&self, Parameters(Answer { run_id, value }): Parameters<Answer>) -> Result<String, String> {
-        let mut runs = self.runs();
-        let run = runs.get_mut(&run_id).ok_or_else(|| unknown(&run_id))?;
-        let key = run.asked().unwrap_or_default().to_string();
-        let next = run.answer(None, value.clone());
+        let (key, next) = saved_run::answer_asked(&run_id, value.clone());
         self.log().answer(&run_id, &key, &value, &next);
-        Ok(step_value(Some(&run_id), &next).to_string())
+        Ok(saved_run::value(Some(&run_id), &next).to_string())
     }
 
-    #[tool(description = "Return the step a run waits on, with its trace and the answers so far.")]
+    #[tool(description = "Return the step a run waits on, computed from its saved inputs and answers.")]
     fn rein_status(&self, Parameters(RunId { run_id }): Parameters<RunId>) -> Result<String, String> {
-        let runs = self.runs();
-        let run = runs.get(&run_id).ok_or_else(|| unknown(&run_id))?;
-        Ok(step_value(Some(&run_id), run.last()).to_string())
+        let step = saved_run::status(&run_id);
+        if matches!(step, StepResponse::Error { .. }) {
+            return Err(saved_run::value(Some(&run_id), &step).to_string());
+        }
+        Ok(saved_run::value(Some(&run_id), &step).to_string())
     }
 
-    #[tool(description = "Stop a run and forget it.")]
+    #[tool(description = "Stop a run and delete its saved file.")]
     fn rein_stop(&self, Parameters(RunId { run_id }): Parameters<RunId>) -> Result<String, String> {
-        self.runs().remove(&run_id).ok_or_else(|| unknown(&run_id))?;
+        saved_run::stop(&run_id)?;
         self.log().stop(&run_id);
         Ok(json!({"run": run_id, "stopped": true}).to_string())
     }
 
-    #[tool(description = "List the live runs, each with the step it waits on.")]
+    #[tool(description = "List the saved runs, each with the step it waits on and its program.")]
     fn rein_list(&self) -> String {
-        let runs = self.runs();
-        Value::Array(runs.iter().map(|(id, run)| step_value(Some(id), run.last())).collect()).to_string()
+        Value::Array(saved_run::list()).to_string()
     }
 }
 

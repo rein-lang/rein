@@ -145,6 +145,7 @@ fn serve_mcp(runs: &Path) -> Mcp {
         .args(["serve", "--mcp"])
         .current_dir(&examples)
         .env("REIN_RUNS_DIR", runs)
+        .env("REIN_SAVED_RUNS_DIR", runs.with_extension("saved"))
         .env("REIN_HOME", examples.join("no-user-programs"))
         .env("REIN_SYSTEM_DIRS", "")
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -189,11 +190,11 @@ fn rein_serve_mcp_runs_are_read_back_by_rein_watch() {
         .client
         .call("rein_start", json!({"name": merge_pr().to_str().unwrap()}));
     assert_eq!(first["kind"], "question", "{first}");
-    assert_eq!(first["run"], "run-1");
+    let run_id = first["run"].as_str().unwrap().to_string();
     assert_eq!(first["key"], "main.task", "{first}");
     let answered = mcp
         .client
-        .call("rein_answer", json!({"run_id": "run-1", "value": "merge"}));
+        .call("rein_answer", json!({"run_id": run_id, "value": "merge"}));
     assert_eq!(answered["key"], "merge_pr.docs_only", "{answered}");
 
     let (_watch, port) = watch(&runs);
@@ -206,7 +207,7 @@ fn rein_serve_mcp_runs_are_read_back_by_rein_watch() {
     let runs_seen = agent["runs"].as_array().unwrap();
     assert_eq!(runs_seen.len(), 1, "{agent}");
     let run = &runs_seen[0];
-    assert_eq!(run["run"], "run-1", "{run}");
+    assert_eq!(run["run"], run_id.as_str(), "{run}");
     assert_eq!(run["status"], "waiting", "{run}");
     assert_eq!(run["step"]["key"], "merge_pr.docs_only", "{run}");
     assert_eq!(run["trace"], json!(["main", "merge_pr"]), "{run}");

@@ -14,6 +14,7 @@ mod migrate;
 mod packages;
 mod programs;
 mod run_log;
+mod saved_run;
 mod scopes;
 mod watch;
 mod watch_program;
@@ -65,6 +66,34 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Start a program as a saved run. Its inputs and answers go to a file, so later calls send only new answers.
+    Start {
+        /// Program to start: a name (see `rein list`) or a `.rein` file.
+        program: String,
+        /// Value of a `string`, format or schema input of the entry function, as name=value. Repeat for each input.
+        #[arg(long = "input", value_name = "NAME=VALUE")]
+        input: Vec<String>,
+    },
+    /// Answer the key a saved run waits on, as key=value. Repeat for each answer. Prints the next step as JSON.
+    Answer {
+        /// Run id that `rein start` printed.
+        run: String,
+        /// Answer as key=value, such as `merge_pr.ci=green`. Repeat for each answer.
+        #[arg(required = true, value_name = "KEY=VALUE")]
+        answer: Vec<String>,
+    },
+    /// Print the step a saved run waits on, as JSON.
+    Status {
+        /// Run id that `rein start` printed.
+        run: String,
+    },
+    /// Delete a saved run.
+    Stop {
+        /// Run id that `rein start` printed.
+        run: String,
+    },
+    /// List the saved runs, each with the step it waits on, as JSON.
+    Runs,
     /// Evaluate one function, for debugging. Agents use `rein run` or `rein step`.
     Eval {
         /// Function name, as its path under the root without `.rein`. Default: `main`.
@@ -146,7 +175,7 @@ enum Command {
         /// Program name (see `rein list`).
         name: String,
     },
-    /// Serve the agent interface. Holds live runs in memory.
+    /// Serve the agent interface. Runs are saved to files, so they survive a restart of the server.
     Serve {
         /// Speak MCP on stdio. The only transport today.
         #[arg(long)]
@@ -205,6 +234,14 @@ fn main() -> ExitCode {
     let code = match Cli::parse().command {
         Command::Check { path, deny_deprecated } => cli::check(&path, deny_deprecated),
         Command::Run { flow, root, entry, json } => live_run::run(flow, root, entry, json),
+        Command::Start { program, input } => saved_run::start_cli(&program, &input),
+        Command::Answer { run, answer } => saved_run::answer_cli(&run, &answer),
+        Command::Status { run } => saved_run::status_cli(&run),
+        Command::Stop { run } => saved_run::stop_cli(&run),
+        Command::Runs => {
+            println!("{}", serde_json::Value::Array(saved_run::list()));
+            0
+        }
         Command::Eval { function, root, set, json } => cli::eval(&function, root, &set, json),
         Command::Step { program, entry, root, flow, answer, input, stdin, json } => {
             cli::step(entry, root, flow.or(program), &answer, &input, stdin, json)
