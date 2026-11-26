@@ -10,4 +10,5 @@ repository = "https://github.com/rein-lang/rein"
 homepage = "https://rein-lang.com"
 
 [workspace.lints.clippy]
+implicit_clone = "deny"
 redundant_clone = "deny"

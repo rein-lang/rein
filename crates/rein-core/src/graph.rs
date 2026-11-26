@@ -239,7 +239,7 @@ impl<'a> Builder<'a> {
                 let mut inputs = inputs_of(owner, answers);
                 inputs.extend(passed.iter().map(|(k, v)| (k.clone(), v.clone())));
                 self.vars = eval::with_struct_fields(&sf.function, &inputs);
-                self.paths.entry(name.to_string()).or_default().push(id.clone());
+                self.paths.entry(name.clone()).or_default().push(id.clone());
             }
             self.block(&sf.function, &sf.function.body, (id, None), walked.is_some());
         }
