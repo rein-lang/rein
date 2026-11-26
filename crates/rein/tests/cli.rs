@@ -252,7 +252,9 @@ fn missing_main_is_a_project_error() {
     let out = rein(&["check", root.to_str().unwrap()]);
     assert_eq!(code(&out), 1);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let marker = root.join("main.rein").display().to_string();
+    // `rein` runs from the repo and prints paths under it relative to it, as when target/ is in the repo.
+    let marker = root.join("main.rein");
+    let marker = marker.strip_prefix(repo()).unwrap_or(&marker).display().to_string();
     let expected = format!("{marker}:1:1: error: project has no main.rein; it is the agent's entry point");
     assert!(stdout.contains(&expected) || stdout.contains("rein.toml:1:1: error: project has no main.rein"), "{stdout}");
 
