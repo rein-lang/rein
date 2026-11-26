@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{ChildStdin, ChildStdout};
 
 use serde_json::{json, Value};
@@ -39,4 +40,26 @@ impl Client {
             .unwrap_or_else(|| panic!("no text: {reply}"));
         serde_json::from_str(text).unwrap_or_else(|e| panic!("tool text is not JSON ({e}): {text}"))
     }
+}
+
+/// The folder the test sandboxes go in. Rein takes the nearest `rein/` folder above the working directory, and
+/// otherwise the nearest `.git` folder; `rein check` and `rein lsp` take the nearest `main.rein` as the project root. So
+/// the folder and each of its parents must hold none of them. Tries the cargo target temp folder, then
+/// `$HOME/.cache/rein-test` (absolute `HOME` only), then the shared temp folder.
+pub fn sandbox_root() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|h| h.is_absolute())
+        .map(|h| h.join(".cache/rein-test"));
+    [Some(PathBuf::from(env!("CARGO_TARGET_TMPDIR"))), home, Some(std::env::temp_dir())]
+        .into_iter()
+        .flatten()
+        .find(|root| {
+            root.ancestors()
+                .all(|d| !d.join("rein").is_dir() && !d.join(".git").exists() && !d.join("main.rein").exists())
+        })
+        .expect(
+            "no clean folder: none of the target temp, $HOME/.cache/rein-test or the temp folder is free of `rein/`, \
+             `.git` and `main.rein`",
+        )
 }

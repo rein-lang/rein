@@ -10,13 +10,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+mod common;
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique empty temp directory.
 fn temp_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("rein-cli-flows-{tag}-{}-{nanos}-{n}", std::process::id()));
+    let dir = common::sandbox_root().join(format!("rein-cli-flows-{tag}-{}-{nanos}-{n}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }

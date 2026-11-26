@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+mod common;
+
 /// Repository root: the examples live here, and commands run from here.
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -405,7 +407,7 @@ fn async_answer_doc_over_several_lines_keeps_every_line() {
 
 fn temp_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("rein-cli-{tag}-{}-{nanos}", std::process::id()));
+    let dir = common::sandbox_root().join(format!("rein-cli-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }

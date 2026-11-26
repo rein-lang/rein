@@ -10,6 +10,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+mod common;
+
 #[path = "fixtures/support_ticket.rs"]
 mod support_ticket;
 use support_ticket::SUPPORT_TICKET;
@@ -173,7 +175,7 @@ fn read_frame(reader: &mut BufReader<impl Read>) -> Option<Value> {
 /// Project with a valid target function. Returns its root.
 fn temp_project(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
+    let root = common::sandbox_root().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("target.rein"),
@@ -729,7 +731,7 @@ const ALIAS_NAMED: &str = "import { target as t } from \"./target\";\n\n/** Alia
 /// A project with `target.rein` and each of `files`. Returns its canonical root.
 fn import_project(tag: &str, files: &[(&str, &str)]) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
+    let root = common::sandbox_root().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("target.rein"), TARGET_SRC).unwrap();
     for (file, text) in files {
@@ -1102,7 +1104,7 @@ const PING: &[(&str, &str)] = &[
 /// A new empty directory named after `tag`. Returns its canonical path.
 fn fresh_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let root = std::env::temp_dir().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
+    let root = common::sandbox_root().join(format!("rein-lsp-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     fs::canonicalize(root).unwrap()
 }
