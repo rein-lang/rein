@@ -105,10 +105,11 @@ A call follows each reference in the same call. The `trace` lists the functions 
 
 ```sh
 brew tap rein-lang/rein https://github.com/rein-lang/rein
+brew trust rein-lang/rein
 brew install rein
 ```
 
-The formula builds `rein` from source, so the first install takes a few minutes.
+Homebrew asks you to trust third-party taps before it installs from them. The formula builds `rein` from source, so the first install takes a few minutes.
 
 ## Quickstart
 
