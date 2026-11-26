@@ -16,7 +16,8 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 fn temp_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("rein-cli-flows-{tag}-{}-{nanos}-{n}", std::process::id()));
+    // Not under the system temp dir: rein walks up to the nearest main.rein, and a stray /tmp/main.rein would win.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("rein-cli-flows-{tag}-{}-{nanos}-{n}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }
