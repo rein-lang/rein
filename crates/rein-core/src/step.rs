@@ -638,6 +638,16 @@ pub(crate) fn inputs_of(function: &str, answers: &Answers) -> HashMap<String, St
 }
 
 /// A response for a request that cannot be stepped, such as bad JSON. It carries no answers.
+impl StepResponse {
+    /// The key this step waits on. `None` when the run ended or failed.
+    pub fn asked(&self) -> Option<&str> {
+        match self {
+            StepResponse::Question { key, .. } | StepResponse::Request { key, .. } => Some(key),
+            _ => None,
+        }
+    }
+}
+
 pub fn invalid_request(message: impl Into<String>) -> StepResponse {
     StepResponse::Error {
         version: PROTOCOL_VERSION,
